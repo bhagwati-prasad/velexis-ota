@@ -1,0 +1,4254 @@
+[
+  {
+    "from": "class:Tenant",
+    "to": "individual:table-platform-tenants",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Account",
+    "to": "individual:table-platform-accounts",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Customer",
+    "to": "individual:table-tenant-customers",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Membership",
+    "to": "individual:table-platform-tenant-memberships",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Invitation",
+    "to": "individual:table-platform-tenant-invitations",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Plan",
+    "to": "individual:table-platform-plans",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Subscription",
+    "to": "individual:table-platform-subscriptions",
+    "label": "stored in"
+  },
+  {
+    "from": "class:StorefrontDomain",
+    "to": "individual:table-platform-tenant-domains",
+    "label": "stored in"
+  },
+  {
+    "from": "class:SupplierConnection",
+    "to": "individual:table-platform-supplier-connections",
+    "label": "stored in"
+  },
+  {
+    "from": "class:PaymentConnection",
+    "to": "individual:table-platform-payment-provider-connections",
+    "label": "stored in"
+  },
+  {
+    "from": "class:AmadeusAccount",
+    "to": "individual:table-platform-amadeus-accounts",
+    "label": "stored in"
+  },
+  {
+    "from": "class:AmadeusOffice",
+    "to": "individual:table-platform-amadeus-offices",
+    "label": "stored in"
+  },
+  {
+    "from": "class:CredentialSubmission",
+    "to": "individual:table-platform-credential-submissions",
+    "label": "stored in"
+  },
+  {
+    "from": "class:PayoutAccount",
+    "to": "individual:table-platform-tenant-payout-accounts",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Settlement",
+    "to": "individual:table-platform-settlements",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Settlement",
+    "to": "individual:table-platform-settlement-lines",
+    "label": "stored in"
+  },
+  {
+    "from": "class:ProvisioningJob",
+    "to": "individual:table-platform-provisioning-jobs",
+    "label": "stored in"
+  },
+  {
+    "from": "class:FlightSearch",
+    "to": "individual:table-tenant-flight-searches",
+    "label": "stored in"
+  },
+  {
+    "from": "class:FlightOffer",
+    "to": "individual:table-tenant-flight-offers",
+    "label": "stored in"
+  },
+  {
+    "from": "class:PricedOffer",
+    "to": "individual:table-tenant-priced-offers",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Checkout",
+    "to": "individual:table-tenant-checkouts",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Checkout",
+    "to": "individual:table-tenant-checkout-travelers",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Booking",
+    "to": "individual:table-tenant-bookings",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Booking",
+    "to": "individual:table-tenant-booking-travelers",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Booking",
+    "to": "individual:table-tenant-booking-contacts",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Ticket",
+    "to": "individual:table-tenant-booking-tickets",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Payment",
+    "to": "individual:table-tenant-payments",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Payment",
+    "to": "individual:table-tenant-payment-events",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Refund",
+    "to": "individual:table-tenant-refunds",
+    "label": "stored in"
+  },
+  {
+    "from": "class:BookingDocument",
+    "to": "individual:table-tenant-booking-documents",
+    "label": "stored in"
+  },
+  {
+    "from": "class:BookingDocument",
+    "to": "individual:storage-files",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Notification",
+    "to": "individual:table-platform-email-outbox",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Notification",
+    "to": "individual:table-tenant-notifications",
+    "label": "stored in"
+  },
+  {
+    "from": "class:EmailTemplate",
+    "to": "individual:table-tenant-notification-templates",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Content",
+    "to": "individual:table-tenant-storefront-settings",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Content",
+    "to": "individual:table-tenant-storefront-pages",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Content",
+    "to": "individual:table-tenant-storefront-assets",
+    "label": "stored in"
+  },
+  {
+    "from": "class:PricingRule",
+    "to": "individual:table-tenant-markup-rules",
+    "label": "stored in"
+  },
+  {
+    "from": "class:PricingRule",
+    "to": "individual:table-tenant-fee-rules",
+    "label": "stored in"
+  },
+  {
+    "from": "class:LogRecord",
+    "to": "individual:table-platform-platform-audit-log",
+    "label": "stored in"
+  },
+  {
+    "from": "class:LogRecord",
+    "to": "individual:table-tenant-staff-actions",
+    "label": "stored in"
+  },
+  {
+    "from": "class:LogRecord",
+    "to": "individual:table-tenant-supplier-requests",
+    "label": "stored in"
+  },
+  {
+    "from": "class:LogRecord",
+    "to": "individual:table-tenant-booking-events",
+    "label": "stored in"
+  },
+  {
+    "from": "class:LogRecord",
+    "to": "individual:table-tenant-queue-snapshots",
+    "label": "stored in"
+  },
+  {
+    "from": "class:ApiKey",
+    "to": "individual:table-platform-api-keys",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Queue",
+    "to": "individual:redis-server",
+    "label": "stored in"
+  },
+  {
+    "from": "class:RedisKeyFamily",
+    "to": "individual:redis-server",
+    "label": "stored in"
+  },
+  {
+    "from": "class:Tenant",
+    "to": "individual:lc-tenant",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:ProvisioningJob",
+    "to": "individual:lc-provisioning-job",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Booking",
+    "to": "individual:lc-booking",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Payment",
+    "to": "individual:lc-payment",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Checkout",
+    "to": "individual:lc-checkout",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Refund",
+    "to": "individual:lc-refund",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:StorefrontDomain",
+    "to": "individual:lc-domain-verification",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:AmadeusOffice",
+    "to": "individual:lc-amadeus-office",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Settlement",
+    "to": "individual:lc-settlement",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Booking",
+    "to": "individual:lc-ticketing",
+    "label": "has lifecycle",
+    "note": "ticketing_status is a second state machine on bookings"
+  },
+  {
+    "from": "class:Booking",
+    "to": "individual:lc-reconciliation-review",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Tenant",
+    "to": "individual:lc-storefront-environment",
+    "label": "has lifecycle"
+  },
+  {
+    "from": "class:Tenant",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Booking",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Checkout",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Payment",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Refund",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Customer",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:FlightSearch",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:FlightOffer",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:PricedOffer",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:BookingDocument",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:PricingRule",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Content",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Ticket",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Account",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Membership",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Invitation",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Plan",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Subscription",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:StorefrontDomain",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Connection",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:AmadeusAccount",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:AmadeusOffice",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:CredentialSubmission",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:PayoutAccount",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Settlement",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:ProvisioningJob",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:ApiKey",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:SdkNamespace",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "class:SessionMode",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "class:VirtualMachine",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:EdgeProxy",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Firewall",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:SystemdUnit",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:ConfigFile",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:OperationsScript",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Bucket",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "class:SharedPackage",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Tool",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Command",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "class:DatabaseRole",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "class:FeatureSwitch",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:Permission",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:CallerType",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "class:TravellerRole",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "class:PlatformRole",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenant",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:account",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:membership",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:invitation",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:plan",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:subscription",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:api-key",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:custom-domain",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:supplier-connection",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payment-connection",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:credential-submission",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payout-account",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:settlement",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:provisioning-job",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:amadeus-office",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-amadeus-account",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:office-pool",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:portal-token",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:mfa",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:step-up",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:feature-switch",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:manual-subscription",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:stripe-billing",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:stripe-event-inbox",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:audit-log",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenant-role",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:on-demand-tls",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tls-ask-endpoint",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:domain-verification",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:go-live",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:suspension",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:provisioning",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:post-step",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reconciler",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:initial-keys-reveal",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-schema",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:control-plane",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:admin-session",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:staff-deny-cut-off",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:api-key-pepper",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:bff-key",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:vx-invalidate",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-tenant-events",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-worker",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-queue",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:live-preconditions",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:billing-notice",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storefront-environment",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:route-parity",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:office-release",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:live-office-request",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payout-account-reveal",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:stripe-event-reprocess",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:resync-from-stripe",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:audit-export",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-admin-account",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:mandatory-mfa",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:recovery-code",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:totp",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:mfa-challenge",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:settlement-adjustment",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:carried-forward",
+    "to": "app:platform-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:booking",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:checkout",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:flight-search",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:flight-offer",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:priced-offer",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:customer",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:customer-session",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:guest-token",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:booking-document",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payment-intent",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:markup-rule",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:fee-rule",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:default-markup-rule",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:card-fee",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:notification-template",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:content-page",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storefront-settings",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storefront-asset",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:staff-action",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:staff-session",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:staff-permission",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:staff-role",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:supplier-request",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:queue-snapshot",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reconciliation",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reconciliation-review",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reconcile-outcome",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:booking-sync",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ticketing-policy",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ticketing-status",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:airline-card",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:cancellation-mode",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:pnr-import",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:edge-caller",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:service-key",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:publishable-key",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:secret-key",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:console-automation-key",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:key-scope",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ota-tenant-ops",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ota-queue",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenant-schema",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenant-migration",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:amadeus-token-cache",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:rate-limit-bucket",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:office-isolation",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:raw-amadeus",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:allowed-actions",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:guest-lookup",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:customer-erasure",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:sensitive-card",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:webhook-inbox",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payment-gateway",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-remark",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:record-locator",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:booking-reference",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:supplier-timeout",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:x-velexis-environment",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:csrf-token",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:edge-secret",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:queue-poller",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:offers-per-search",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:pricing-mode",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:allow-unpaid",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:net-price",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:net-and-selling-amounts",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:signed-url",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:audited-read",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:staff-alert",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:branded-fare-upsell",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:booking-requirements",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:account-mode",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:statement-descriptor-suffix",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:3-d-secure",
+    "to": "app:ota-api",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-sdk",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:cookie-mode",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:token-mode",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:server-mode",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:client-family",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:route-table",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:request-core",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:session-hooks",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:session-result",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:automatic-refresh",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:single-flight-refresh",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:rotation-window",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:token-source",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:request-options",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:retry-policy",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:response-hook",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:operation-overrides",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:request-escape-hatch",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-error",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:esm-bundle",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:iife-bundle",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:contract-declarations",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:contract-test",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:sdk-smoke-tests",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:sdk-publish-draft",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:mvp-addition",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:deferred-operation",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:console-namespace",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:x-sdk-method",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:jsdoc-types",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:approved-deviation",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:size-budget",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:fake-fetch",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:parity-test",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:card-redaction",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:trusted-publishing",
+    "to": "app:sdk",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenant-tx",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenanttx",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:envelope-encryption",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:kek",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:kek-rotation",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:key-file",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:associated-data",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:define-config",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:redact-paths",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:redact-payload",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:error-catalogue",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:app-error",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:error-envelope",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:field-errors",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:operations-index",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:job-envelope",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:migration-runner",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:migration-ledger",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:repeatable-migration",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:table-types-codegen",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:type-parsers",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-db",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storage-adapter",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:search-path-leak-guard",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:test-roles",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:test-template-database",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:amadeus-stub",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:stub-scenario",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:stub-orders",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:e2e-stack",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:playwright-project",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reference-loader",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reference-data-snapshot",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reference-schema",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:overrides-csv",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:plan-lint",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:check-package-json",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:check-no-hardcoded-hosts",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:pci-refs-checker",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:repository-guards",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:dev-keys",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:contracts-generate",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:fixture-recording",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:fake-clock",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:use-redis",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:expect-response-to-match",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-smoke",
+    "to": "app:packages",
+    "label": "owned by"
+  },
+  {
+    "from": "term:single-vm",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:caddy",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:caddy-drop-in",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:caddy-admin-socket",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-caddy-build",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:coraza-waf",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:waf",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:waf-exclusion",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:owasp-core-rule-set",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:outbound-allow-list",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-deploy",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-run",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:velexis-alert",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:provision-vm",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:check-vm",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:dev-setup",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:transient-unit",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:trust-zone",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:unit-sandboxing",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:deploy-user",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:env-file",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:release-folder",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:sha256sums",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:automatic-rollback",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:backup-set",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:restore-drill",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:off-site-bucket",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:security-log-shipment",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:security-log-review",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:log-query-filter",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:aide",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:aide-re-baseline",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:auditd",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ssh-second-factor",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:emergency-opening",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:on-vm-health-check",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:age-encryption",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:noeviction-policy",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:node-major-pin",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ci-workflow",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:e2e-workflow",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:deploy-workflow",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:production-environment",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:action-pinning",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:detection-week",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:database-roles",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:master-key",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:content-security-policy",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:pci-evidence-pack",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:cardholder-data-environment",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:pci-scope",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payment-page-inventory",
+    "to": "app:deploy",
+    "label": "owned by"
+  },
+  {
+    "from": "term:setup-page",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:onboarding-checklist",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:console-picker",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:hand-off-page",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:mfa-enrolment-gate",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:portal-error-message",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:submission-polling",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:csp-nonce",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:tenant-banner",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:not-allowed-page",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:terms-version",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:return-path",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:safe-next-path",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:checkout-session",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:customer-portal",
+    "to": "app:portal",
+    "label": "owned by"
+  },
+  {
+    "from": "term:platform-admin-console",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:admin-dashboard",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:admin-middleware",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:admin-grant-command",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reason-action",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:reason-dialog",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:if-match",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:masked-value",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:price-warning",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:step-up-dialog",
+    "to": "app:platform-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:ota-admin",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:environment-switch",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:saved-view",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:shopping-on-behalf",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:supplier-log",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:theme-editor",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:action-key",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:confirm-dialog",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:sso",
+    "to": "app:ota-admin",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storefront",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storefront-boot",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:storefront-guards",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:runtime-configuration",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:checkout-step",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:price-hold",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:pending-confirmation",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:isolated-payment-page",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:payment-element",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:display-currency",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:account-menu",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:page-state",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:contrast-fallback",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:live-region",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:dev-proxy",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:error-summary",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:test-mode-banner",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:performance-budget",
+    "to": "app:storefront",
+    "label": "owned by"
+  },
+  {
+    "from": "term:checkout-step",
+    "to": "term:checkout",
+    "label": "part of"
+  },
+  {
+    "from": "term:price-hold",
+    "to": "term:checkout",
+    "label": "part of"
+  },
+  {
+    "from": "term:pending-confirmation",
+    "to": "term:checkout",
+    "label": "part of"
+  },
+  {
+    "from": "term:card-fee",
+    "to": "term:fee-rule",
+    "label": "part of"
+  },
+  {
+    "from": "term:default-markup-rule",
+    "to": "term:markup-rule",
+    "label": "part of"
+  },
+  {
+    "from": "term:post-step",
+    "to": "term:provisioning",
+    "label": "part of"
+  },
+  {
+    "from": "term:initial-keys-reveal",
+    "to": "term:provisioning",
+    "label": "part of"
+  },
+  {
+    "from": "term:reconciler",
+    "to": "term:provisioning",
+    "label": "part of"
+  },
+  {
+    "from": "term:onboarding-checklist",
+    "to": "term:provisioning",
+    "label": "part of"
+  },
+  {
+    "from": "term:office-release",
+    "to": "term:office-pool",
+    "label": "part of"
+  },
+  {
+    "from": "term:amadeus-office",
+    "to": "term:office-pool",
+    "label": "part of"
+  },
+  {
+    "from": "term:live-office-request",
+    "to": "term:go-live",
+    "label": "part of"
+  },
+  {
+    "from": "term:live-preconditions",
+    "to": "term:go-live",
+    "label": "part of"
+  },
+  {
+    "from": "term:settlement-adjustment",
+    "to": "term:settlement",
+    "label": "part of"
+  },
+  {
+    "from": "term:carried-forward",
+    "to": "term:settlement",
+    "label": "part of"
+  },
+  {
+    "from": "term:payout-account-reveal",
+    "to": "term:payout-account",
+    "label": "part of"
+  },
+  {
+    "from": "term:booking-document",
+    "to": "term:booking",
+    "label": "part of"
+  },
+  {
+    "from": "term:booking-reference",
+    "to": "term:booking",
+    "label": "part of"
+  },
+  {
+    "from": "term:record-locator",
+    "to": "term:booking",
+    "label": "part of"
+  },
+  {
+    "from": "term:ticketing-status",
+    "to": "term:booking",
+    "label": "part of"
+  },
+  {
+    "from": "term:velexis-remark",
+    "to": "term:booking",
+    "label": "part of"
+  },
+  {
+    "from": "term:reconcile-outcome",
+    "to": "term:reconciliation",
+    "label": "part of"
+  },
+  {
+    "from": "term:reconciliation-review",
+    "to": "term:reconciliation",
+    "label": "part of"
+  },
+  {
+    "from": "term:supplier-timeout",
+    "to": "term:reconciliation",
+    "label": "part of"
+  },
+  {
+    "from": "term:mfa-challenge",
+    "to": "term:mfa",
+    "label": "part of"
+  },
+  {
+    "from": "term:recovery-code",
+    "to": "term:mfa",
+    "label": "part of"
+  },
+  {
+    "from": "term:totp",
+    "to": "term:mfa",
+    "label": "part of"
+  },
+  {
+    "from": "term:mandatory-mfa",
+    "to": "term:mfa",
+    "label": "part of"
+  },
+  {
+    "from": "term:mfa-enrolment-gate",
+    "to": "term:mfa",
+    "label": "part of"
+  },
+  {
+    "from": "term:step-up-dialog",
+    "to": "term:step-up",
+    "label": "part of"
+  },
+  {
+    "from": "term:csp-nonce",
+    "to": "term:content-security-policy",
+    "label": "part of"
+  },
+  {
+    "from": "term:waf-exclusion",
+    "to": "term:waf",
+    "label": "part of"
+  },
+  {
+    "from": "term:owasp-core-rule-set",
+    "to": "term:coraza-waf",
+    "label": "part of"
+  },
+  {
+    "from": "term:aide-re-baseline",
+    "to": "term:aide",
+    "label": "part of"
+  },
+  {
+    "from": "term:kek-rotation",
+    "to": "term:envelope-encryption",
+    "label": "part of"
+  },
+  {
+    "from": "term:kek",
+    "to": "term:envelope-encryption",
+    "label": "part of"
+  },
+  {
+    "from": "term:master-key",
+    "to": "term:envelope-encryption",
+    "label": "part of"
+  },
+  {
+    "from": "term:associated-data",
+    "to": "term:envelope-encryption",
+    "label": "part of"
+  },
+  {
+    "from": "term:primary-host",
+    "to": "term:custom-domain",
+    "label": "part of"
+  },
+  {
+    "from": "term:domain-verification",
+    "to": "term:custom-domain",
+    "label": "part of"
+  },
+  {
+    "from": "term:tls-ask-endpoint",
+    "to": "term:on-demand-tls",
+    "label": "part of"
+  },
+  {
+    "from": "term:on-demand-tls",
+    "to": "term:custom-domain",
+    "label": "part of"
+  },
+  {
+    "from": "term:staff-deny-cut-off",
+    "to": "term:staff-session",
+    "label": "part of"
+  },
+  {
+    "from": "term:portal-token",
+    "to": "term:sso",
+    "label": "part of"
+  },
+  {
+    "from": "term:console-picker",
+    "to": "term:sso",
+    "label": "part of"
+  },
+  {
+    "from": "term:hand-off-page",
+    "to": "term:sso",
+    "label": "part of"
+  },
+  {
+    "from": "term:field-errors",
+    "to": "term:error-envelope",
+    "label": "part of"
+  },
+  {
+    "from": "term:app-error",
+    "to": "term:error-catalogue",
+    "label": "part of"
+  },
+  {
+    "from": "term:platform-error-code",
+    "to": "term:error-catalogue",
+    "label": "part of"
+  },
+  {
+    "from": "term:velexis-error",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:client-family",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:cookie-mode",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:token-mode",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:server-mode",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:route-table",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:request-core",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:session-hooks",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:rotation-window",
+    "to": "term:single-flight-refresh",
+    "label": "part of"
+  },
+  {
+    "from": "term:operation-overrides",
+    "to": "term:route-table",
+    "label": "part of"
+  },
+  {
+    "from": "term:x-sdk-method",
+    "to": "term:route-table",
+    "label": "part of"
+  },
+  {
+    "from": "term:esm-bundle",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:iife-bundle",
+    "to": "term:velexis-sdk",
+    "label": "part of"
+  },
+  {
+    "from": "term:migration-ledger",
+    "to": "term:migration-runner",
+    "label": "part of"
+  },
+  {
+    "from": "term:repeatable-migration",
+    "to": "term:migration-runner",
+    "label": "part of"
+  },
+  {
+    "from": "term:tenant-migration",
+    "to": "term:migration-runner",
+    "label": "part of"
+  },
+  {
+    "from": "term:sha256sums",
+    "to": "term:release-folder",
+    "label": "part of"
+  },
+  {
+    "from": "term:release-folder",
+    "to": "term:velexis-deploy",
+    "label": "part of"
+  },
+  {
+    "from": "term:automatic-rollback",
+    "to": "term:velexis-deploy",
+    "label": "part of"
+  },
+  {
+    "from": "term:caddy-drop-in",
+    "to": "term:caddy",
+    "label": "part of"
+  },
+  {
+    "from": "term:caddy-admin-socket",
+    "to": "term:caddy",
+    "label": "part of"
+  },
+  {
+    "from": "term:coraza-waf",
+    "to": "term:velexis-caddy-build",
+    "label": "part of"
+  },
+  {
+    "from": "term:backup-set",
+    "to": "term:restore-drill",
+    "label": "part of"
+  },
+  {
+    "from": "term:age-encryption",
+    "to": "term:backup-set",
+    "label": "part of"
+  },
+  {
+    "from": "term:job-envelope",
+    "to": "term:queue",
+    "label": "part of"
+  },
+  {
+    "from": "term:fan-out",
+    "to": "term:tenant-fan-out",
+    "label": "part of"
+  },
+  {
+    "from": "term:guest-token",
+    "to": "term:guest-lookup",
+    "label": "part of"
+  },
+  {
+    "from": "term:customer-session",
+    "to": "term:customer",
+    "label": "part of"
+  },
+  {
+    "from": "term:refresh-family",
+    "to": "term:customer-session",
+    "label": "part of"
+  },
+  {
+    "from": "term:refresh-token-reuse",
+    "to": "term:refresh-family",
+    "label": "part of"
+  },
+  {
+    "from": "term:stub-scenario",
+    "to": "term:amadeus-stub",
+    "label": "part of"
+  },
+  {
+    "from": "term:stub-orders",
+    "to": "term:amadeus-stub",
+    "label": "part of"
+  },
+  {
+    "from": "term:playwright-project",
+    "to": "term:e2e-stack",
+    "label": "part of"
+  },
+  {
+    "from": "term:test-roles",
+    "to": "term:database-roles",
+    "label": "part of"
+  },
+  {
+    "from": "term:redact-payload",
+    "to": "term:redact-paths",
+    "label": "part of"
+  },
+  {
+    "from": "term:log-query-filter",
+    "to": "term:security-log-shipment",
+    "label": "part of"
+  },
+  {
+    "from": "term:theme-editor",
+    "to": "term:storefront-settings",
+    "label": "part of"
+  },
+  {
+    "from": "term:offers-per-search",
+    "to": "term:storefront-settings",
+    "label": "part of"
+  },
+  {
+    "from": "term:display-currency",
+    "to": "term:storefront",
+    "label": "part of"
+  },
+  {
+    "from": "term:account-menu",
+    "to": "term:storefront",
+    "label": "part of"
+  },
+  {
+    "from": "term:isolated-payment-page",
+    "to": "term:airline-card",
+    "label": "part of"
+  },
+  {
+    "from": "term:sensitive-card",
+    "to": "term:airline-card",
+    "label": "part of"
+  },
+  {
+    "from": "term:card-redaction",
+    "to": "term:airline-card",
+    "label": "part of"
+  },
+  {
+    "from": "term:3-d-secure",
+    "to": "term:payment-element",
+    "label": "part of"
+  },
+  {
+    "from": "term:payment-element",
+    "to": "term:payment-intent",
+    "label": "part of"
+  },
+  {
+    "from": "term:statement-descriptor-suffix",
+    "to": "term:payment-connection",
+    "label": "part of"
+  },
+  {
+    "from": "term:account-mode",
+    "to": "term:payment-connection",
+    "label": "part of"
+  },
+  {
+    "from": "term:stripe-event-reprocess",
+    "to": "term:stripe-event-inbox",
+    "label": "part of"
+  },
+  {
+    "from": "term:resync-from-stripe",
+    "to": "term:stripe-billing",
+    "label": "part of"
+  },
+  {
+    "from": "term:checkout-session",
+    "to": "term:stripe-billing",
+    "label": "part of"
+  },
+  {
+    "from": "term:customer-portal",
+    "to": "term:stripe-billing",
+    "label": "part of"
+  },
+  {
+    "from": "term:billing-notice",
+    "to": "term:subscription",
+    "label": "part of"
+  },
+  {
+    "from": "term:manual-subscription",
+    "to": "term:subscription",
+    "label": "part of"
+  },
+  {
+    "from": "term:staff-alert",
+    "to": "term:notification-template",
+    "label": "part of"
+  },
+  {
+    "from": "term:reason-dialog",
+    "to": "term:reason-action",
+    "label": "part of"
+  },
+  {
+    "from": "term:action-key",
+    "to": "term:idempotency-key",
+    "label": "part of"
+  },
+  {
+    "from": "term:environment-switch",
+    "to": "term:x-velexis-environment",
+    "label": "part of"
+  },
+  {
+    "from": "term:saved-view",
+    "to": "term:ota-admin",
+    "label": "part of"
+  },
+  {
+    "from": "term:admin-dashboard",
+    "to": "term:platform-admin-console",
+    "label": "part of"
+  },
+  {
+    "from": "term:setup-page",
+    "to": "term:portal",
+    "label": "part of"
+  },
+  {
+    "from": "term:tenant-banner",
+    "to": "term:suspension",
+    "label": "part of"
+  },
+  {
+    "from": "term:test-mode-banner",
+    "to": "term:storefront-environment",
+    "label": "part of"
+  },
+  {
+    "from": "term:tenant-key",
+    "to": "term:tenant",
+    "label": "part of"
+  },
+  {
+    "from": "term:tenant-schema",
+    "to": "term:tenant",
+    "label": "part of"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:supplier-connection",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:payment-connection",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:office-pool",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:amadeus-office",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:velexis-amadeus-account",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:amadeus-token-cache",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:rate-limit-bucket",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:account-mode",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:statement-descriptor-suffix",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:stripe-cli",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:stripe-webhook",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:stripe-billing",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "term:stripe-event-inbox",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:table-platform-supplier-connections",
+    "label": "touches"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:table-platform-amadeus-offices",
+    "label": "touches"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:table-platform-payment-provider-connections",
+    "label": "touches"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:table-tenant-supplier-requests",
+    "label": "touches"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:rk-amadeus-token",
+    "label": "touches"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:op-receive-stripe-velexis-webhook",
+    "label": "touches"
+  },
+  {
+    "from": "journey:amadeus-and-stripe-connections",
+    "to": "individual:flow-stripe-billing",
+    "label": "touches"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:api-key",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:publishable-key",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:secret-key",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:console-automation-key",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:key-scope",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:show-once-secret",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:api-key-pepper",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:vx-invalidate",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:velexis-sdk",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:sdk-smoke-tests",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "term:dev-keys",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "individual:table-platform-api-keys",
+    "label": "touches"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "individual:rk-platform-caches",
+    "label": "touches"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "individual:rk-apikey-used",
+    "label": "touches"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "individual:channel-vx-invalidate",
+    "label": "touches"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "individual:suite-sdk-smoke",
+    "label": "touches"
+  },
+  {
+    "from": "journey:api-keys-and-sdk",
+    "to": "individual:eg-platform-api-keys",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:flight-search",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:fare-family",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:priced-offer",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:checkout",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:airline-card",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:isolated-payment-page",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:card-redaction",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:booking",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:ticketing-status",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:booking-document",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:outbox",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:guest-token",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:supplier-timeout",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "term:reconciliation",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:flow-search-and-price",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:flow-checkout-airline-card",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:flow-ticketing",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:table-tenant-bookings",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:table-tenant-payments",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:table-tenant-notifications",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:rk-airline-card-attempts",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-airline-card",
+    "to": "individual:op-complete-checkout-with-airline-card",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:payment-element",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:payment-intent",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:3-d-secure",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:card-fee",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:checkout",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:booking",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:stub-scenario",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "term:price-warning",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "individual:flow-checkout-stripe",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "individual:eg-ota-payments",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "individual:op-complete-checkout",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "individual:table-tenant-payments",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "individual:table-tenant-payment-events",
+    "label": "touches"
+  },
+  {
+    "from": "journey:book-with-stripe",
+    "to": "individual:scn-sold-out",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:sso",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:saved-view",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:staff-action",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:ticketing-status",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:cancellation-mode",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:reason-action",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:pnr-import",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:office-isolation",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:queue-snapshot",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:supplier-log",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:audited-read",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "term:reconciliation-review",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:flow-console-sso",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:sg-otaadmin-bookings",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:op-console-issue-booking",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:eg-ota-console-bookings",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:eg-ota-console-payments",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:op-console-close-booking-review",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:table-tenant-staff-actions",
+    "label": "touches"
+  },
+  {
+    "from": "journey:console-manage-booking",
+    "to": "individual:table-tenant-booking-events",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:feature-switch",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:plan",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:manual-subscription",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:custom-domain",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:domain-verification",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:on-demand-tls",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:tls-ask-endpoint",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:go-live",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:live-preconditions",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:payout-account",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:live-office-request",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:step-up",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "term:storefront-environment",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:flow-custom-domain",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:flow-go-live",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:op-go-live",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:op-tls-ask",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:rk-tls-ask",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:table-platform-tenant-domains",
+    "label": "touches"
+  },
+  {
+    "from": "journey:custom-domain-and-go-live",
+    "to": "individual:table-platform-tenants",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:customer",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:customer-session",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:refresh-family",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:allowed-actions",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:cancellation-mode",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:guest-lookup",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:guest-token",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:automatic-refresh",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "term:rate-limit-bucket",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:flow-cancellation-refund",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:flow-guest-lookup",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:eg-ota-bookings",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:eg-ota-customer-auth",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:table-tenant-customers",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:table-tenant-customer-sessions",
+    "label": "touches"
+  },
+  {
+    "from": "journey:my-bookings-change-and-cancel",
+    "to": "individual:table-tenant-booking-access-tokens",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:dev-setup",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:migration-runner",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:reference-loader",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:mailpit",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:amadeus-stub",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:dev-seed",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:demo-ota",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:totp",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:admin-session",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:office-pool",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "term:bullmq",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:proc-local-stack",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:ops-dev-setup",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:tool-amadeus-stub",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:svc-mailpit",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:tenant-demo",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:account-seed-admin",
+    "label": "touches"
+  },
+  {
+    "from": "journey:run-the-stack",
+    "to": "individual:rk-bullmq",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:account",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:mfa",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:recovery-code",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:token-link",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:provisioning",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:provisioning-job",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:ota-tenant-ops",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:platform-tenant-events",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:post-step",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:initial-keys-reveal",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:onboarding-checklist",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "term:tenant-schema",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:flow-sign-up",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:flow-provisioning",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:op-create-tenant",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:op-reveal-initial-keys",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:table-platform-accounts",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:table-platform-provisioning-jobs",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:queue-ota-tenant-ops",
+    "label": "touches"
+  },
+  {
+    "from": "journey:signup-and-provision",
+    "to": "individual:queue-platform-tenant-events",
+    "label": "touches"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:portal-token",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:staff-session",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:markup-rule",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:default-markup-rule",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:fee-rule",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:storefront-settings",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:theme-editor",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:content-page",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:notification-template",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:offers-per-search",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "term:airline-card",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "individual:flow-console-sso",
+    "label": "touches"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "individual:eg-ota-console-settings",
+    "label": "touches"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "individual:table-tenant-markup-rules",
+    "label": "touches"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "individual:table-tenant-fee-rules",
+    "label": "touches"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "individual:table-tenant-storefront-settings",
+    "label": "touches"
+  },
+  {
+    "from": "journey:storefront-settings-and-markups",
+    "to": "individual:table-tenant-storefront-pages",
+    "label": "touches"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:suspension",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:reason-action",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:ota-tenant-ops",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:staff-deny-cut-off",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:tenant-banner",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:vx-invalidate",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:audit-log",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "term:platform-queue",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "individual:flow-suspend-resume",
+    "label": "touches"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "individual:op-admin-suspend-tenant",
+    "label": "touches"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "individual:eg-platform-admin-tenants",
+    "label": "touches"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "individual:job-tenant-suspend",
+    "label": "touches"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "individual:rk-staffdeny",
+    "label": "touches"
+  },
+  {
+    "from": "journey:suspend-and-resume-ota",
+    "to": "individual:table-platform-tenants",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:invitation",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:membership",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:tenant-role",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:sso",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:portal-token",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:staff-session",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:staff-permission",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:staff-deny-cut-off",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "term:console-picker",
+    "label": "exercises"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:flow-invitation",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:flow-console-sso",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:eg-platform-team",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:op-create-console-token",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:op-console-sign-in",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:rk-portal-token",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:rk-staff-session",
+    "label": "touches"
+  },
+  {
+    "from": "journey:team-and-console-sso",
+    "to": "individual:rk-staffdeny-acct",
+    "label": "touches"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:tenant",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:tenant-schema",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:storefront",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:amadeus-office",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:amadeus-enterprise",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:stripe",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:api-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:membership",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:staff-role",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:sso",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:customer",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:tenant-tx",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:amadeus-stub",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:caddy",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:waf",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:bullmq",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:vx-invalidate",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:bff",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:host-cookie",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:csrf-token",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:tenant-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:provisioning-job",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:office-pool",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:storefront-environment",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:airline-card",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:go-live",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "term:feature-switch",
+    "label": "explains"
+  },
+  {
+    "from": "page:getting-started",
+    "to": "term:amadeus-stub",
+    "label": "explains"
+  },
+  {
+    "from": "page:getting-started",
+    "to": "term:office-pool",
+    "label": "explains"
+  },
+  {
+    "from": "page:getting-started",
+    "to": "term:sso",
+    "label": "explains"
+  },
+  {
+    "from": "page:getting-started",
+    "to": "term:tenant-tx",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:tenant",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:tenant-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:storefront-environment",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:tenant-schema",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:tenant-tx",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:suspension",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:account",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:mfa",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:membership",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:staff-role",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:sso",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:staff-session",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:customer",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:guest-token",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:step-up",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:host-cookie",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:portal-token",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:edge-secret",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:api-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:service-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:key-scope",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:money-decimal",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:markup-rule",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:fee-rule",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:payment-intent",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:account-mode",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:airline-card",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:pci-scope",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:stripe-billing",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:settlement",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:payout-account",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:amadeus-enterprise",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:amadeus-office",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:office-pool",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:amadeus-token-cache",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:rate-limit-bucket",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:reconciliation",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:amadeus-stub",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:bullmq",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:queue",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:outbox",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:vx-invalidate",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:request-id",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:prefixed-id",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:booking-reference",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:record-locator",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:idempotency-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:master-key",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:signed-url",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:envelope-encryption",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:bff",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:feature-switch",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:caddy",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:on-demand-tls",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:waf",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:csrf-token",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:audit-log",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "term:staff-action",
+    "label": "explains"
+  },
+  {
+    "from": "page:bug-hunting",
+    "to": "class:LifecycleState",
+    "label": "uses",
+    "note": "the checklists compare status columns with these states"
+  },
+  {
+    "from": "page:concepts",
+    "to": "class:Tenant",
+    "label": "explains"
+  },
+  {
+    "from": "page:concepts",
+    "to": "class:Schema",
+    "label": "explains"
+  },
+  {
+    "from": "page:overview",
+    "to": "class:Product",
+    "label": "explains"
+  },
+  {
+    "from": "page:getting-started",
+    "to": "individual:proc-local-stack",
+    "label": "uses"
+  },
+  {
+    "from": "individual:org-velexis",
+    "to": "app:deploy",
+    "label": "operates"
+  }
+]

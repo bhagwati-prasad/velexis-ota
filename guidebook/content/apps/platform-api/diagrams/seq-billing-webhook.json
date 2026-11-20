@@ -1,0 +1,118 @@
+{
+  "id": "seq-billing-webhook",
+  "type": "sequence",
+  "title": "Stripe Billing webhook to tenant status",
+  "caption": "The receiver stores the event and answers 200; the worker re-fetches the object from Stripe (never trusts the payload) and applies the status rules under the tenant lock.",
+  "actors": [
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "kind": "external"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "kind": "edge"
+    },
+    {
+      "id": "api",
+      "label": "Platform API (billing/sync)",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "r",
+      "label": "Redis / BullMQ",
+      "kind": "queue"
+    },
+    {
+      "id": "pw",
+      "label": "Platform worker",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "stripe",
+      "to": "caddy",
+      "label": "POST /webhooks/stripe/billing (Stripe-Signature)",
+      "kind": "async"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "raw body",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "StripeSignatureGuard with STRIPE_BILLING_WEBHOOK_SECRET (400 WEBHOOK_SIGNATURE_INVALID)",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "INSERT stripe_events (id evt_…, endpoint billing, status received) ON CONFLICT DO NOTHING",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "platform-stripe-events stripe.event (job id = event id)",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "200",
+      "kind": "return"
+    },
+    {
+      "from": "r",
+      "to": "pw",
+      "label": "stripe-events processor (concurrency 2)",
+      "kind": "async"
+    },
+    {
+      "from": "pw",
+      "to": "r",
+      "label": "lock vx:stripe:sub:<sub_…>:lock (15 s, renewed)",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "stripe",
+      "label": "re-fetch subscription / invoice / Checkout Session",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "lock tenant row first; copy into subscriptions / invoices; tenants.plan_code",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "status rules: trialing/active clear billing_notice and resume a billing suspension; past_due/paused set billing_notice; canceled/unpaid/incomplete_expired suspend an active tenant (billing)",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "r",
+      "label": "after commit: vx:invalidate tenant; tenant.suspend / tenant.resume on ota-tenant-ops",
+      "kind": "async"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "stripe_events processed / ignored / failed (retried; reprocess from the admin)",
+      "kind": "call"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "id": "flow-settings-effects",
+  "type": "flow",
+  "title": "Console settings and what they change on the storefront",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/settings-effects.e2e.ts. settings:write (owner, admin) is needed for every change; every change is audited in staff_actions and deletes the storefront caches.",
+  "steps": [
+    {
+      "title": "Default markup to 10 %",
+      "actor": "Owner",
+      "screen": "/settings/markups/[id]",
+      "url": "http://localhost:3002/settings/markups",
+      "body": "Edit the Default rule (priority 1000, cannot be deleted, narrowed or dated) to 10 %.",
+      "expect": "`PATCH /v1/console/settings/markup-rules/{id}` (If-Match) → `200`; the next search's `flight_offers.markup_amount` = 10 % of net; existing offers keep their price."
+    },
+    {
+      "title": "Booking service fee",
+      "actor": "Owner",
+      "screen": "/settings/fees/new",
+      "body": "Create a fee of €7.50 per booking.",
+      "expect": "`POST …/fee-rules` → `201`; the next priced offer's breakdown and `fee_amount` carry it; `fee_rules.refundable` decides whether a cancellation returns it."
+    },
+    {
+      "title": "Brand colour",
+      "actor": "Owner",
+      "screen": "/settings/storefront",
+      "body": "Change the primary colour.",
+      "expect": "`PATCH /v1/console/settings/storefront` → `storefront_settings.version` + 1; Redis `t:<tenantId>:<env>:sf:*` deleted; the storefront shows it once its own 5-minute sessionStorage copy is gone."
+    },
+    {
+      "title": "Content page",
+      "actor": "Owner",
+      "screen": "/settings/pages/[pageId]",
+      "body": "Create a published page shown in the footer.",
+      "expect": "`storefront_pages` row; `t:…:pages:<locale>` deleted; the storefront serves it at `/p/<slug>` (Caddy rewrites it to p.html) and lists it in the footer."
+    },
+    {
+      "title": "Images",
+      "actor": "Owner",
+      "screen": "/settings/assets",
+      "body": "Upload a logo (PNG/JPEG/WebP/ICO, ≤ 1 MiB); try a renamed text file.",
+      "expect": "`201` `storefront_assets` + file under `STORAGE_DIR/tenant_<key>/…`; the fake image → `422 ASSET_INVALID` (content sniffed). Deleting an asset in use → `409`."
+    },
+    {
+      "title": "E-mail template",
+      "actor": "Owner",
+      "screen": "/settings/templates/[key]/[channel]/[locale]",
+      "body": "Edit `booking.confirmed` with a syntax error, then preview a valid one, then reset.",
+      "expect": "`422 TEMPLATE_INVALID` line by line, nothing saved; preview renders sample data; reset deletes the tenant row and the code default applies."
+    },
+    {
+      "title": "Offers per search",
+      "actor": "Owner",
+      "body": "Search defaults → 40 offers; then \"Use the default\".",
+      "expect": "The next storefront search asks Amadeus for 40 and lists ≤ 40; back to 150 (DEFAULT_OFFERS_PER_SEARCH) after reset."
+    }
+  ]
+}

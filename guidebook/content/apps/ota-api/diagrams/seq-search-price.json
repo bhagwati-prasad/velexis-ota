@@ -1,0 +1,91 @@
+{
+  "id": "seq-search-price",
+  "type": "sequence",
+  "title": "Search, list, upsell and price",
+  "caption": "flights.search → flights.listResults → flights.getOffer → flights.upsell → flights.price (ota/docs/flows/search-and-price.md, src/shopping). Selling prices come from the pricing engine; customer scope never sees net amounts.",
+  "actors": [
+    { "id": "c", "label": "Storefront / SDK", "kind": "user" },
+    { "id": "api", "label": "OTA API (shopping)", "kind": "api" },
+    { "id": "redis", "label": "Redis", "kind": "cache" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" },
+    { "id": "ama", "label": "Amadeus (stub :4900)", "kind": "external" }
+  ],
+  "steps": [
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/flight-searches {mode: simple, origin, destination, dates, travellers}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "single flight t:<tenantId>:<env>:search:<sha256> (30 s); rl:amadeus:cred / rl:amadeus:ten buckets; amadeus:token:<credId>:<env>",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Offers Search (max = search_defaults.maxResults, default 150, 30 s timeout)",
+      "kind": "call"
+    },
+    { "from": "ama", "to": "api", "label": "offers + dictionaries", "kind": "return" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "supplier_requests row; markup_rules + fee_rules → flight_searches (completed) + flight_offers (net, markup, selling)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "201 FlightSearch (srch_…, resultCount, facets)",
+      "kind": "return",
+      "note": "No offers: 201 with zero. Timeout: 504 SUPPLIER_TIMEOUT, search failed. No connection: 424 SUPPLIER_NOT_CONFIGURED."
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "GET /v1/flight-searches/{id}/offers?stops=0&sort=price",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "SQL filter/sort within the search (no Amadeus call); 410 SEARCH_EXPIRED after expires_at",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/flight-offers/{offerId}/upsells (optional)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Branded Fares Upsell (identical request reuses the stored upsell: cached: true)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "pg", "label": "offer_upsells + flight_offers (origin = upsell)", "kind": "call" },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/priced-offers {offerIds, include: bags, creditCardFees, detailedFareRules}",
+      "kind": "call"
+    },
+    { "from": "api", "to": "ama", "label": "Flight Offers Price", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "priced_offers (price_changed, selling_total = net + markup + fees, expires_at = min(now + offer_ttl_minutes, lastTicketingDate))",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "201 PricedOffer (prc_…); priceChanged with old and new totals",
+      "kind": "return"
+    }
+  ]
+}

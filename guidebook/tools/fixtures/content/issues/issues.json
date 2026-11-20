@@ -1,0 +1,63 @@
+[
+  {
+    "id": "KI-001",
+    "title": "Dashboard storefront link ignores the primary host",
+    "app": "portal",
+    "severity": "high",
+    "kind": "ux",
+    "status": "confirmed",
+    "where": [
+      "platform/frontend/src/app/(app)/dashboard/page.tsx:22",
+      "platform/frontend/src/lib/tenant.ts:76-83"
+    ],
+    "summary": "The card builds the storefront host of the [[tenant]] itself instead of reading `storefrontUrl`.",
+    "reproduce": ["Create an OTA at `/otas/new`.", "Open `/dashboard` while it is still provisioning."],
+    "expected": "The primary host, and a note while the storefront is not open.",
+    "actual": "Always `https://<key>.<STOREFRONT_BASE_DOMAIN>/`.",
+    "fix": "Render `tenant.storefrontUrl`; see [the journey](#/journey/sign-up-and-create-ota).",
+    "files": ["platform/frontend/src/app/(app)/dashboard/page.tsx"],
+    "newFiles": ["platform/frontend/src/app/(app)/not-found.tsx"],
+    "migration": false,
+    "journey": "sign-up-and-create-ota",
+    "step": "create-ota",
+    "terms": ["tenant", "bff"]
+  },
+  {
+    "id": "KI-002",
+    "title": "Retrying a failed OTA ignores the tenant limit",
+    "app": "backend",
+    "severity": "medium",
+    "kind": "bug",
+    "status": "plausible",
+    "where": [
+      "platform/backend/src/provisioning/lifecycle.service.ts:615",
+      "platform/backend/src/memberships/memberships.repository.ts:281"
+    ],
+    "summary": "A failed OTA frees its slot, and a retry does not count again.",
+    "reproduce": ["Set `MAX_TENANTS_PER_ACCOUNT=1`.", "Fail one OTA, create another, retry the first."],
+    "expected": "`422 UNPROCESSABLE` with `tenant_limit`.",
+    "actual": "`202`, two OTAs that are not failed.",
+    "fix": "Count the owner's OTAs in `retryProvisioning` too.",
+    "files": ["platform/backend/src/provisioning/lifecycle.service.ts"],
+    "migration": false,
+    "journey": "check-api-health",
+    "step": "ready"
+  },
+  {
+    "id": "KI-003",
+    "title": "Tenant status values allowed by the CHECK constraint that no code writes",
+    "app": "platform-api",
+    "severity": "low",
+    "kind": "db",
+    "status": "confirmed",
+    "where": ["platform/backend/migrations/platform/0001_baseline.sql:72", "platform/docs/data-model.md:196"],
+    "summary": "No code writes `deprovisioning` or `deleted` to `tenants.status`, yet the admin filter offers both.",
+    "reproduce": ["Filter the admin's tenant list by status Deleted: always empty."],
+    "expected": "Only values that can occur are offered.",
+    "actual": "Reserved values are offered and documented as used.",
+    "fix": "Narrow the CHECK constraint in a new migration, or mark the values as reserved.",
+    "files": ["platform/docs/data-model.md"],
+    "migration": true,
+    "terms": ["provisioning"]
+  }
+]

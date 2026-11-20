@@ -1,0 +1,68 @@
+{
+  "id": "api-key-states",
+  "type": "state",
+  "title": "API key lifecycle",
+  "caption": "`platform.api_keys`: no status column; state follows `revoked_at` and `expires_at`. The full key is shown once.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Counts against `plans.limits.apiKeys`; OTA API accepts it (cached 60 s)."
+    },
+    {
+      "id": "expiring",
+      "label": "expiring (old key after a roll)",
+      "kind": "normal",
+      "detail": "`expires_at` = now + 1h / 24h / 7d."
+    },
+    {
+      "id": "expired",
+      "label": "expired",
+      "kind": "final"
+    },
+    {
+      "id": "revoked",
+      "label": "revoked",
+      "kind": "final",
+      "detail": "Never changed again (409 revoked); vx:invalidate api_key."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "active",
+      "label": "createApiKey / issue_api_keys post-step"
+    },
+    {
+      "from": "active",
+      "to": "expiring",
+      "label": "rollApiKey expireOldIn 1h|24h|7d"
+    },
+    {
+      "from": "active",
+      "to": "revoked",
+      "label": "revokeApiKey / roll with now"
+    },
+    {
+      "from": "expiring",
+      "to": "expired",
+      "label": "time passes"
+    },
+    {
+      "from": "expiring",
+      "to": "revoked",
+      "label": "revokeApiKey"
+    },
+    {
+      "from": "active",
+      "to": "expired",
+      "label": "expiresAt set at creation reached"
+    }
+  ]
+}

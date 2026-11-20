@@ -1,0 +1,119 @@
+{
+  "id": "seq-create-ota-checkout",
+  "type": "sequence",
+  "title": "Create an OTA (M1 and M5 with Stripe Checkout)",
+  "caption": "One Idempotency-Key per wizard opening makes a double submit create one OTA. Before M5 provisioning starts at once; from M5 the browser goes to Stripe and the webhook, not the redirect, opens the gate.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Browser (wizard)",
+      "kind": "user"
+    },
+    {
+      "id": "p",
+      "label": "Portal (createOta action)",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    },
+    {
+      "id": "s",
+      "label": "Stripe",
+      "kind": "external"
+    },
+    {
+      "id": "w",
+      "label": "Workers (platform + OTA)",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "p",
+      "label": "typing the key: checkKeyAvailability (400 ms debounce)",
+      "kind": "call"
+    },
+    {
+      "from": "p",
+      "to": "api",
+      "label": "GET /v1/tenants/key-availability?key=",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "p",
+      "label": "available | taken | reserved",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "p",
+      "label": "Create OTA (all fields + hidden idempotencyKey UUID)",
+      "kind": "call"
+    },
+    {
+      "from": "p",
+      "to": "api",
+      "label": "POST /v1/tenants, Idempotency-Key (billingInterval from M5)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "w",
+      "label": "pre-M5: dispatch tenant.provision",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "s",
+      "label": "M5: customers.create + checkout.sessions.create",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "p",
+      "label": "202 {tenant, job, checkoutUrl | null, checkoutError?}",
+      "kind": "return"
+    },
+    {
+      "from": "p",
+      "to": "b",
+      "label": "303 /otas/ten_…/setup (pre-M5) or Checkout URL (https only)",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "s",
+      "label": "pay / start trial",
+      "kind": "call"
+    },
+    {
+      "from": "s",
+      "to": "api",
+      "label": "webhook checkout.session.completed → gate opens",
+      "kind": "async"
+    },
+    {
+      "from": "s",
+      "to": "b",
+      "label": "back to /otas/ten_…/setup?checkout=success",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "p",
+      "label": "set-up page polls getSetupProgress every 2 s",
+      "kind": "call"
+    },
+    {
+      "from": "p",
+      "to": "api",
+      "label": "GET /v1/tenants/{id}/provisioning",
+      "kind": "call"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "id": "flow-sign-up",
+  "type": "flow",
+  "title": "Sign up and verify the e-mail address",
+  "caption": "PF-01, PF-02. The e-mail arrives in Mailpit locally.",
+  "steps": [
+    {
+      "title": "Fill the sign-up form",
+      "actor": "Visitor",
+      "screen": "Sign up",
+      "url": "http://localhost:3000/sign-up",
+      "body": "Full name, e-mail address, a password of 12+ characters with a letter and a digit, tick the terms, **Create account**.",
+      "expect": "Redirect to `/sign-up/check-email` (\"Check your e-mail\"). An 11-character password is refused at the field, keeping name and address but not the password."
+    },
+    {
+      "title": "Check the database",
+      "actor": "Tester",
+      "body": "`select status, email_verified_at, terms_version from platform.accounts where lower(email)=lower('<address>');`",
+      "expect": "`pending_verification`, `email_verified_at` null, `terms_version` = `termsVersion` of `lib/terms.ts`. `platform.email_outbox` has an `auth.verify_email` row."
+    },
+    {
+      "title": "Open the link",
+      "actor": "Visitor",
+      "url": "http://localhost:8025",
+      "body": "Open \"Confirm your e-mail address for Velexis\" and click the link (`/verify-email?token=…`).",
+      "expect": "303 to `/sign-in?verified=1` with \"Your e-mail address is verified. Sign in to continue.\" The URL no longer holds the token. A second click lands on `/verify-pending?error=token`."
+    },
+    {
+      "title": "Same address again",
+      "actor": "Visitor",
+      "screen": "Sign up",
+      "body": "Sign up again with the same address.",
+      "expect": "Same \"Check your e-mail\" answer; the owner gets \"You already have a Velexis account\" instead (no second account row)."
+    },
+    {
+      "title": "Sign in",
+      "actor": "Visitor",
+      "screen": "Sign in",
+      "url": "http://localhost:3000/sign-in",
+      "body": "Sign in with the address and password.",
+      "expect": "`/dashboard` (\"My OTAs\", \"You have no OTA yet\"); cookies `__Host-vxp_at` and `__Host-vxp_rt` are httpOnly and Secure."
+    }
+  ]
+}

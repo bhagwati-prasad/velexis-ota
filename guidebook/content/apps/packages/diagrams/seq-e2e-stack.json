@@ -1,0 +1,90 @@
+{
+  "id": "seq-e2e-stack",
+  "type": "sequence",
+  "title": "Playwright global setup: the end-to-end stack",
+  "caption": "tools/e2e/support/stack.ts. One run at a time per machine (fixed ports). With E2E_WITH_OTA=1 eleven processes and two seeds start in 15–30 s.",
+  "actors": [
+    {
+      "id": "pw",
+      "label": "pnpm test:e2e",
+      "kind": "user"
+    },
+    {
+      "id": "stack",
+      "label": "support/stack.ts",
+      "kind": "worker"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL / Redis",
+      "kind": "db"
+    },
+    {
+      "id": "apps",
+      "label": "Built apps + stub + previews",
+      "kind": "api"
+    },
+    {
+      "id": "spec",
+      "label": "Spec files",
+      "kind": "ui"
+    }
+  ],
+  "steps": [
+    {
+      "from": "pw",
+      "to": "stack",
+      "label": "build tools (testing, crypto, reference-data, amadeus-stub), then globalSetup",
+      "kind": "call"
+    },
+    {
+      "from": "stack",
+      "to": "stack",
+      "label": "settings from env / .env.local; every app built? every port free?",
+      "kind": "self",
+      "note": "Fails at once with the command to run."
+    },
+    {
+      "from": "stack",
+      "to": "pg",
+      "label": "FLUSHDB E2E_REDIS_DB (15); CREATE DATABASE velexis_e2e_<runId>; schemas.sql; pnpm db:migrate; pnpm db:seed:reference",
+      "kind": "call"
+    },
+    {
+      "from": "stack",
+      "to": "apps",
+      "label": "spawn with APP_ENV=test, own role DSN, 127.0.0.1 URLs (+ Stripe CLI forwarders when asked)",
+      "kind": "async"
+    },
+    {
+      "from": "stack",
+      "to": "apps",
+      "label": "wait for GET /health/ready = 200 (60 s each; stub's 404 counts)",
+      "kind": "call"
+    },
+    {
+      "from": "stack",
+      "to": "apps",
+      "label": "E2E_WITH_OTA=1: platform dev:seed, OTA dev:seed (demo OTA tenant_demo); stdout discarded",
+      "kind": "call"
+    },
+    {
+      "from": "spec",
+      "to": "apps",
+      "label": "journeys in Chromium; e-mails from Mailpit; data via platform API or support/seed.ts",
+      "kind": "call"
+    },
+    {
+      "from": "stack",
+      "to": "apps",
+      "label": "teardown: SIGTERM, SIGKILL after 10 s",
+      "kind": "call"
+    },
+    {
+      "from": "stack",
+      "to": "pg",
+      "label": "DROP the database, FLUSHDB the Redis database",
+      "kind": "call"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "id": "environment-states",
+  "type": "state",
+  "title": "The TEST / LIVE environment of a console session",
+  "caption": "__Host-vx_env cookie, sent as X-Velexis-Environment. Code: (console)/env-actions.ts, lib/permissions.ts canOpenEnvironment, lib/velexis.ts getConsoleRequest.",
+  "states": [
+    {
+      "id": "test",
+      "label": "TEST",
+      "kind": "initial",
+      "detail": "Every new session and every refresh starts here. Bookings, payments and queues of `environment = 'test'`."
+    },
+    {
+      "id": "live",
+      "label": "LIVE",
+      "kind": "normal",
+      "detail": "Amber shell, \"LIVE environment\" strip, dialogs say \"… in LIVE\". Only a live OTA and a role in owner, admin, agent, finance."
+    },
+    {
+      "id": "refused",
+      "label": "Live refused",
+      "kind": "error",
+      "detail": "Cookie says live but the API answers `403 ENVIRONMENT_NOT_ALLOWED` (OTA back to test, role now viewer): the request runs in test, banner \"Live is not available for this OTA or role\", cookie reset."
+    }
+  ],
+  "transitions": [
+    { "from": "test", "to": "live", "label": "switchEnvironment(live) after console.auth.me lists live" },
+    { "from": "live", "to": "test", "label": "switchEnvironment(test)" },
+    { "from": "test", "to": "test", "label": "switch to live refused: cookie stays test" },
+    { "from": "live", "to": "refused", "label": "role or OTA no longer allows live" },
+    { "from": "refused", "to": "test", "label": "resetEnvironment / requireStaff / next refresh" }
+  ]
+}

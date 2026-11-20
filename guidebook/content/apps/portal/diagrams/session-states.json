@@ -1,0 +1,117 @@
+{
+  "id": "session-states",
+  "type": "state",
+  "title": "A portal browser session (cookies)",
+  "caption": "What the portal's cookies say about a browser, and what moves it between states. The API keeps the matching account_sessions rows.",
+  "states": [
+    {
+      "id": "anon",
+      "label": "Signed out",
+      "kind": "initial",
+      "detail": "No `__Host-vxp_at` / `__Host-vxp_rt`. `(app)` routes 303 to `/sign-in?next=`."
+    },
+    {
+      "id": "mfa",
+      "label": "MFA challenge pending",
+      "kind": "normal",
+      "detail": "`__Host-vxp_mfa` (Strict, ≤5 min) and `__Host-vxp_next`; no session cookie yet."
+    },
+    {
+      "id": "unverified",
+      "label": "Signed in, unverified",
+      "kind": "normal",
+      "detail": "Access token claim `ev: false`: only `/verify-pending` and sign-out."
+    },
+    {
+      "id": "active",
+      "label": "Signed in",
+      "kind": "normal",
+      "detail": "Access token ≤15 min, refresh token until the family's 30 days."
+    },
+    {
+      "id": "stale",
+      "label": "Access token expiring",
+      "kind": "normal",
+      "detail": "Less than 30 s left, unreadable or missing with a refresh token present."
+    },
+    {
+      "id": "enrol",
+      "label": "MFA enrolment required",
+      "kind": "normal",
+      "detail": "`getMe.mfaEnrolmentRequired` (owner/admin of a live OTA without MFA): only `/mfa-enrolment`."
+    },
+    {
+      "id": "ended",
+      "label": "Session ended",
+      "kind": "final",
+      "detail": "Cookies deleted (`Max-Age=0`, same attributes)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "anon",
+      "to": "active",
+      "label": "sign-in without MFA"
+    },
+    {
+      "from": "anon",
+      "to": "mfa",
+      "label": "sign-in answers mfaRequired"
+    },
+    {
+      "from": "mfa",
+      "to": "active",
+      "label": "code or recovery code accepted"
+    },
+    {
+      "from": "mfa",
+      "to": "anon",
+      "label": "MFA_CHALLENGE_INVALID → /sign-in?mfa=expired"
+    },
+    {
+      "from": "anon",
+      "to": "unverified",
+      "label": "sign-in before verifying"
+    },
+    {
+      "from": "unverified",
+      "to": "active",
+      "label": "/verify-email or Continue (refresh)"
+    },
+    {
+      "from": "active",
+      "to": "stale",
+      "label": "time passes"
+    },
+    {
+      "from": "stale",
+      "to": "active",
+      "label": "middleware refresh (single-flight)"
+    },
+    {
+      "from": "stale",
+      "to": "ended",
+      "label": "REFRESH_TOKEN_INVALID / REUSED / UNAUTHENTICATED"
+    },
+    {
+      "from": "active",
+      "to": "enrol",
+      "label": "an OTA of an owner/admin goes live"
+    },
+    {
+      "from": "enrol",
+      "to": "active",
+      "label": "MFA turned on"
+    },
+    {
+      "from": "active",
+      "to": "ended",
+      "label": "Sign out, Sign out everywhere, password reset"
+    },
+    {
+      "from": "ended",
+      "to": "anon",
+      "label": "next request"
+    }
+  ]
+}

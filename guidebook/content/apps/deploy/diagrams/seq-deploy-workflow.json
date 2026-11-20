@@ -1,0 +1,71 @@
+{
+  "id": "seq-deploy-workflow",
+  "type": "sequence",
+  "title": "Deploy workflow: from Run workflow to a current release",
+  "caption": ".github/workflows/deploy.yml. The build job has no secrets; the deploy job needs build and e2e green, the production environment's approval, and runs only from main or a v* tag.",
+  "actors": [
+    { "id": "dev", "label": "Developer", "kind": "user" },
+    { "id": "build", "label": "job build (no secrets)", "kind": "worker" },
+    { "id": "e2e", "label": "job e2e (e2e.yml, workflow_call)", "kind": "worker" },
+    { "id": "deploy", "label": "job deploy (environment production)", "kind": "worker" },
+    { "id": "vm", "label": "VM: deploy user + sudo velexis-deploy", "kind": "edge" }
+  ],
+  "steps": [
+    { "from": "dev", "to": "build", "label": "Actions > Deploy > Run workflow (main or v*)", "kind": "call" },
+    {
+      "from": "build",
+      "to": "build",
+      "label": "refuse other refs; pnpm install --frozen-lockfile; lint, typecheck, test, build",
+      "kind": "self"
+    },
+    {
+      "from": "build",
+      "to": "build",
+      "label": "pack-release.sh → release/<sha>/, SHA256SUMS check, tarball + SHA-256 output",
+      "kind": "self",
+      "note": "Artefact release-<sha> kept 7 days."
+    },
+    {
+      "from": "dev",
+      "to": "e2e",
+      "label": "same commit, in parallel (portal, platform-admin, storefront, ota-admin, storefront-stripe, SDK smoke)",
+      "kind": "async"
+    },
+    { "from": "e2e", "to": "deploy", "label": "green (a red run blocks the deploy)", "kind": "return" },
+    { "from": "build", "to": "deploy", "label": "sha + tarball_sha256", "kind": "return" },
+    { "from": "dev", "to": "deploy", "label": "approve the production environment", "kind": "call" },
+    {
+      "from": "deploy",
+      "to": "deploy",
+      "label": "sha == GITHUB_SHA; download; re-check tarball SHA-256 and SHA256SUMS",
+      "kind": "self"
+    },
+    {
+      "from": "deploy",
+      "to": "vm",
+      "label": "rsync -a --delete release/<sha>/ → /srv/velexis/incoming/<sha>/ (host alias velexis-vm, BatchMode, pinned host key)",
+      "kind": "call"
+    },
+    {
+      "from": "deploy",
+      "to": "vm",
+      "label": "ssh velexis-vm sudo /usr/local/sbin/velexis-deploy <sha>",
+      "kind": "call"
+    },
+    { "from": "vm", "to": "deploy", "label": "exit 0 (or 1 after an automatic rollback)", "kind": "return" },
+    { "from": "deploy", "to": "vm", "label": "smoke check: sudo velexis-deploy --status", "kind": "call" },
+    {
+      "from": "vm",
+      "to": "deploy",
+      "label": "current: /srv/velexis/releases/<sha>",
+      "kind": "return",
+      "note": "The job fails unless this line matches."
+    },
+    {
+      "from": "deploy",
+      "to": "deploy",
+      "label": "always: remove ~/.ssh/deploy_key and config",
+      "kind": "self"
+    }
+  ]
+}

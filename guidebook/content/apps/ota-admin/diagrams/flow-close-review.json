@@ -1,0 +1,39 @@
+{
+  "id": "flow-close-review",
+  "type": "flow",
+  "title": "Close a reconciliation review",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/reconciliation-review.e2e.ts. To get such a booking locally: an airline-card booking completed with the stub scenario server-error on an OTA without a booking queue, then wait past reconcile_until (15 min).",
+  "steps": [
+    {
+      "title": "Open the view",
+      "actor": "Owner",
+      "screen": "/bookings?reconcileOutcome=manual_review",
+      "body": "Bookings → **Reconciliation review**.",
+      "expect": "The bookings `pending` with `reconcile_outcome = manual_review`."
+    },
+    {
+      "title": "Not booked: a bad note",
+      "actor": "Owner",
+      "body": "Open the first, **Close the review** → **Not booked**, write a note containing a card number, confirm.",
+      "expect": "\"A note never holds a card number: remove it.\" at the note; dialog stays open; nothing changed."
+    },
+    {
+      "title": "Not booked",
+      "actor": "Owner",
+      "body": "Write what you looked for; confirm.",
+      "expect": "\"Failed\", payment failed (airline card) or released (Stripe); `booking.reconcile_closed` in the timeline; `reconcile_outcome = not_found`; `booking.reconcile_close` staff action with the note."
+    },
+    {
+      "title": "Order found: wrong locator",
+      "actor": "Owner",
+      "body": "Second booking → **Order found** with a locator of an order without the remark `VELEXIS <reference>`.",
+      "expect": "Refusal at the record locator; nothing changed."
+    },
+    {
+      "title": "Order found",
+      "actor": "Owner",
+      "body": "The locator of the order that carries the remark (lower case is fine).",
+      "expect": "\"Confirmed\", the record locator on the page, `reconcile_outcome = found`; the view is then empty (\"No reconciliation waits for staff.\")."
+    }
+  ]
+}

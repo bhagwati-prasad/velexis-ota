@@ -1,0 +1,34 @@
+{
+  "id": "velexis-connection-states",
+  "type": "state",
+  "title": "An OTA's Amadeus connection on the Velexis account",
+  "caption": "platform.supplier_connections with credential_source = 'velexis', as the connections tab of /tenants/[tenantId] shows it. Payment connections use the same Disable/Enable buttons (reason).",
+  "states": [
+    { "id": "start", "label": "created at set-up / live request", "kind": "initial" },
+    {
+      "id": "waiting",
+      "label": "pending_verification, no office",
+      "kind": "normal",
+      "detail": "Pool was empty, or the owner requested live. Card shows **Assign an office**; live requests also appear on the dashboard."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Office in `office_ids`. **Disable connection** (reason)."
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "normal",
+      "detail": "**Enable connection** (reason); `409 no_office` if its office was released meanwhile."
+    }
+  ],
+  "transitions": [
+    { "from": "start", "to": "waiting", "label": "no available office" },
+    { "from": "start", "to": "active", "label": "office taken at set-up" },
+    { "from": "waiting", "to": "active", "label": "Assign office (adminAssignAmadeusOffice)" },
+    { "from": "active", "to": "disabled", "label": "Disable connection (reason)" },
+    { "from": "disabled", "to": "active", "label": "Enable connection (reason)" }
+  ]
+}

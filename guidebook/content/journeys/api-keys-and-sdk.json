@@ -1,0 +1,105 @@
+{
+  "id": "api-keys-and-sdk",
+  "title": "API keys and the JS SDK",
+  "summary": "The owner creates, uses, restricts, rolls and revokes API keys in the portal; requests with the keys reach the OTA API; the SDK's smoke tests run against the local stack with the demo OTA's keys.",
+  "apps": ["portal", "platform-api", "ota-api", "sdk"],
+  "roles": ["OTA owner", "Third-party developer"],
+  "duration": "25 min",
+  "prerequisites": [
+    "An active OTA of yours and the OTA API on port 4000.",
+    "`curl` and `jq`. For the SDK smoke tests: the three keys printed by the OTA's `dev:seed` ([[journey:run-the-stack]])."
+  ],
+  "steps": [
+    {
+      "id": "list",
+      "app": "portal",
+      "title": "The API keys page",
+      "url": "http://localhost:3000/otas/ten_…/api-keys",
+      "actions": "Open **API keys**.",
+      "expect": "The **Test keys** tab lists the two keys created at set-up, *Initial test key (publishable)* and *Initial test key (secret)*, with Name, Kind, Key (`prefix…last4`), Access, Created (*at set-up*), Last used (*Never* until used), Expires and Status *Active*. No **Live keys** tab while the OTA is in test.",
+      "data": "`SELECT name, kind, environment, prefix, scopes, allowed_origins, last_used_at, revoked_at FROM platform.api_keys WHERE tenant_id = 'ten_…';`",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/api-keys/page.tsx",
+        "platform/backend/src/api-keys/api-keys.service.ts"
+      ]
+    },
+    {
+      "id": "create",
+      "app": "portal",
+      "title": "Create a secret key and see it once",
+      "actions": "Type **Name** `automation test`, keep *Secret key* and *Storefront*, press **Create the key**. Copy it. Reload.",
+      "expect": "The region **Your new secret test key** with *Copy this now: it is shown only once* and the key `sk_test_` + 40 characters; *In the list it shows as `sk_test_xxxxxx…abcd`*. After the reload the key is nowhere in the page and its last use reads *Never*.",
+      "data": "Only `key_hash` (HMAC with the pepper), the 14-character `prefix` and `last4` are stored; audit `api_key.created` holds the prefix, never the key.",
+      "code": [
+        "platform/backend/src/api-keys/api-key-generator.ts",
+        "platform/backend/src/api-keys/api-key-rules.ts"
+      ]
+    },
+    {
+      "id": "use",
+      "app": "ota-api",
+      "title": "Call the OTA API with the key",
+      "actions": "Run `curl -s -H 'X-Api-Key: sk_test_…' http://localhost:4000/v1/storefront | jq '.brand // .'`, then the same with a wrong key. Wait five minutes and reload the API keys page.",
+      "expect": "200 with your OTA's storefront configuration; the wrong key answers `401` with the error envelope (`INVALID_API_KEY`) and an `X-Request-Id`. After the flush, *Last used* shows the time.",
+      "data": "Redis `apikey:<prefix>` (cached row, 60 s) and `apikey:used:<keyId>`; after the platform worker's 5-minute flush `platform.api_keys.last_used_at` is set.",
+      "code": [
+        "ota/backend/src/tenancy/api-key.verifier.ts",
+        "ota/backend/src/tenancy/key-usage.ts",
+        "platform/backend/src/api-keys/usage-flush.processor.ts"
+      ]
+    },
+    {
+      "id": "scope",
+      "app": "ota-api",
+      "title": "A storefront-scoped key cannot reach the console",
+      "actions": "Run `curl -s -H 'X-Api-Key: sk_test_…' http://localhost:4000/v1/console/auth/me | jq .error`.",
+      "expect": "`403 SCOPE_NOT_ALLOWED` (the `storefront` scope is refused on every console operation).",
+      "code": ["ota/backend/src/common/auth/scope.guard.ts"]
+    },
+    {
+      "id": "publishable",
+      "app": "portal",
+      "title": "A publishable key restricted to one origin",
+      "actions": "Create a *Publishable key* with the allowed origin `http://localhost:8080`. Call `curl -s -H 'X-Api-Key: pk_test_…' -H 'Origin: http://localhost:8080' http://localhost:4000/v1/storefront`, then with `Origin: http://localhost:9999`, then without `Origin`. Try saving an origin with a path or a wildcard.",
+      "expect": "The allowed origin answers 200; another origin `403 ORIGIN_NOT_ALLOWED`; no `Origin` at all (a server-side call) answers 200 too: the list restricts browsers only. Invalid origins are refused by the form (an origin, no path, no wildcard; `http://localhost:<port>` only for test keys).",
+      "code": [
+        "ota/backend/src/tenancy/api-key.verifier.ts",
+        "platform/backend/src/api-keys/api-key-rules.ts"
+      ]
+    },
+    {
+      "id": "revoke",
+      "app": "portal",
+      "title": "Revoke a key",
+      "actions": "Press **Revoke** on the secret key; read the dialog; press **Revoke the key**. Repeat the curl of step \"use\" at once.",
+      "expect": "The dialog says *Requests with `<masked key>` stop working within a minute.* The row shows *Revoked* without actions. The curl answers `401` within about a second (the `api_key` invalidation; 60 s at most).",
+      "data": "`api_keys.revoked_at`, `revoked_by_account_id`; audit `api_key.revoked`; `vx:invalidate {type: \"api_key\", prefix}`.",
+      "code": [
+        "platform/backend/src/api-keys/api-keys.service.ts",
+        "ota/backend/src/tenancy/invalidation.subscriber.ts"
+      ]
+    },
+    {
+      "id": "roll",
+      "app": "portal",
+      "title": "Roll a key with an overlap",
+      "actions": "Roll the publishable key with an expiry of the old key in 1 hour.",
+      "expect": "A new key with the same name, kind, origins and scopes is shown once; the old key keeps working until its `expires_at`, then answers `401`.",
+      "data": "Two rows: the old with `expires_at` set, the new one active; audit `api_key.rolled`.",
+      "code": ["platform/backend/src/api-keys/api-keys.service.ts"]
+    },
+    {
+      "id": "sdk-smoke",
+      "app": "sdk",
+      "title": "Run the SDK smoke tests against the local stack",
+      "actions": "With the OTA API running, run `SDK_SMOKE_PUBLISHABLE_KEY=pk_test_… SDK_SMOKE_SECRET_KEY=sk_test_… SDK_SMOKE_CONSOLE_KEY=sk_test_… pnpm --filter @velexis/ota-sdk test:smoke` with the demo OTA's three seeded keys. `REDIS_URL` and `DATABASE_MIGRATOR_URL` come from the root `.env.local` (development values only).",
+      "expect": "Both files pass: token mode (storefront, reference, search and price, a guest checkout, customer sign-up, account and bookings, sign-out; the console refused with `PermissionError` `403 SCOPE_NOT_ALLOWED`) and server mode (the same journey with `endUser`, the storefront key refused on the console, the console key with a staff token). Every response carries a request id. Token-mode sign-ups count against 127.0.0.1 (5 per hour), so a sixth run within an hour fails with `429`.",
+      "code": [
+        "ota/sdk/test/smoke/token-mode.smoke.test.js",
+        "ota/sdk/test/smoke/server-mode.smoke.test.js",
+        "ota/sdk/src/index.js",
+        "ota/sdk/README.md"
+      ]
+    }
+  ]
+}

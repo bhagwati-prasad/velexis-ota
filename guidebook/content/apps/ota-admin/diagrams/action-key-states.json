@@ -1,0 +1,54 @@
+{
+  "id": "action-key-states",
+  "type": "state",
+  "title": "The idempotency key of a dialog",
+  "caption": "lib/action-state.ts (withNextActionKey, keepsActionKey, useActionKey), components/confirm-dialog.tsx. OADR-0018 point 5 as revised by FIX-W31-OTA and FIX-W32-OTA. Patches and storefront sections send no key.",
+  "states": [
+    {
+      "id": "rendered",
+      "label": "Key rendered",
+      "kind": "initial",
+      "detail": "`crypto.randomUUID()` once per page render, posted as `actionKey`, sent as `Idempotency-Key`."
+    },
+    {
+      "id": "sent",
+      "label": "Sent",
+      "kind": "normal",
+      "detail": "The API stores the request under `scope + key` for 24 h."
+    },
+    {
+      "id": "done",
+      "label": "Succeeded",
+      "kind": "final",
+      "detail": "`revalidatePath`: the next render brings a new key."
+    },
+    {
+      "id": "renewed",
+      "label": "New key from the state",
+      "kind": "normal",
+      "detail": "After a final `4xx` the API stored (all but `412`): the state carries `nextActionKey`, so a corrected form is a new request."
+    },
+    {
+      "id": "kept",
+      "label": "Same key kept",
+      "kind": "normal",
+      "detail": "After `412`, `429`, `5xx`, a timeout or network error: the retry replays or waits for the first request."
+    },
+    {
+      "id": "reload",
+      "label": "Reload required",
+      "kind": "error",
+      "detail": "`409 IDEMPOTENCY_KEY_REUSED`: an earlier request under the key may still run; a new key could capture or refund twice."
+    }
+  ],
+  "transitions": [
+    { "from": "rendered", "to": "sent", "label": "Confirm" },
+    { "from": "sent", "to": "done", "label": "2xx" },
+    { "from": "sent", "to": "renewed", "label": "stored 4xx (422, 403, 409…)" },
+    { "from": "sent", "to": "kept", "label": "412 / 429 / 5xx / timeout" },
+    { "from": "sent", "to": "reload", "label": "409 IDEMPOTENCY_KEY_REUSED" },
+    { "from": "renewed", "to": "sent", "label": "Confirm again (new key)" },
+    { "from": "kept", "to": "sent", "label": "Confirm again (same key)" },
+    { "from": "reload", "to": "rendered", "label": "Reload the page" }
+  ]
+}

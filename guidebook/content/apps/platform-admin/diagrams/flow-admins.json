@@ -1,0 +1,25 @@
+{
+  "id": "flow-admins",
+  "type": "flow",
+  "title": "Grant and revoke platform admin rights",
+  "caption": "The account must be active, verified and have MFA on. The first admin of a system comes from the CLI (admin:grant).",
+  "steps": [
+    {
+      "title": "List",
+      "screen": "/admins",
+      "url": "http://localhost:3001/admins",
+      "body": "Your row says 'You'.",
+      "expect": "Your own Revoke button is disabled with 'You cannot revoke your own admin rights.'; the last admin's too."
+    },
+    {
+      "title": "Grant",
+      "body": "**Grant admin rights** → 'E-mail address of the account' + reason → **Grant admin rights** (+ code).",
+      "expect": "'<name> is now a platform admin.'; refusals worded: no account, already admin, not active, e-mail not verified, MFA not enabled."
+    },
+    {
+      "title": "Revoke",
+      "body": "**Revoke the admin rights of <name>** → **Revoke admin rights** (+ code, no reason).",
+      "expect": "'<name> is no longer a platform admin.'; their next console request goes to sign-in; their password step is refused like a wrong password."
+    }
+  ]
+}

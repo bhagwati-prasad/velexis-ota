@@ -1,0 +1,304 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "Inside ota/frontend",
+  "caption": "HTML pages and partials hold the markup; one entry module per page runs `boot()` and mounts components; `lib/` holds the shared rules; the SDK is the only way to the API. Vite plugins make the dev and preview servers behave like Caddy, and two build scripts guard the output.",
+  "groups": [
+    {
+      "id": "markup",
+      "label": "Markup"
+    },
+    {
+      "id": "runtime",
+      "label": "Runtime (browser)"
+    },
+    {
+      "id": "lib",
+      "label": "src/lib"
+    },
+    {
+      "id": "build",
+      "label": "Build and serve"
+    },
+    {
+      "id": "outside",
+      "label": "Outside the package"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "html",
+      "label": "*.html pages",
+      "group": "markup",
+      "kind": "ui",
+      "detail": "`index.html`, `search.html`, `offer.html`, `price.html`, `checkout.html`, `checkout/*.html`, `confirmation.html`, `bookings.html`, `booking.html`, `lookup.html`, `account/*.html`, `p.html`, `404.html`."
+    },
+    {
+      "id": "partials",
+      "label": "partials/ + templates",
+      "group": "markup",
+      "kind": "ui",
+      "detail": "`header.html`, `footer.html`, `test-banner.html`, `states.html`, `noscript.html`, `search-form.html`, `templates/*.html` (`<template>` elements filled by `fill()`), included at build time by `<!-- @include … -->`."
+    },
+    {
+      "id": "pagejs",
+      "label": "src/pages/<page>.js",
+      "group": "runtime",
+      "kind": "ui",
+      "detail": "One entry module per page; most export `start(context, env)` for tests."
+    },
+    {
+      "id": "boot",
+      "label": "src/boot.js",
+      "group": "runtime",
+      "kind": "ui",
+      "term": "storefront-boot",
+      "detail": "Configuration, primary-host redirect, theme, header, footer, test banner, session, currency client; renders the shared page states (`renderState`)."
+    },
+    {
+      "id": "comps",
+      "label": "src/components/*",
+      "group": "runtime",
+      "kind": "ui",
+      "detail": "`search-form`, `location-combobox`, `filters`, `offer-card`, `fare-families`, `price-breakdown`, `stepper`, `traveller-form`, `contact-form`, `ancillary-picker`, `cancel-dialog`, `booking-timeline`, `dialog`, `live-region`, … each `mount(root, props)`."
+    },
+    {
+      "id": "client",
+      "label": "lib/client.js",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "The single SDK client (`/api`, cookie mode); drops the cached config on `403 TENANT_SUSPENDED`."
+    },
+    {
+      "id": "config",
+      "label": "lib/config.js + config-cache.js",
+      "group": "lib",
+      "kind": "lib",
+      "term": "runtime-configuration",
+      "detail": "`storefront.get` cached 5 minutes in `sessionStorage` under `vx.storefront.config`."
+    },
+    {
+      "id": "session",
+      "label": "lib/session.js",
+      "group": "lib",
+      "kind": "lib",
+      "term": "account-menu",
+      "detail": "`auth.getSession`, account menu, `nextTarget`, password rules, auth page helpers."
+    },
+    {
+      "id": "errors",
+      "label": "lib/errors.js + i18n.js",
+      "group": "lib",
+      "kind": "lib",
+      "term": "page-state",
+      "detail": "`pageStateFor(error)`: error code → page state; all English UI strings and plural rules."
+    },
+    {
+      "id": "domforms",
+      "label": "lib/dom.js, forms.js, format.js, url.js",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Safe templating (`fill`, no `innerHTML`), field errors and error summary, money/dates via `Intl`, `safeNext`, query helpers."
+    },
+    {
+      "id": "theme",
+      "label": "lib/theme.js",
+      "group": "lib",
+      "kind": "lib",
+      "term": "contrast-fallback",
+      "detail": "Branding → CSS custom properties, contrast checks, fonts, favicon."
+    },
+    {
+      "id": "primary",
+      "label": "lib/primary-host.js",
+      "group": "lib",
+      "kind": "lib",
+      "term": "primary-host",
+      "detail": "Sign-in / sign-up on the sub-domain → same path on the primary custom domain."
+    },
+    {
+      "id": "blocks",
+      "label": "lib/blocks.js",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Content-page blocks → DOM with `createElement`; links and images re-checked."
+    },
+    {
+      "id": "cardbrand",
+      "label": "lib/card-brand.js",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Airline-card page: brand from the BIN, Luhn, expiry, security-code length."
+    },
+    {
+      "id": "vite",
+      "label": "vite.config.js + scripts/vite-plugins.js",
+      "group": "build",
+      "kind": "lib",
+      "term": "dev-proxy",
+      "detail": "MPA inputs, partials, Caddy-like routing, `/api` proxy, preview headers, isolated airline-card build."
+    },
+    {
+      "id": "inventory",
+      "label": "scripts/payment-page-inventory.mjs",
+      "group": "build",
+      "kind": "lib",
+      "term": "payment-page-inventory",
+      "detail": "Writes `dist/payment-page-inventory.json`; fails the build on an unreviewed page or third-party script."
+    },
+    {
+      "id": "budgets",
+      "label": "scripts/check-budgets.mjs",
+      "group": "build",
+      "kind": "lib",
+      "term": "performance-budget",
+      "detail": "JS ≤ 60 KB gzip per page (airline card ≤ 30 KB), CSS ≤ 20 KB, HTML ≤ 20 KB, fonts ≤ 2 families / 120 KB."
+    },
+    {
+      "id": "sdk",
+      "label": "@velexis/ota-sdk",
+      "group": "outside",
+      "kind": "lib",
+      "app": "sdk",
+      "detail": "`ota/sdk/src`: namespaces `storefront`, `reference`, `flights`, `checkout`, `bookings`, `auth`, `account`."
+    },
+    {
+      "id": "caddyfile",
+      "label": "deploy/caddy/Caddyfile",
+      "group": "outside",
+      "kind": "edge",
+      "app": "deploy",
+      "detail": "Production routing and headers; `test/csp.test.js` and `test/pay-airline.test.js` compare the preview copies with it."
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "group": "outside",
+      "kind": "api",
+      "app": "ota-api",
+      "detail": "Same-origin `/api/v1/*`."
+    }
+  ],
+  "edges": [
+    {
+      "from": "html",
+      "to": "partials",
+      "label": "@include at build",
+      "kind": "data"
+    },
+    {
+      "from": "html",
+      "to": "pagejs",
+      "label": "<script type=module>",
+      "kind": "sync"
+    },
+    {
+      "from": "pagejs",
+      "to": "boot",
+      "label": "await boot()",
+      "kind": "sync"
+    },
+    {
+      "from": "pagejs",
+      "to": "comps",
+      "label": "mount()",
+      "kind": "sync"
+    },
+    {
+      "from": "boot",
+      "to": "config",
+      "label": "loadConfig",
+      "kind": "sync"
+    },
+    {
+      "from": "boot",
+      "to": "primary",
+      "label": "auth pages only",
+      "kind": "sync"
+    },
+    {
+      "from": "boot",
+      "to": "theme",
+      "label": "applyTheme",
+      "kind": "sync"
+    },
+    {
+      "from": "boot",
+      "to": "session",
+      "label": "loadSession",
+      "kind": "sync"
+    },
+    {
+      "from": "pagejs",
+      "to": "errors",
+      "label": "pageStateFor",
+      "kind": "sync"
+    },
+    {
+      "from": "comps",
+      "to": "domforms",
+      "label": "clone/fill, field errors",
+      "kind": "sync"
+    },
+    {
+      "from": "pagejs",
+      "to": "blocks",
+      "label": "p.js",
+      "kind": "sync"
+    },
+    {
+      "from": "pagejs",
+      "to": "cardbrand",
+      "label": "pay-airline.js",
+      "kind": "sync"
+    },
+    {
+      "from": "config",
+      "to": "client",
+      "label": "storefront.get",
+      "kind": "sync"
+    },
+    {
+      "from": "pagejs",
+      "to": "client",
+      "label": "SDK calls",
+      "kind": "sync"
+    },
+    {
+      "from": "client",
+      "to": "sdk",
+      "label": "createVelexisClient",
+      "kind": "sync"
+    },
+    {
+      "from": "sdk",
+      "to": "api",
+      "label": "fetch /api/v1/*",
+      "kind": "sync"
+    },
+    {
+      "from": "vite",
+      "to": "html",
+      "label": "build inputs",
+      "kind": "data"
+    },
+    {
+      "from": "vite",
+      "to": "inventory",
+      "label": "after build",
+      "kind": "data"
+    },
+    {
+      "from": "vite",
+      "to": "budgets",
+      "label": "after build",
+      "kind": "data"
+    },
+    {
+      "from": "vite",
+      "to": "caddyfile",
+      "label": "copies its headers",
+      "kind": "data"
+    }
+  ]
+}

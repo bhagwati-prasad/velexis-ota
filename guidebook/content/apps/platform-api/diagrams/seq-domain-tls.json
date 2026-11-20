@@ -1,0 +1,106 @@
+{
+  "id": "seq-domain-tls",
+  "type": "sequence",
+  "title": "Custom domain: add, verify, TLS ask",
+  "caption": "DNS verification by the worker through public resolvers, then Caddy's on-demand TLS gate. Requires FEATURE_CUSTOM_DOMAINS and a plan with customDomains > 0.",
+  "actors": [
+    {
+      "id": "fe",
+      "label": "Portal server",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API (domains/)",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "pw",
+      "label": "Platform worker",
+      "kind": "worker"
+    },
+    {
+      "id": "dns",
+      "label": "Public DNS",
+      "kind": "external"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "kind": "edge"
+    }
+  ],
+  "steps": [
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/tenants/{id}/domains {hostname}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "tenant_domains pending, verification_token, deadline now + 72 h; audit",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "records: TXT _velexis.<host>, CNAME → <key>.ota.example.com (or A/AAAA to STOREFRONT_IPV4/6)",
+      "kind": "return"
+    },
+    {
+      "from": "pw",
+      "to": "pw",
+      "label": "domains.verify_pending every 5 min → domain.verify jobs",
+      "kind": "self"
+    },
+    {
+      "from": "pw",
+      "to": "dns",
+      "label": "TXT and CNAME or A/AAAA (5 s per resolver)",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "verified (or failed after 72 h); audit; e-mail domain.verified / domain.failed",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "caddy",
+      "label": "vx:invalidate domain (OTA backend and TLS ask forget the host)",
+      "kind": "async"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "GET /internal/tls/ask?domain=<host> (loopback only)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "syntax check → Redis tlsask:<host> (positive, 60 s) → in-process refusal LRU → one DB lookup",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "caddy",
+      "label": "200 (Caddy may issue) / 404 for anything else, malformed hosts included",
+      "kind": "return"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "daily domains.tls_probe → tls_status issued/failed/expired; domains.recheck_verified (3 failures → failed)",
+      "kind": "call"
+    }
+  ]
+}

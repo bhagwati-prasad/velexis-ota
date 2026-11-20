@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta
+      name="description"
+      content="Velexis Guidebook: usage and architecture guide to every Velexis application, with known issues, glossary, taxonomy, knowledge graph and ontology."
+    />
+    <title>Velexis Guidebook</title>
+    <script>
+      /* Runs before the first paint: applies the saved theme and starts loading the content bundle.
+         The bundle is dist/content.js; a test may pick another one with ?bundle=<relative path>.js or by setting
+         window.VG_BUNDLE (or window.VG_CONTENT) in an init script. Only relative paths are accepted. */
+      (function () {
+        var root = document.documentElement;
+        var pref = "system";
+        try {
+          pref = JSON.parse(localStorage.getItem("vg.theme") || '"system"') || "system";
+        } catch (e) {
+          pref = "system";
+        }
+        var dark =
+          pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        root.setAttribute("data-theme", dark ? "dark" : "light");
+        root.setAttribute("data-theme-pref", pref);
+
+        var src = "dist/content.js";
+        try {
+          var q = new URLSearchParams(location.search).get("bundle");
+          if (typeof window.VG_BUNDLE === "string") src = window.VG_BUNDLE;
+          else if (q && /^(?![\\/])(?!.*:)[\w.\/-]+\.js$/.test(q)) src = q;
+        } catch (e) {
+          src = "dist/content.js";
+        }
+        window.VG_BUNDLE_SRC = src;
+        window.VG_CONTENT_READY = new Promise(function (resolve) {
+          if (window.VG_CONTENT) return resolve(true);
+          var s = document.createElement("script");
+          s.src = src;
+          s.onload = function () {
+            resolve(!!window.VG_CONTENT);
+          };
+          s.onerror = function () {
+            resolve(false);
+          };
+          document.head.appendChild(s);
+        });
+      })();
+    </script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        },
+        "integrity": {
+          "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js": "sha384-GY5FqjttLCFRt/McQbyaVdCk2O1IQtOeX8Py6NfD89BIAsIyJFRl4UgSXrk2vXAk",
+          "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/controls/OrbitControls.js": "sha384-aJoe4qqS/DgF2jh9njAuvA6QIveJYoCuYOfYjdFY8P3eawzmc9bEQ40jq2TvOyuP",
+          "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/renderers/CSS2DRenderer.js": "sha384-9CXQqRjuKfYvfHem9p/LPU6b7PaeeiDuC/gp1qRz3bEV9txWG5wi9XhrkE/0/Dn9"
+        }
+      }
+    </script>
+    <link rel="stylesheet" href="assets/css/guide.css" />
+
+    <!-- Vendor libraries (pinned, with Subresource Integrity). The site still shows its text if one fails. -->
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
+      integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"
+      integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"
+      integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- Site code: classic scripts (works from file://), one global namespace window.VG. -->
+    <script defer src="assets/js/core/text.js"></script>
+    <script defer src="assets/js/core/vg.js"></script>
+    <script defer src="assets/js/core/data.js"></script>
+    <script defer src="assets/js/core/ui.js"></script>
+    <script defer src="assets/js/core/markdown.js"></script>
+    <script defer src="assets/js/core/widgets.js"></script>
+    <script defer src="assets/js/core/three.js"></script>
+    <script defer src="assets/js/core/search.js"></script>
+    <script defer src="assets/js/core/layout.js"></script>
+    <script defer src="assets/js/core/router.js"></script>
+
+    <script defer src="assets/js/widgets/component.js"></script>
+    <script defer src="assets/js/widgets/sequence.js"></script>
+    <script defer src="assets/js/widgets/state.js"></script>
+    <script defer src="assets/js/widgets/er.js"></script>
+    <script defer src="assets/js/widgets/flow.js"></script>
+    <script defer src="assets/js/widgets/tree.js"></script>
+
+    <script defer src="assets/js/views/home.js"></script>
+    <script defer src="assets/js/views/page.js"></script>
+    <script defer src="assets/js/views/app.js"></script>
+    <script defer src="assets/js/views/diagram.js"></script>
+    <script defer src="assets/js/views/journeys.js"></script>
+    <script defer src="assets/js/views/issues.js"></script>
+    <script defer src="assets/js/views/glossary.js"></script>
+    <script defer src="assets/js/views/taxonomy.js"></script>
+    <script defer src="assets/js/views/graph.js"></script>
+    <script defer src="assets/js/views/ontology.js"></script>
+    <script defer src="assets/js/views/system.js"></script>
+    <script defer src="assets/js/views/search.js"></script>
+
+    <script defer src="assets/js/core/boot.js"></script>
+  </head>
+  <body>
+    <a class="vg-skip" href="#vg-main">Skip to content</a>
+    <div id="vg-app" aria-busy="true">
+      <p class="vg-loading">Loading the guidebook…</p>
+    </div>
+    <noscript>
+      <p class="vg-noscript">
+        The Velexis Guidebook needs JavaScript. The same content is in the <code>content/</code> folder as
+        Markdown and JSON files.
+      </p>
+    </noscript>
+  </body>
+</html>

@@ -1,0 +1,38 @@
+{
+  "id": "flow-rotate-kek",
+  "type": "flow",
+  "title": "Rotate the master key (KEK)",
+  "caption": "docs/mvp/runbooks/master-key-rotation.md, ADR-0010. Locally you can rehearse with a second key file in .local/keys/.",
+  "steps": [
+    {
+      "title": "Add the new key",
+      "actor": "Operator",
+      "body": "`NEW_MASTER_KEY=v2 provision-vm.sh --steps keys` installs `master-v2.key` in both zone folders (0400).",
+      "expect": "Both folders hold `master-v1.key` and `master-v2.key`."
+    },
+    {
+      "title": "Make it current",
+      "actor": "Operator",
+      "body": "`MASTER_KEY_CURRENT=local:v2` in both backend env files; restart the backends.",
+      "expect": "New ciphertexts carry `encryption_key_id = 'local:v2'`; old ones still decrypt."
+    },
+    {
+      "title": "Re-wrap",
+      "actor": "Operator",
+      "body": "Run `secrets:rewrap` of the platform backend and of the OTA backend; flush `amadeus:token:*` in Redis.",
+      "expect": "`{ rewrapped, skipped, failed, remainingByKekId: {} }` from both."
+    },
+    {
+      "title": "Verify",
+      "actor": "Operator",
+      "body": "`SELECT encryption_key_id, count(*) FROM platform.supplier_connections GROUP BY 1;` (and the other ciphertext tables, every tenant schema).",
+      "expect": "No row under `local:v1`."
+    },
+    {
+      "title": "Remove the old key",
+      "actor": "Operator",
+      "body": "Delete `master-v1.key` from both folders, back up `/etc/velexis`.",
+      "expect": "Backends restart cleanly; a decrypt of a forgotten v1 row would fail with `Decryption failed`."
+    }
+  ]
+}

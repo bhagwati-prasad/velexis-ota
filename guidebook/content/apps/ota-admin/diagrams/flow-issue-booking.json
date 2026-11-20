@@ -1,0 +1,39 @@
+{
+  "id": "flow-issue-booking",
+  "type": "flow",
+  "title": "Issue a booking held in manual review",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/sso-bookings.e2e.ts (the airline-card booking issued with ACCOUNT and allowUnpaid).",
+  "steps": [
+    {
+      "title": "Find the booking",
+      "actor": "Owner",
+      "screen": "/bookings?ticketingStatus=failed&ticketingStatus=manual_review",
+      "body": "Open a booking with ticketing **manual review**.",
+      "expect": "A banner with the reason and the deadline; **Issue tickets** highlighted."
+    },
+    {
+      "title": "Read the dialog",
+      "actor": "Owner",
+      "body": "Press **Issue tickets**.",
+      "expect": "Stripe authorised: \"The authorised payment is captured first\". Airline card: \"The airline card cannot be charged again…\" with **Settlement with the airline** (CASH, ACCOUNT) and, for owner/admin, **Issue although the payment is not captured**. No card field."
+    },
+    {
+      "title": "Confirm",
+      "actor": "Owner",
+      "body": "Type a reason (3-500 characters), keep \"E-mail the e-ticket receipts to the traveller\", press **Issue tickets**.",
+      "expect": "\"Tickets issued\"; status Ticketed, ticketing Issued; tickets in the Tickets tab."
+    },
+    {
+      "title": "Check the data",
+      "actor": "Tester",
+      "body": "`SELECT status, ticketing_status, version FROM tenant_<key>.bookings WHERE reference='<ref>';` and `SELECT action, outcome, reason FROM tenant_<key>.staff_actions WHERE booking_id='<id>' ORDER BY created_at;`",
+      "expect": "`ticketed / issued`, version + 1; `payment.capture` (Stripe only) and `booking.issue` with your reason; `booking_tickets` rows; Mailpit `booking.ticketed`."
+    },
+    {
+      "title": "Try the refusals",
+      "actor": "Agent",
+      "body": "As an agent, tick nothing and issue an unpaid airline-card booking; double-click Issue on another booking.",
+      "expect": "Agent: \"Only an owner or an admin can issue it unpaid; you can cancel it.\" Double click: one issuance (one `idempotency_keys` row)."
+    }
+  ]
+}

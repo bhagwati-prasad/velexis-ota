@@ -1,0 +1,40 @@
+{
+  "id": "flow-pricing-rules",
+  "type": "flow",
+  "title": "Change markups and fees and see them on the storefront",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/settings-effects.e2e.ts (OF-10 AC1). Rules are shared by TEST and LIVE and apply to the next search.",
+  "steps": [
+    {
+      "title": "Baseline search",
+      "actor": "Traveller",
+      "body": "Search on the storefront with the seeded 0 % default rule.",
+      "expect": "Offers at their net prices."
+    },
+    {
+      "title": "Default rule at 10 %",
+      "actor": "Owner",
+      "screen": "/settings/markups",
+      "body": "Open the default rule, **Percentage** 10, **Save changes**.",
+      "expect": "No inputs for scope, priority, active or window (\"The default rule always matches…\"); saved; `settings.markupRules.update` staff action."
+    },
+    {
+      "title": "Search again",
+      "actor": "Traveller",
+      "body": "Same search on the storefront.",
+      "expect": "Every offer = net + 10 %, rounded half-up."
+    },
+    {
+      "title": "A booking service fee",
+      "actor": "Owner",
+      "screen": "/settings/fees/new",
+      "body": "Type booking service, label \"Service fee\", fixed 7.50 per booking, **Create fee rule**.",
+      "expect": "The rule opens (or stays with the API's warnings); the next priced offer shows \"Service fee €7.50\" and a total 7.50 higher."
+    },
+    {
+      "title": "Edge cases",
+      "actor": "Tester",
+      "body": "A percentage of 1000 on a markup, -1 on a fee, an end before the start; delete the default rule by a forged POST; save in two tabs.",
+      "expect": "Every problem named at its field before any call; `409 default_rule`; `412` \"reload\"."
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "id": "ota-status",
+  "type": "state",
+  "title": "OTA (tenant) status",
+  "caption": "Values of `platform.tenants.status` and what moves a tenant between them.",
+  "states": [
+    { "id": "start", "label": "created", "kind": "initial" },
+    {
+      "id": "provisioning",
+      "label": "provisioning",
+      "kind": "normal",
+      "detail": "The worker creates `tenant_<key>` and runs migrations."
+    },
+    { "id": "active", "label": "active", "kind": "normal", "detail": "Only active tenants are served." },
+    {
+      "id": "suspended",
+      "label": "suspended",
+      "kind": "normal",
+      "detail": "Billing or abuse; storefront shows a notice."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Provisioning failed; retry from the admin."
+    },
+    { "id": "deprovisioning", "label": "deprovisioning", "kind": "normal" },
+    { "id": "deleted", "label": "deleted", "kind": "final", "detail": "Schema dropped after export." }
+  ],
+  "transitions": [
+    { "from": "start", "to": "provisioning", "label": "createTenant" },
+    { "from": "provisioning", "to": "active", "label": "job done" },
+    { "from": "provisioning", "to": "failed", "label": "job failed" },
+    { "from": "failed", "to": "provisioning", "label": "retry" },
+    { "from": "active", "to": "suspended", "label": "suspend" },
+    { "from": "suspended", "to": "active", "label": "reinstate" },
+    { "from": "active", "to": "deprovisioning", "label": "delete" },
+    { "from": "suspended", "to": "deprovisioning", "label": "delete" },
+    { "from": "deprovisioning", "to": "deleted", "label": "schema dropped" }
+  ]
+}

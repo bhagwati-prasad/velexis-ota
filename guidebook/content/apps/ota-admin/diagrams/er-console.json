@@ -1,0 +1,209 @@
+{
+  "id": "er-console",
+  "type": "er",
+  "title": "Tenant tables behind bookings, payments, queues and the audit",
+  "caption": "Schema tenant_<key>, written only by the OTA API through tenantTx. The admin owns none of them. Columns from ota/backend/migrations/tenant/0001-0005 (selection). Redis keys of the staff session on the right.",
+  "entities": [
+    {
+      "id": "bookings",
+      "label": "bookings",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text bkg_…", "key": "pk" },
+        { "name": "environment", "type": "test|live" },
+        { "name": "reference", "type": "text", "key": "uk" },
+        { "name": "channel", "type": "storefront|console|import" },
+        { "name": "customer_id", "type": "text cus_… (NULL = guest)", "key": "fk" },
+        { "name": "status", "type": "pending|confirmed|ticketed|partially_ticketed|cancelled|failed" },
+        {
+          "name": "ticketing_status",
+          "type": "pending|in_progress|issued|partially_issued|failed|manual_review|not_applicable"
+        },
+        { "name": "record_locator", "type": "text (env, locator, system unique)" },
+        { "name": "queuing_office_id / owner_office_id", "type": "text" },
+        { "name": "pricing_mode", "type": "markup_rules|net|override" },
+        { "name": "markup_rule_id", "type": "text mkr_…", "key": "fk" },
+        { "name": "net_amount / markup_amount / fees_amount / total_amount", "type": "numeric(12,2)" },
+        { "name": "amount_paid / amount_refunded", "type": "numeric(12,2)" },
+        {
+          "name": "reconcile_until / reconcile_outcome",
+          "type": "timestamptz / found|not_found|manual_review…"
+        },
+        {
+          "name": "cancellation_claimed_at / cancelled_by / cancel_reason",
+          "type": "timestamptz / customer|staff|airline|system / text"
+        },
+        { "name": "order_snapshot / sync_changes", "type": "jsonb (redacted)" },
+        { "name": "created_by_staff_id", "type": "text stf_…" },
+        { "name": "version", "type": "integer (If-Match)" }
+      ]
+    },
+    {
+      "id": "events",
+      "label": "booking_events",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text evt_…", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "type", "type": "booking.patched, booking.synced, staff.note, booking.reconcile_closed…" },
+        { "name": "actor_type / actor_id", "type": "customer|guest|staff|system|supplier|api_key" },
+        { "name": "visible_to_customer", "type": "boolean" },
+        { "name": "summary / data", "type": "text / jsonb" }
+      ]
+    },
+    {
+      "id": "tickets",
+      "label": "booking_tickets",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text tkt_…", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "document_number", "type": "text (booking, number unique)" },
+        { "name": "status", "type": "ISSUED|REFUNDED|VOID|ORIGINAL|EXCHANGED" },
+        { "name": "issued_by_staff_id", "type": "text stf_…" }
+      ]
+    },
+    {
+      "id": "payments",
+      "label": "payments",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text pay_…", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "provider / method", "type": "stripe… / card, airline card…" },
+        {
+          "name": "status",
+          "type": "requires_payment_method…authorized|captured|partially_refunded|refunded|canceled|failed"
+        },
+        { "name": "amount_authorized / amount_captured / amount_refunded", "type": "numeric(12,2)" },
+        { "name": "card_brand / card_last4", "type": "text (never PAN)" },
+        { "name": "version", "type": "integer (capture If-Match)" }
+      ]
+    },
+    {
+      "id": "refunds",
+      "label": "refunds",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text rfd_…", "key": "pk" },
+        { "name": "payment_id", "type": "text", "key": "fk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "amount", "type": "numeric(12,2)" },
+        {
+          "name": "reason / reason_note",
+          "type": "customer_request|booking_cancelled|schedule_change|duplicate|fraud|goodwill|other / text"
+        },
+        { "name": "status", "type": "pending|processing|succeeded|failed|canceled" },
+        { "name": "requested_by_type / requested_by_id", "type": "staff / stf_…" }
+      ]
+    },
+    {
+      "id": "staffActions",
+      "label": "staff_actions",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text sact_…", "key": "pk" },
+        { "name": "actor_type / staff_id / staff_role", "type": "staff|api_key|system / stf_… / role" },
+        {
+          "name": "action",
+          "type": "booking.issue, booking.cancel, pnr.lookup, settings.storefront.update…"
+        },
+        { "name": "target_type / target_id", "type": "text" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "reason", "type": "text (staff's own words)" },
+        { "name": "before / after", "type": "jsonb (redacted)" },
+        { "name": "outcome", "type": "succeeded|failed|denied" },
+        { "name": "request_id / ip_address / user_agent", "type": "from the end-user headers" }
+      ]
+    },
+    {
+      "id": "idem",
+      "label": "idempotency_keys",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text idk_…", "key": "pk" },
+        { "name": "scope + key", "type": "env:principal:operation + Idempotency-Key", "key": "uk" },
+        { "name": "request_hash", "type": "SHA-256 (409 IDEMPOTENCY_KEY_REUSED on mismatch)" },
+        { "name": "status / response_status", "type": "processing|completed|failed / smallint" },
+        { "name": "expires_at", "type": "timestamptz (24 h)" }
+      ]
+    },
+    {
+      "id": "snapshots",
+      "label": "queue_snapshots",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text qsn_…", "key": "pk" },
+        { "name": "environment / office_id", "type": "text" },
+        { "name": "queue_id / category", "type": "integer 0-99 / 0-254" },
+        { "name": "item_count / response", "type": "integer / jsonb" },
+        { "name": "fetched_by_staff_id", "type": "text (NULL = poller)" },
+        { "name": "supplier_request_id", "type": "text", "key": "fk" }
+      ]
+    },
+    {
+      "id": "sreq",
+      "label": "supplier_requests",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text sreq_…", "key": "pk" },
+        { "name": "operation / amadeus_api / amadeus_operation_id", "type": "text" },
+        {
+          "name": "http_status / outcome / error_codes",
+          "type": "smallint / success|client_error|… / integer[]"
+        },
+        { "name": "request_id / correlation_id", "type": "Velexis X-Request-Id / Amadeus id" },
+        { "name": "request_body / response_body", "type": "jsonb (redacted, may be truncated)" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "staff_id", "type": "text stf_…" }
+      ]
+    },
+    {
+      "id": "customers",
+      "label": "customers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text cus_…", "key": "pk" },
+        { "name": "email", "type": "text (lower unique)", "key": "uk" },
+        { "name": "status", "type": "pending_verification|active|disabled|deleted" },
+        { "name": "total_spent_amount / last_booking_at", "type": "numeric / timestamptz" }
+      ]
+    },
+    {
+      "id": "notifications",
+      "label": "notifications",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text ntf_…", "key": "pk" },
+        { "name": "template_key", "type": "booking.ticketed, booking.cancelled…" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "status", "type": "pending|sending|sent|delivered|bounced|failed|cancelled" },
+        { "name": "dedupe_key", "type": "text", "key": "uk" }
+      ]
+    },
+    {
+      "id": "redisSession",
+      "label": "Redis: staff session",
+      "schema": "redis",
+      "fields": [
+        { "name": "ptk:<sha256>", "type": "portal token, 60 s, GETDEL", "key": "pk" },
+        { "name": "staffsess:<familyId>", "type": "family, rotating refresh token, 12 h" },
+        { "name": "staffdeny:acct|member|tenant:<id>", "type": "cut-off epoch" },
+        { "name": "rl:<throttler>:<tracker>", "type": "600 / min per staff session" }
+      ]
+    }
+  ],
+  "relations": [
+    { "from": "bookings", "to": "events", "label": "timeline and notes", "cardinality": "1-n" },
+    { "from": "bookings", "to": "tickets", "label": "issued tickets", "cardinality": "1-n" },
+    { "from": "bookings", "to": "payments", "label": "paid by", "cardinality": "1-n" },
+    { "from": "payments", "to": "refunds", "label": "refunded by", "cardinality": "1-n" },
+    { "from": "bookings", "to": "refunds", "label": "concerns", "cardinality": "1-n" },
+    { "from": "bookings", "to": "staffActions", "label": "recentStaffActions", "cardinality": "1-n" },
+    { "from": "bookings", "to": "sreq", "label": "Amadeus calls", "cardinality": "1-n" },
+    { "from": "sreq", "to": "snapshots", "label": "queue read", "cardinality": "1-n" },
+    { "from": "customers", "to": "bookings", "label": "booked", "cardinality": "1-n" },
+    { "from": "bookings", "to": "notifications", "label": "e-mails", "cardinality": "1-n" },
+    { "from": "staffActions", "to": "idem", "label": "keyed changes replay", "cardinality": "1-1" }
+  ]
+}

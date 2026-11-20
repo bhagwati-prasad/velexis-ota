@@ -1,0 +1,227 @@
+{
+  "id": "er-tables-behind-calls",
+  "type": "er",
+  "title": "What the SDK's calls change (through the OTA API)",
+  "caption": "The SDK owns no table and stores nothing: every row below is written by the OTA API while it serves an SDK call. This is the subset to check after the smoke journey (storefront.get → flights.search → flights.price → checkout.create → auth.signUp → account.get / bookings.list → auth.signOut) and the staff sign-in. Platform tables are read-only for the OTA API (the smoke test writes the staff rows as velexis_migrator).",
+  "entities": [
+    {
+      "id": "api_keys",
+      "label": "platform.api_keys",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "tenant_id", "type": "text", "key": "fk" },
+        { "name": "prefix", "type": "text", "key": "uk" },
+        { "name": "kind", "type": "text" },
+        { "name": "environment", "type": "text" },
+        { "name": "scopes", "type": "text[]" },
+        { "name": "allowed_origins", "type": "text[]" },
+        { "name": "revoked_at", "type": "timestamptz" },
+        { "name": "last_used_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "key", "type": "text", "key": "uk" },
+        { "name": "schema_name", "type": "text" },
+        { "name": "status", "type": "text" },
+        { "name": "storefront_environment", "type": "text" }
+      ]
+    },
+    {
+      "id": "tenant_memberships",
+      "label": "platform.tenant_memberships",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "tenant_id", "type": "text", "key": "fk" },
+        { "name": "account_id", "type": "text", "key": "fk" },
+        { "name": "role", "type": "text" },
+        { "name": "status", "type": "text" }
+      ]
+    },
+    {
+      "id": "customers",
+      "label": "customers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "email", "type": "text" },
+        { "name": "email_verified_at", "type": "timestamptz" },
+        { "name": "status", "type": "text" },
+        { "name": "terms_accepted_version", "type": "text" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "customer_sessions",
+      "label": "customer_sessions",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "family_id", "type": "text" },
+        { "name": "refresh_token_hash", "type": "text", "key": "uk" },
+        { "name": "rotated_at", "type": "timestamptz" },
+        { "name": "replaced_by_id", "type": "text" },
+        { "name": "revoked_at", "type": "timestamptz" },
+        { "name": "revoke_reason", "type": "text" },
+        { "name": "family_expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "flight_searches",
+      "label": "flight_searches",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "status", "type": "text" },
+        { "name": "origin_iata", "type": "text" },
+        { "name": "destination_iata", "type": "text" },
+        { "name": "departure_date", "type": "date" },
+        { "name": "result_count", "type": "integer" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "flight_offers",
+      "label": "flight_offers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "search_id", "type": "text", "key": "fk" },
+        { "name": "net_total", "type": "numeric(12,2)" },
+        { "name": "selling_total", "type": "numeric(12,2)" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "priced_offers",
+      "label": "priced_offers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "offer_id", "type": "text", "key": "fk" },
+        { "name": "offer_ids", "type": "text[]" },
+        { "name": "selling_total", "type": "numeric(12,2)" },
+        { "name": "price_changed", "type": "boolean" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "checkouts",
+      "label": "checkouts",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "priced_offer_id", "type": "text", "key": "fk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "is_guest", "type": "boolean" },
+        { "name": "status", "type": "text" },
+        { "name": "total_amount", "type": "numeric(12,2)" },
+        { "name": "version", "type": "integer" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "payments",
+      "label": "payments",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "checkout_id", "type": "text", "key": "fk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "method", "type": "text" },
+        { "name": "provider", "type": "text" },
+        { "name": "status", "type": "text" },
+        { "name": "amount", "type": "numeric(12,2)" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "bookings",
+      "label": "bookings",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "checkout_id", "type": "text", "key": "fk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "reference", "type": "text", "key": "uk" },
+        { "name": "record_locator", "type": "text" },
+        { "name": "status", "type": "text" },
+        { "name": "ticketing_status", "type": "text" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "booking_access_tokens",
+      "label": "booking_access_tokens",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "token_hash", "type": "text" },
+        { "name": "issued_via", "type": "text" },
+        { "name": "expires_at", "type": "timestamptz" },
+        { "name": "revoked_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "idempotency_keys",
+      "label": "idempotency_keys",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "scope", "type": "text" },
+        { "name": "key", "type": "text" },
+        { "name": "request_hash", "type": "text" },
+        { "name": "status", "type": "text" },
+        { "name": "response_status", "type": "smallint" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "redis_keys",
+      "label": "Redis keys its calls touch",
+      "schema": "redis",
+      "fields": [
+        { "name": "apikey:<prefix>", "type": "cached key row, 60 s" },
+        { "name": "apikey:used:<keyId>", "type": "last use, flushed by the platform worker" },
+        { "name": "rl:<throttler>:<tracker>", "type": "rate-limit counters (sign-up 5/h per end-user IP)" },
+        { "name": "staffsess:<familyId>", "type": "staff session family" },
+        { "name": "ptk:<sha256>", "type": "portal token, 60 s, single use (smoke test writes it)" }
+      ]
+    }
+  ],
+  "relations": [
+    { "from": "tenants", "to": "api_keys", "label": "issues", "cardinality": "1-n" },
+    { "from": "tenants", "to": "tenant_memberships", "label": "staff", "cardinality": "1-n" },
+    {
+      "from": "customers",
+      "to": "customer_sessions",
+      "label": "signs in (auth.signIn / signUp)",
+      "cardinality": "1-n"
+    },
+    { "from": "flight_searches", "to": "flight_offers", "label": "flights.search", "cardinality": "1-n" },
+    { "from": "flight_offers", "to": "priced_offers", "label": "flights.price", "cardinality": "1-n" },
+    { "from": "priced_offers", "to": "checkouts", "label": "checkout.create", "cardinality": "1-n" },
+    { "from": "customers", "to": "checkouts", "label": "signed-in checkout", "cardinality": "1-n" },
+    { "from": "checkouts", "to": "payments", "label": "checkout.createPayment", "cardinality": "1-n" },
+    {
+      "from": "checkouts",
+      "to": "bookings",
+      "label": "checkout.complete (one booking per checkout)",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "bookings",
+      "to": "booking_access_tokens",
+      "label": "guest token / bookings.lookup",
+      "cardinality": "1-n"
+    }
+  ]
+}

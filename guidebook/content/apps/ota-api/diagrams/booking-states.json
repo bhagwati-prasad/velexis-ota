@@ -1,0 +1,122 @@
+{
+  "id": "booking-states",
+  "type": "state",
+  "title": "Booking status (bookings.status)",
+  "caption": "CHECK list of tenant_<key>.bookings.status; transitions written by src/bookings (orchestrator, order-recorder, booking-sync, reconcile, cancellation) and src/console. Every transition writes a booking_events row in the same transaction. A ticketed booking must have ticketing_status issued; a failed one not_applicable (CHECK bookings_ticketing_ck).",
+  "states": [
+    {
+      "id": "start",
+      "label": "checkout claimed",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal",
+      "detail": "Inserted by the claim (T1) with a new `reference` VX…; Flight Create Orders not answered yet. With `reconcile_until` set the reconciler is looking for the order (max 15 min); `reconcile_outcome = manual_review` hands it to staff."
+    },
+    {
+      "id": "confirmed",
+      "label": "confirmed",
+      "kind": "normal",
+      "detail": "Order exists (`amadeus_order_id`, `record_locator`), no tickets yet; `ticketing_status` pending/failed/manual_review drives issuance."
+    },
+    {
+      "id": "partially_ticketed",
+      "label": "partially_ticketed",
+      "kind": "normal",
+      "detail": "Some travellers/segments ticketed; the ticketing job or staff issue the rest."
+    },
+    {
+      "id": "ticketed",
+      "label": "ticketed",
+      "kind": "normal",
+      "detail": "Every ticket issued (`booking_tickets` ISSUED); `ticketing_status = issued`, `issued_at` set."
+    },
+    {
+      "id": "cancelled",
+      "label": "cancelled",
+      "kind": "final",
+      "detail": "`cancelled_at` required (CHECK); `cancelled_by` customer, staff, airline (sync) or system."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Amadeus refused (4xx), request never reached the order, re-price higher (`409 PRICE_CHANGED`), reconciliation found nothing, or staff closed a review as not booked. `failure_code` public, `failure_message` console only."
+    },
+    {
+      "id": "imported",
+      "label": "console.bookings.import",
+      "kind": "initial",
+      "detail": "A PNR imported in the console (`channel = import`): the status comes from the order (confirmed, partially_ticketed, ticketed, or cancelled when every segment is cancelled); no payment."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending",
+      "label": "claim (T1): insert booking"
+    },
+    {
+      "from": "pending",
+      "to": "confirmed",
+      "label": "order created (record T2) / reconciler found it / review closed: order found"
+    },
+    {
+      "from": "pending",
+      "to": "ticketed",
+      "label": "order created with tickets (issue=true, airline card)"
+    },
+    {
+      "from": "pending",
+      "to": "failed",
+      "label": "4xx refusal, not sent, price changed, not found, review closed: not booked"
+    },
+    {
+      "from": "pending",
+      "to": "pending",
+      "label": "timeout / 5xx: reconciling (reconcile_until)"
+    },
+    {
+      "from": "confirmed",
+      "to": "ticketed",
+      "label": "Flight Order Issue (checkout, ticketing job, staff issue, sync)"
+    },
+    {
+      "from": "confirmed",
+      "to": "partially_ticketed",
+      "label": "some tickets issued"
+    },
+    {
+      "from": "partially_ticketed",
+      "to": "ticketed",
+      "label": "rest issued"
+    },
+    {
+      "from": "confirmed",
+      "to": "cancelled",
+      "label": "release (DELETE) by customer, staff or airline (sync)"
+    },
+    {
+      "from": "ticketed",
+      "to": "cancelled",
+      "label": "void the same day / airline cancelled, recorded by resync"
+    },
+    {
+      "from": "partially_ticketed",
+      "to": "cancelled",
+      "label": "cancel"
+    },
+    {
+      "from": "imported",
+      "to": "confirmed",
+      "label": "order without tickets"
+    },
+    {
+      "from": "imported",
+      "to": "ticketed",
+      "label": "order already ticketed"
+    }
+  ]
+}

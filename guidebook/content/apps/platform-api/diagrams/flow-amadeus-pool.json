@@ -1,0 +1,32 @@
+{
+  "id": "flow-amadeus-pool",
+  "type": "flow",
+  "title": "Prepare the Amadeus office pool (admin)",
+  "caption": "Velexis staff set the shared account and offices that new OTAs get at provisioning.",
+  "steps": [
+    {
+      "title": "Account",
+      "actor": "Platform admin",
+      "body": "`POST /v1/admin/amadeus-accounts` (step-up) with environment, base URL, client id and secret; or rely on `dev:seed`.",
+      "expect": "`pending_verification` then `active` after `amadeus_account.verify`; secret only as ciphertext."
+    },
+    {
+      "title": "Offices",
+      "actor": "Platform admin",
+      "body": "`POST /v1/admin/amadeus-offices` with office ids (9 letters/digits).",
+      "expect": "Created and skipped lists; audit `amadeus_office.added`."
+    },
+    {
+      "title": "Assign / release / retire",
+      "actor": "Platform admin",
+      "body": "`…/{officeRowId}/assign {tenantId}`, `…/release {confirmNoOpenBookings: true, reason}`, `…/retire {reason}`.",
+      "expect": "Status changes per the office lifecycle; vx:invalidate connection / amadeus_account."
+    },
+    {
+      "title": "Pool level",
+      "actor": "Worker",
+      "body": "`amadeus.pool_level` daily 06:55 UTC.",
+      "expect": "`ops.alert` to OPS_ALERT_EMAIL when fewer than 3 offices are available in an environment."
+    }
+  ]
+}

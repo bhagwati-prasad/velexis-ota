@@ -1,0 +1,39 @@
+{
+  "id": "flow-checkout-stripe",
+  "type": "flow",
+  "title": "Book as a guest and pay by card (Stripe test mode)",
+  "caption": "`tools/e2e/specs/storefront/checkout-stripe.e2e.ts` (nightly `storefront-stripe` project). Needs Stripe test keys and `tools/dev/stripe-listen.sh`; only Stripe's documented test cards.",
+  "steps": [
+    {
+      "title": "Checkout data",
+      "actor": "Guest",
+      "body": "Search, price, Continue to checkout; fill travellers, contact, optionally one extra bag; on Payment pick **Card**, tick the terms.",
+      "expect": "`/checkout/pay-card.html?id=chk_…&payment=pay_…` (\"Pay by card\"). DB: `payments` `provider = 'stripe'`, `status = 'requires_payment_method'`, `checkouts.status = 'payment_pending'`; Stripe dashboard shows a PaymentIntent with manual capture."
+    },
+    {
+      "title": "Card and review",
+      "actor": "Guest",
+      "body": "In the Payment Element type `4000 0027 6000 3184`, an expiry three years ahead, CVC `123`, country Spain; press **Review total**.",
+      "expect": "Final total including the card fee, the merchant name and the statement descriptor. The page itself has no `<input>`: the card is in Stripe's iframe."
+    },
+    {
+      "title": "Pay and 3-D Secure",
+      "actor": "Guest",
+      "body": "Press **Pay**, then **Complete** in Stripe's test challenge.",
+      "expect": "`/checkout/complete.html` (\"Completing your booking\") without `payment_intent_client_secret` in the address, then `/confirmation.html?booking=bkg_…` with the reference."
+    },
+    {
+      "title": "Check the money",
+      "actor": "You (bug hunter)",
+      "body": "`SELECT status, amount, amount_captured, card_fee_amount FROM tenant_demo.payments ORDER BY created_at DESC LIMIT 1;`",
+      "expect": "`captured` with `amount_captured = amount` once the order exists (capture happens after Flight Create Orders). A sold-out at completion (stub `sold-out`) must leave the PaymentIntent `canceled` and say nothing was charged."
+    },
+    {
+      "title": "E-mail and guest access",
+      "actor": "Guest",
+      "url": "http://localhost:8025",
+      "body": "Open the confirmation e-mail; open its booking link in the same browser.",
+      "expect": "Subject \"Your booking <reference> with Demo Travel is confirmed\" with the itinerary; the link opens `/booking.html?id=bkg_…` thanks to `__Host-vx_bt`. In another browser it says \"Find your booking\"."
+    }
+  ]
+}

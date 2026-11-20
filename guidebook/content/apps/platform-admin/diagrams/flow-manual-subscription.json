@@ -1,0 +1,26 @@
+{
+  "id": "flow-manual-subscription",
+  "type": "flow",
+  "title": "Edit a manual subscription",
+  "caption": "Manual rows only (billing_provider = manual); Stripe-billed rows show a note and Resync from Stripe instead.",
+  "steps": [
+    {
+      "title": "Find it",
+      "screen": "/subscriptions",
+      "url": "http://localhost:3001/subscriptions?provider=manual",
+      "body": "Filter by provider, status or plan; open the row.",
+      "expect": "Detail with plan, status, trial end, periods, invoices and Stripe events (empty before M5)."
+    },
+    {
+      "title": "Change plan, trial end or status",
+      "screen": "/subscriptions/[subscriptionId]",
+      "body": "**Edit the manual subscription**: plan (active plans), trial end (a UTC day; the time of day is kept), status Trial / Active / Canceled → **Save changes…** → reason in the dialog that lists the changes.",
+      "expect": "Only changed fields sent with If-Match; outcome shows the saved values; audit `subscription.manually_updated`."
+    },
+    {
+      "title": "Check the effects",
+      "body": "Open the OTA page and the portal; with `FEATURE_STRIPE_BILLING` on, wait for the daily `billing.manual_trials` (08:10 UTC).",
+      "expect": "Active: go-live allowed, no trial banner. A later trial end on a past_due row reopens it as trialing. Retired plan → '422 plan_not_active' at the plan; another current row → '409 current_exists' at the status."
+    }
+  ]
+}

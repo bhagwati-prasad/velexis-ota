@@ -1,0 +1,272 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Where the storefront sits",
+  "caption": "One static build in `/srv/velexis/current/storefront` serves every OTA. The host name picks the tenant; every booking function is an OTA API call on the same origin (`/api/*`), made by the SDK in cookie mode. Locally the Vite dev proxy plays Caddy's part.",
+  "groups": [
+    {
+      "id": "people",
+      "label": "People"
+    },
+    {
+      "id": "edge",
+      "label": "Edge"
+    },
+    {
+      "id": "browser",
+      "label": "Browser (this app)"
+    },
+    {
+      "id": "ota",
+      "label": "OTA back end"
+    },
+    {
+      "id": "data",
+      "label": "Data"
+    },
+    {
+      "id": "external",
+      "label": "External services"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "traveller",
+      "label": "Traveller",
+      "group": "people",
+      "kind": "user",
+      "detail": "A **visitor**, a **guest** (holds the `__Host-vx_bt` booking cookie) or a signed-in **customer** (`__Host-vx_at` / `__Host-vx_rt`)."
+    },
+    {
+      "id": "staff",
+      "label": "OTA staff",
+      "group": "people",
+      "kind": "user",
+      "detail": "Change branding, features, markups, content pages and the airline-card switch in the OTA admin; the storefront sees the change within about 5 minutes (storefront.get cache)."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy (prod)",
+      "group": "edge",
+      "kind": "edge",
+      "term": "caddy",
+      "detail": "`<key>.ota.example.com` and verified custom domains (on-demand TLS). Serves `dist/`, rewrites `/p/*` to `p.html`, strips `/api` and adds `X-Velexis-Edge` + `X-Velexis-Host`. CSP and other headers from `deploy/caddy/Caddyfile`."
+    },
+    {
+      "id": "vite",
+      "label": "Vite dev proxy (local)",
+      "group": "edge",
+      "kind": "edge",
+      "term": "dev-proxy",
+      "detail": "`pnpm --filter @velexis/ota-frontend dev` on http://localhost:5173 (or `preview` on 4173). Sends `STOREFRONT_DEV_HOST` (default `demo.ota.example.com`) as `X-Velexis-Host` and as `Origin`."
+    },
+    {
+      "id": "pages",
+      "label": "Static pages + ES modules",
+      "group": "browser",
+      "kind": "ui",
+      "app": "storefront",
+      "detail": "20 HTML pages (`ota/frontend/*.html`), Tailwind CSS 4, one entry module per page in `src/pages/`, `boot()` on every page except the airline-card page."
+    },
+    {
+      "id": "sdk",
+      "label": "@velexis/ota-sdk (cookie mode)",
+      "group": "browser",
+      "kind": "lib",
+      "app": "sdk",
+      "term": "cookie-mode",
+      "detail": "`createVelexisClient({ baseUrl: \"/api\", session: \"cookie\" })` in `src/lib/client.js`. Copies `__Host-vx_csrf` into `X-CSRF-Token` on writes, refreshes once on `401 TOKEN_EXPIRED`."
+    },
+    {
+      "id": "stripejs",
+      "label": "Stripe.js",
+      "group": "browser",
+      "kind": "external",
+      "detail": "Loaded by `/checkout/pay-card.html` only (static `<script src=\"https://js.stripe.com/v3/\">`). Card data stays inside Stripe's iframes."
+    },
+    {
+      "id": "api",
+      "label": "OTA API :4000",
+      "group": "ota",
+      "kind": "api",
+      "app": "ota-api",
+      "term": "edge-caller",
+      "detail": "Resolves the host to the tenant and its storefront environment, checks CSRF and rate limits, answers every `/v1/*` call. Writes only through `tenantTx`."
+    },
+    {
+      "id": "worker",
+      "label": "OTA worker",
+      "group": "ota",
+      "kind": "worker",
+      "app": "ota-api",
+      "detail": "Queues `ota-notifications` (e-mails), `ota-ticketing`, `ota-documents` (PDFs), `ota-payments` (void, capture retry, refunds), `ota-bookings` (reconcile, sync)."
+    },
+    {
+      "id": "admin",
+      "label": "OTA admin",
+      "group": "ota",
+      "kind": "ui",
+      "app": "ota-admin",
+      "detail": "Storefront settings, pages, assets, markups, fees; staff work the bookings the storefront creates."
+    },
+    {
+      "id": "tenantdb",
+      "label": "tenant_<key> schema",
+      "group": "data",
+      "kind": "db",
+      "term": "tenant-schema",
+      "detail": "`storefront_settings`, `flight_searches`, `flight_offers`, `priced_offers`, `checkouts`, `payments`, `bookings`, `customers`, `booking_access_tokens`, `notifications`, …"
+    },
+    {
+      "id": "platformdb",
+      "label": "platform schema (read only)",
+      "group": "data",
+      "kind": "db",
+      "detail": "`platform.tenants` (status, `storefront_environment`), `platform.tenant_domains` (host → tenant), connections. The OTA API reads them through cached views; it never writes them."
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "data",
+      "kind": "cache",
+      "detail": "`t:<tenantId>:<env>:sf:<locale>` (storefront.get), `host:<hostname>` / `tenantkey:<key>` caches, `rl:ota_*` rate limits, `t:…:cxq:<bookingId>` quotes, `t:…:ac:*` airline-card attempts, BullMQ queues (prefix `vx`)."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus (stub :4900 locally)",
+      "group": "external",
+      "kind": "external",
+      "detail": "Flight Offers Search / Price, Branded Fares Upsell, Flight Create Orders, Order Management. Locally `pnpm stub:amadeus`."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "external",
+      "kind": "external",
+      "detail": "PaymentIntents with manual capture; webhooks to the OTA API; test mode locally with `tools/dev/stripe-listen.sh`."
+    },
+    {
+      "id": "mail",
+      "label": "SMTP / Mailpit :8025",
+      "group": "external",
+      "kind": "external",
+      "detail": "Verification, password reset, booking confirmed / updated / cancelled, ticketed e-mails. Locally http://localhost:8025."
+    }
+  ],
+  "edges": [
+    {
+      "from": "traveller",
+      "to": "caddy",
+      "label": "HTTPS pages + /api",
+      "kind": "sync"
+    },
+    {
+      "from": "traveller",
+      "to": "vite",
+      "label": "http://localhost:5173",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "pages",
+      "label": "static files",
+      "kind": "data"
+    },
+    {
+      "from": "vite",
+      "to": "pages",
+      "label": "Caddy-like routing",
+      "kind": "data"
+    },
+    {
+      "from": "pages",
+      "to": "sdk",
+      "label": "every API call",
+      "kind": "sync"
+    },
+    {
+      "from": "pages",
+      "to": "stripejs",
+      "label": "card page only",
+      "kind": "sync"
+    },
+    {
+      "from": "sdk",
+      "to": "caddy",
+      "label": "/api/v1/* (cookies, X-CSRF-Token)",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "strip /api, X-Velexis-Edge, X-Velexis-Host",
+      "kind": "sync"
+    },
+    {
+      "from": "vite",
+      "to": "api",
+      "label": "same headers + Origin",
+      "kind": "sync"
+    },
+    {
+      "from": "stripejs",
+      "to": "stripe",
+      "label": "confirmPayment, 3-D Secure",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "tenantdb",
+      "label": "tenantTx",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "platformdb",
+      "label": "read only (cached)",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "caches, limits, queues",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "amadeus",
+      "label": "search, price, order",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "PaymentIntent, capture, void",
+      "kind": "sync"
+    },
+    {
+      "from": "redis",
+      "to": "worker",
+      "label": "BullMQ jobs",
+      "kind": "async"
+    },
+    {
+      "from": "worker",
+      "to": "mail",
+      "label": "outbox e-mails",
+      "kind": "async"
+    },
+    {
+      "from": "staff",
+      "to": "admin",
+      "label": "settings, bookings",
+      "kind": "sync"
+    },
+    {
+      "from": "admin",
+      "to": "api",
+      "label": "console calls",
+      "kind": "sync"
+    }
+  ]
+}

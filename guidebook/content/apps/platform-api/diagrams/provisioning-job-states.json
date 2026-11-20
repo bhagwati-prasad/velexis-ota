@@ -1,0 +1,85 @@
+{
+  "id": "provisioning-job-states",
+  "type": "state",
+  "title": "Provisioning job status",
+  "caption": "`platform.provisioning_jobs.status` for every kind (provision, migrate, suspend, resume). One active job per tenant and kind (partial unique index).",
+  "states": [
+    {
+      "id": "start",
+      "label": "created",
+      "kind": "initial"
+    },
+    {
+      "id": "queued",
+      "label": "queued",
+      "kind": "normal",
+      "detail": "Waiting for its gate (provision from M5: the paid Checkout) or its backoff (`scheduled_at`)."
+    },
+    {
+      "id": "running",
+      "label": "running",
+      "kind": "normal",
+      "detail": "Dispatched as `<jobId>-<attempt>` on ota-tenant-ops; lease `locked_until` 15 min. While the BullMQ message is still waiting or active (OTA worker stopped) the reconciler only extends the lease; `ops.alert` \"stuck\" after the second lease."
+    },
+    {
+      "id": "succeeded",
+      "label": "succeeded",
+      "kind": "final",
+      "detail": "Post-steps done (provision) or the OTA worker answered."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Attempts exhausted or non-retryable; ops.alert e-mail. A retry creates a NEW job."
+    },
+    {
+      "id": "canceled",
+      "label": "canceled",
+      "kind": "final",
+      "detail": "Admin cancel (queued only), SUPERSEDED by a newer suspend/resume, or CHECKOUT_ABANDONED."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "queued",
+      "label": "createTenant, retry, suspend, resume, migrate"
+    },
+    {
+      "from": "queued",
+      "to": "running",
+      "label": "dispatcher (gate open) / provisioning.reconcile every 5 min"
+    },
+    {
+      "from": "running",
+      "to": "succeeded",
+      "label": "tenant.provisioned + post-steps / tenant.migrated / tenant.suspended / tenant.resumed"
+    },
+    {
+      "from": "running",
+      "to": "queued",
+      "label": "retryable failure, or lease ended with the message missing or failed: backoff 30 s × 2^attempt"
+    },
+    {
+      "from": "running",
+      "to": "failed",
+      "label": "last attempt or non-retryable (post-steps exhausted)"
+    },
+    {
+      "from": "queued",
+      "to": "canceled",
+      "label": "adminCancelProvisioningJob / abandoned Checkout"
+    },
+    {
+      "from": "running",
+      "to": "canceled",
+      "label": "superseded by a newer suspend or resume"
+    },
+    {
+      "from": "running",
+      "to": "running",
+      "label": "provisioning.reconcile extends the lease (message still waiting/active)"
+    }
+  ]
+}

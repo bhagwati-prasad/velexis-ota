@@ -1,0 +1,68 @@
+{
+  "id": "seq-step-up-retry",
+  "type": "sequence",
+  "title": "Step-up: REAUTH_REQUIRED, TOTP, same action again",
+  "caption": "Operations marked x-mfa-step-up need a TOTP verification within 15 minutes. The dialog keeps the original FormData (the same reason) and re-submits it. Code: components/step-up-dialog.tsx, (app)/step-up-actions.ts.",
+  "actors": [
+    { "id": "b", "label": "Admin (dialog)", "kind": "user" },
+    { "id": "sa", "label": "Server action (e.g. approveSettlement)", "kind": "ui" },
+    { "id": "su", "label": "stepUp action", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" }
+  ],
+  "steps": [
+    { "from": "b", "to": "sa", "label": "submit (reason, If-Match version …)", "kind": "call" },
+    {
+      "from": "sa",
+      "to": "api",
+      "label": "POST /v1/admin/settlements/{id}/approve  If-Match: \"<version>\"",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "sa",
+      "label": "401 REAUTH_REQUIRED (token's mfa_at older than 15 min)",
+      "kind": "return"
+    },
+    {
+      "from": "sa",
+      "to": "b",
+      "label": "{…previous state, stepUp: true} → StepUpDialog 'Confirm with your authenticator app'",
+      "kind": "return"
+    },
+    { "from": "b", "to": "su", "label": "6-digit code", "kind": "call" },
+    { "from": "su", "to": "api", "label": "POST /v1/admin/auth/step-up {code} (Bearer)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "account_sessions: new session of the same family, mfa_verified_at = now",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "su",
+      "label": "AdminSession | MFA_CODE_INVALID (stays in the dialog) | 429",
+      "kind": "return"
+    },
+    {
+      "from": "su",
+      "to": "b",
+      "label": "setSession: new __Host-vxa_at / __Host-vxa_rt; status verified",
+      "kind": "return"
+    },
+    { "from": "b", "to": "sa", "label": "same FormData again", "kind": "call" },
+    { "from": "sa", "to": "api", "label": "POST …/approve (new token with mfa_at now)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "sa",
+      "label": "200 Settlement approved / carried_forward; audit settlement.approved",
+      "kind": "return"
+    },
+    {
+      "from": "sa",
+      "to": "b",
+      "label": "revalidatePath; outcome shown; cancelling the dialog ran nothing",
+      "kind": "return"
+    }
+  ]
+}

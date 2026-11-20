@@ -1,0 +1,131 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Platform admin and its neighbours",
+  "caption": "The console is a backend-for-frontend: the browser only talks to the Next.js server, which calls the platform API's /v1/admin surface on loopback. Everything else happens behind the API.",
+  "groups": [
+    { "id": "people", "label": "People" },
+    { "id": "edge", "label": "Edge" },
+    { "id": "apps", "label": "Apps" },
+    { "id": "data", "label": "Data and queues" },
+    { "id": "external", "label": "External" }
+  ],
+  "nodes": [
+    {
+      "id": "admin",
+      "label": "Platform admin (browser)",
+      "group": "people",
+      "kind": "user",
+      "detail": "Velexis staff with `is_platform_admin = true` and MFA. Holds only `__Host-vxa_*` cookies (HttpOnly), never a token in JavaScript.",
+      "term": "platform-admin-account"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy admin.platform.example.com",
+      "group": "edge",
+      "kind": "edge",
+      "app": "deploy",
+      "detail": "TLS, HSTS, WAF (DetectionOnly), `/health/*` answers 404 from outside, optional `@outside_staff` IP allow-list (commented). Proxies to 127.0.0.1:3001."
+    },
+    {
+      "id": "console",
+      "label": "Platform admin (Next.js :3001)",
+      "group": "apps",
+      "kind": "ui",
+      "app": "platform-admin",
+      "detail": "Server components and server actions in `platform/admin/src/app`; middleware refreshes the session and sets the CSP nonce.",
+      "term": "platform-admin-console"
+    },
+    {
+      "id": "portal",
+      "label": "Portal (:3000)",
+      "group": "apps",
+      "kind": "ui",
+      "app": "portal",
+      "detail": "Linked only: an admin enables MFA at `/account/security` and resets the password at `/forgot-password` (same account)."
+    },
+    {
+      "id": "api",
+      "label": "Platform API (:3100)",
+      "group": "apps",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "68 `admin*` operations (`x-scope: platform_admin`); re-reads `is_platform_admin` on every call; writes one `platform_audit_log` row per change."
+    },
+    {
+      "id": "pworker",
+      "label": "Platform worker",
+      "group": "apps",
+      "kind": "worker",
+      "app": "platform-api",
+      "detail": "Sends e-mails from `email_outbox`, verifies Amadeus accounts, runs domain checks, Stripe events, settlements, and answers tenant events.",
+      "term": "platform-worker"
+    },
+    {
+      "id": "oworker",
+      "label": "OTA worker",
+      "group": "apps",
+      "kind": "worker",
+      "app": "ota-api",
+      "detail": "Consumes `ota-tenant-ops` (provision, migrate, suspend, resume housekeeping) and answers on `platform-tenant-events`."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL (platform schema)",
+      "group": "data",
+      "kind": "db",
+      "detail": "`platform.*` tables only; the admin never reaches a tenant schema."
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "data",
+      "kind": "cache",
+      "detail": "`mfach:`, `mfastep:`, `staffdeny:acct:`, `rl:` throttles, `vx:invalidate` pub/sub, `tlsask:`."
+    },
+    {
+      "id": "bull",
+      "label": "BullMQ (prefix vx)",
+      "group": "data",
+      "kind": "queue",
+      "detail": "Platform queues `platform-*` (retry from the console) and OTA queues `ota-*` (view only).",
+      "term": "bullmq"
+    },
+    {
+      "id": "mail",
+      "label": "SMTP (Mailpit :8025 in dev)",
+      "group": "external",
+      "kind": "external",
+      "detail": "Owner e-mails after suspend, resume, office assignment, payout review, settlement paid, domain removal, MFA reset."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "external",
+      "kind": "external",
+      "detail": "Price checks, subscription resync and event re-fetch (M5, behind feature switches)."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus (stub :4900 in dev)",
+      "group": "external",
+      "kind": "external",
+      "detail": "Token request that verifies the Velexis Amadeus account."
+    }
+  ],
+  "edges": [
+    { "from": "admin", "to": "caddy", "label": "HTTPS, SameSite=Strict cookies", "kind": "sync" },
+    { "from": "caddy", "to": "console", "label": "reverse_proxy 127.0.0.1:3001", "kind": "sync" },
+    { "from": "console", "to": "api", "label": "/v1/admin/** Bearer + X-Velexis-Bff-Key", "kind": "sync" },
+    { "from": "console", "to": "portal", "label": "links (MFA, password, pricing)", "kind": "sync" },
+    { "from": "api", "to": "pg", "label": "read/write platform.*", "kind": "data" },
+    { "from": "api", "to": "redis", "label": "challenges, throttles, invalidation", "kind": "data" },
+    { "from": "api", "to": "bull", "label": "enqueue jobs", "kind": "async" },
+    { "from": "bull", "to": "pworker", "label": "platform-* queues", "kind": "async" },
+    { "from": "bull", "to": "oworker", "label": "ota-tenant-ops", "kind": "async" },
+    { "from": "oworker", "to": "bull", "label": "platform-tenant-events", "kind": "async" },
+    { "from": "pworker", "to": "mail", "label": "email_outbox → SMTP", "kind": "async" },
+    { "from": "api", "to": "stripe", "label": "check prices, resync", "kind": "sync" },
+    { "from": "pworker", "to": "amadeus", "label": "verify account", "kind": "sync" }
+  ]
+}

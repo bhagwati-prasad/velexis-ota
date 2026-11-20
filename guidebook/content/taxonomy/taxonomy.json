@@ -1,0 +1,1039 @@
+{
+  "id": "velexis",
+  "label": "Velexis",
+  "description": "Velexis is a multi-tenant flight-booking system: a platform (control plane) that sells and runs OTAs, and the OTA product each of them runs on, built on shared packages and deployed to one VM.",
+  "children": [
+    {
+      "id": "platform",
+      "label": "Platform (control plane)",
+      "description": "The Velexis side that treats OTAs as customers: the portal, the platform admin console and the platform API with its worker.",
+      "apps": ["portal", "platform-admin", "platform-api"],
+      "children": [
+        {
+          "id": "platform-identity",
+          "label": "Identity and access",
+          "description": "Who may use the portal and the admin console, how they prove it, and how a member reaches an OTA's back office.",
+          "apps": ["portal", "platform-admin", "platform-api"],
+          "children": [
+            {
+              "id": "portal-accounts",
+              "label": "Accounts, sign-in and sessions",
+              "description": "Portal accounts, password sign-in with lockout, e-mailed token links and refresh-token sessions.",
+              "apps": ["portal", "platform-api"],
+              "terms": ["account", "account-lockout", "token-link", "refresh-family", "single-flight-refresh"]
+            },
+            {
+              "id": "mfa-and-step-up",
+              "label": "MFA and step-up",
+              "description": "TOTP two-factor sign-in, recovery codes, mandatory enrolment and fresh codes before sensitive actions.",
+              "apps": ["portal", "platform-admin", "platform-api"],
+              "terms": [
+                "mfa",
+                "totp",
+                "recovery-code",
+                "mfa-challenge",
+                "mandatory-mfa",
+                "mfa-enrolment-gate",
+                "step-up",
+                "step-up-dialog"
+              ]
+            },
+            {
+              "id": "platform-admin-access",
+              "label": "Platform admin access",
+              "description": "How Velexis staff become platform admins and how the admin console guards its session and routes.",
+              "apps": ["platform-admin", "platform-api"],
+              "terms": ["platform-admin-account", "admin-session", "admin-middleware", "admin-grant-command"]
+            },
+            {
+              "id": "teams-and-roles",
+              "label": "OTA teams and roles",
+              "description": "Memberships, invitations and the five tenant roles that decide what each member may do for an OTA.",
+              "apps": ["portal", "platform-api"],
+              "terms": ["membership", "invitation", "tenant-role", "not-allowed-page"]
+            },
+            {
+              "id": "console-hand-off",
+              "label": "Console single sign-on",
+              "description": "Opening an OTA's back office from the portal with a single-use portal token posted to the OTA admin.",
+              "apps": ["portal", "platform-api", "ota-admin", "ota-api"],
+              "terms": ["sso", "portal-token", "hand-off-page", "console-picker"]
+            }
+          ]
+        },
+        {
+          "id": "platform-tenancy",
+          "label": "Tenancy and provisioning",
+          "description": "Creating, configuring, suspending and launching OTAs (tenants), from the first schema to the live switch.",
+          "apps": ["portal", "platform-admin", "platform-api", "ota-api"],
+          "children": [
+            {
+              "id": "tenants",
+              "label": "Tenants and tenant keys",
+              "description": "An OTA as a row of `platform.tenants` and the short key that names its schema and sub-domain.",
+              "apps": ["platform-api", "portal", "platform-admin"],
+              "terms": ["tenant", "tenant-key"]
+            },
+            {
+              "id": "provisioning-pipeline",
+              "label": "Provisioning pipeline",
+              "description": "The durable job that has the OTA worker create a tenant schema, the platform's follow-up steps and the setup page that tracks it.",
+              "apps": ["platform-api", "ota-api", "portal", "platform-admin"],
+              "terms": ["provisioning", "provisioning-job", "post-step", "reconciler", "setup-page"]
+            },
+            {
+              "id": "tenant-lifecycle",
+              "label": "Suspension and tenant maintenance",
+              "description": "Suspending and resuming an OTA and re-running its tenant migrations through provisioning jobs.",
+              "apps": ["platform-admin", "platform-api", "ota-api", "storefront"],
+              "terms": ["suspension", "tenant-migration"]
+            },
+            {
+              "id": "custom-domains",
+              "label": "Custom domains",
+              "description": "Customer-owned storefront hosts, their DNS verification and the TLS ask endpoint Caddy consults.",
+              "apps": ["portal", "platform-admin", "platform-api", "deploy"],
+              "terms": ["custom-domain", "domain-verification", "tls-ask-endpoint"]
+            },
+            {
+              "id": "environments-and-go-live",
+              "label": "Environments and go-live",
+              "description": "Each OTA's test or live storefront environment and the preconditions of the one-way switch to live.",
+              "apps": ["portal", "platform-api", "ota-api", "storefront"],
+              "terms": ["storefront-environment", "go-live", "live-preconditions"]
+            }
+          ]
+        },
+        {
+          "id": "platform-billing",
+          "label": "Billing and subscriptions",
+          "description": "What OTAs pay Velexis, how Stripe Billing keeps that in sync, and what Velexis pays out to OTAs.",
+          "apps": ["portal", "platform-admin", "platform-api"],
+          "children": [
+            {
+              "id": "plans-and-subscriptions",
+              "label": "Plans and subscriptions",
+              "description": "Plans with limits and features, each tenant's subscription state and the billing notices it raises.",
+              "apps": ["portal", "platform-admin", "platform-api"],
+              "terms": ["plan", "subscription", "manual-subscription", "billing-notice", "price-warning"]
+            },
+            {
+              "id": "stripe-billing-sync",
+              "label": "Stripe Billing and events",
+              "description": "Stripe Checkout, the Customer Portal and the verified webhook inbox that keep subscriptions in step with Stripe.",
+              "apps": ["portal", "platform-admin", "platform-api"],
+              "terms": [
+                "stripe",
+                "stripe-billing",
+                "checkout-session",
+                "customer-portal",
+                "stripe-event-inbox",
+                "stripe-event-reprocess",
+                "resync-from-stripe"
+              ]
+            },
+            {
+              "id": "settlements-and-payouts",
+              "label": "Settlements and payouts",
+              "description": "Monthly statements of Velexis-collected payments owed to OTAs and the bank accounts they are paid to.",
+              "apps": ["portal", "platform-admin", "platform-api"],
+              "terms": [
+                "settlement",
+                "settlement-adjustment",
+                "carried-forward",
+                "payout-account",
+                "payout-account-reveal"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "platform-connections",
+          "label": "Supplier and payment connections",
+          "description": "How each OTA is connected to Amadeus (shared Velexis offices or its own credentials) and to Stripe.",
+          "apps": ["portal", "platform-admin", "platform-api"],
+          "children": [
+            {
+              "id": "amadeus-connections",
+              "label": "Amadeus connections",
+              "description": "Per-environment supplier connections, the shared Velexis Amadeus account, own-credential submissions and live access requests.",
+              "apps": ["portal", "platform-admin", "platform-api"],
+              "terms": [
+                "supplier-connection",
+                "velexis-amadeus-account",
+                "credential-submission",
+                "submission-polling",
+                "live-office-request"
+              ]
+            },
+            {
+              "id": "office-pool",
+              "label": "Amadeus office pool",
+              "description": "The pool of Velexis Amadeus offices assigned to OTAs and released when no future travel remains.",
+              "apps": ["platform-admin", "platform-api", "ota-api"],
+              "terms": ["office-pool", "amadeus-office", "office-release"]
+            },
+            {
+              "id": "payment-connections",
+              "label": "Payment connections",
+              "description": "Which Stripe account takes an OTA's customer payments, Stripe Connect Standard and the card statement suffix.",
+              "apps": ["portal", "platform-api", "ota-api"],
+              "terms": [
+                "payment-connection",
+                "account-mode",
+                "stripe-connect-standard",
+                "statement-descriptor-suffix"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "platform-back-office",
+          "label": "Back office and platform operations",
+          "description": "The Velexis staff console, its audit trail, and the platform worker that runs queues and schedules behind it.",
+          "apps": ["platform-admin", "platform-api"],
+          "children": [
+            {
+              "id": "admin-console",
+              "label": "Platform admin console",
+              "description": "The staff console's home dashboard and shell from which admins run the fleet of OTAs.",
+              "apps": ["platform-admin"],
+              "terms": ["platform-admin-console", "admin-dashboard"]
+            },
+            {
+              "id": "audit-and-accountability",
+              "label": "Audit and accountability",
+              "description": "Mandatory reasons on admin actions, the platform audit log and its bounded CSV export.",
+              "apps": ["platform-admin", "platform-api"],
+              "terms": ["audit-log", "audit-export", "reason-action", "reason-dialog"]
+            },
+            {
+              "id": "platform-worker-and-schedules",
+              "label": "Platform worker and schedules",
+              "description": "The platform backend's second process and the cron schedules it runs in UTC.",
+              "apps": ["platform-api", "platform-admin"],
+              "terms": ["platform-worker", "maintenance-schedule"]
+            }
+          ]
+        },
+        {
+          "id": "portal-experience",
+          "label": "Portal experience",
+          "description": "Patterns of the portal UI that every OTA page shares: banners, checklists, error wording and one-time secrets.",
+          "apps": ["portal"],
+          "terms": ["portal", "onboarding-checklist", "tenant-banner", "portal-error-message"]
+        }
+      ]
+    },
+    {
+      "id": "ota",
+      "label": "OTA product",
+      "description": "The data plane every OTA runs on: the booking API and worker, the hosted storefront, the OTA admin and the JavaScript SDK.",
+      "apps": ["storefront", "ota-admin", "ota-api", "sdk"],
+      "children": [
+        {
+          "id": "travel-content",
+          "label": "Travel content and Amadeus",
+          "description": "Everything that comes from Amadeus: access and rate limits, flight search and pricing, and the supplier log and queues.",
+          "apps": ["ota-api", "storefront", "ota-admin"],
+          "children": [
+            {
+              "id": "amadeus-access",
+              "label": "Amadeus access",
+              "description": "The Amadeus Enterprise operations, cached OAuth tokens, call rate limits and the remark Velexis writes into orders.",
+              "apps": ["ota-api"],
+              "terms": ["amadeus-enterprise", "amadeus-token-cache", "rate-limit-bucket", "velexis-remark"]
+            },
+            {
+              "id": "flight-shopping",
+              "label": "Search, offers and pricing",
+              "description": "Flight searches, their offers, branded fare upsells and the priced offer that starts a checkout.",
+              "apps": ["ota-api", "storefront", "ota-admin"],
+              "terms": [
+                "flight-search",
+                "flight-offer",
+                "priced-offer",
+                "branded-fare-upsell",
+                "fare-family",
+                "offers-per-search"
+              ]
+            },
+            {
+              "id": "supplier-log-and-queues",
+              "label": "Supplier log and Amadeus queues",
+              "description": "The redacted record of every Amadeus call and the polled snapshots of the OTA's Amadeus queues.",
+              "apps": ["ota-api", "ota-admin"],
+              "terms": ["supplier-request", "supplier-log", "queue-poller", "queue-snapshot"]
+            }
+          ]
+        },
+        {
+          "id": "booking-lifecycle",
+          "label": "Booking lifecycle",
+          "description": "From a checkout to a ticketed booking and beyond: orders, ticketing, timeouts and reconciliation, e-mails and documents.",
+          "apps": ["ota-api", "storefront", "ota-admin"],
+          "children": [
+            {
+              "id": "checkout",
+              "label": "Checkout",
+              "description": "The purchase in progress and the traveller details the airline requires for the chosen fare.",
+              "apps": ["ota-api", "storefront", "sdk"],
+              "terms": ["checkout", "booking-requirements"]
+            },
+            {
+              "id": "bookings",
+              "label": "Bookings and self-service",
+              "description": "Bookings with their references, the self-service actions and cancellation modes they allow, and periodic sync with Amadeus.",
+              "apps": ["ota-api", "storefront", "ota-admin"],
+              "terms": [
+                "booking",
+                "booking-reference",
+                "record-locator",
+                "allowed-actions",
+                "cancellation-mode",
+                "booking-sync"
+              ]
+            },
+            {
+              "id": "ticketing",
+              "label": "Ticketing",
+              "description": "When and whether tickets are issued: the OTA's ticketing policy, ticketing status and unpaid issue.",
+              "apps": ["ota-api", "ota-admin", "storefront"],
+              "terms": ["ticketing-policy", "ticketing-status", "allow-unpaid"]
+            },
+            {
+              "id": "reconciliation",
+              "label": "Supplier timeouts and reconciliation",
+              "description": "What happens when Amadeus does not answer an order readably: pending bookings, reconciliation and staff review.",
+              "apps": ["ota-api", "ota-admin", "storefront"],
+              "terms": ["supplier-timeout", "reconciliation", "reconciliation-review", "reconcile-outcome"]
+            },
+            {
+              "id": "notifications-and-documents",
+              "label": "Notifications and documents",
+              "description": "Booking e-mails from per-locale templates, alerts to the OTA's staff and the PDF itinerary and e-tickets.",
+              "apps": ["ota-api", "ota-admin", "storefront"],
+              "terms": ["notification-template", "staff-alert", "booking-document"]
+            }
+          ]
+        },
+        {
+          "id": "ota-payments",
+          "label": "Payments and PCI",
+          "description": "How a traveller's price is built and paid (Stripe card or airline card) and how card data stays inside PCI scope.",
+          "apps": ["ota-api", "storefront", "ota-admin", "sdk"],
+          "children": [
+            {
+              "id": "pricing-and-margins",
+              "label": "Pricing, markups and fees",
+              "description": "Net Amadeus prices, the OTA's markup and fee rules, and the pricing mode that turns them into a selling price.",
+              "apps": ["ota-api", "ota-admin", "storefront"],
+              "terms": [
+                "net-price",
+                "net-and-selling-amounts",
+                "markup-rule",
+                "default-markup-rule",
+                "fee-rule",
+                "card-fee",
+                "pricing-mode"
+              ]
+            },
+            {
+              "id": "stripe-card-payments",
+              "label": "Stripe card payments",
+              "description": "The payment gateway behind which the OTA API hides Stripe: PaymentIntents, the Payment Element, 3-D Secure and webhooks.",
+              "apps": ["ota-api", "storefront"],
+              "terms": [
+                "stripe",
+                "payment-gateway",
+                "payment-intent",
+                "payment-element",
+                "3-d-secure",
+                "stripe-webhook"
+              ]
+            },
+            {
+              "id": "airline-card-payments",
+              "label": "Airline card payments",
+              "description": "Passing the traveller's card in memory only to Amadeus, from an isolated page, with redaction at every step.",
+              "apps": ["storefront", "ota-api", "sdk"],
+              "terms": ["airline-card", "sensitive-card", "card-redaction", "isolated-payment-page"]
+            },
+            {
+              "id": "pci-compliance",
+              "label": "PCI scope and evidence",
+              "description": "Which parts of the system see card data, the cardholder data environment and the evidence kept for PCI DSS.",
+              "apps": ["storefront", "ota-api", "deploy"],
+              "terms": [
+                "pci-scope",
+                "cardholder-data-environment",
+                "payment-page-inventory",
+                "pci-evidence-pack"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "traveller-identity",
+          "label": "Travellers and sessions",
+          "description": "Traveller accounts of one OTA, their sessions and the guest access to a booking without an account.",
+          "apps": ["ota-api", "storefront", "sdk"],
+          "children": [
+            {
+              "id": "customer-accounts",
+              "label": "Customer accounts and sessions",
+              "description": "Per-OTA traveller accounts, their rotating refresh-token sessions and the erasure of deleted accounts.",
+              "apps": ["ota-api", "storefront", "sdk"],
+              "terms": ["customer", "customer-session", "refresh-token-reuse", "customer-erasure"]
+            },
+            {
+              "id": "guest-access",
+              "label": "Guest access",
+              "description": "Finding a booking by reference and last name and the guest token cookie that grants access to it.",
+              "apps": ["ota-api", "storefront", "sdk"],
+              "terms": ["guest-lookup", "guest-token"]
+            }
+          ]
+        },
+        {
+          "id": "storefront-experience",
+          "label": "Storefront experience",
+          "description": "The hosted multi-tenant storefront: how a page boots for an OTA, what travellers see, and how each OTA brands it.",
+          "apps": ["storefront", "ota-api", "ota-admin"],
+          "children": [
+            {
+              "id": "storefront-hosting",
+              "label": "Hosting and boot",
+              "description": "One static build serving every OTA: host resolution, runtime configuration, boot and the test-mode banner.",
+              "apps": ["storefront", "ota-api"],
+              "terms": [
+                "storefront",
+                "storefront-boot",
+                "runtime-configuration",
+                "primary-host",
+                "test-mode-banner"
+              ]
+            },
+            {
+              "id": "storefront-ux",
+              "label": "Pages and interaction",
+              "description": "Shared storefront UI behaviour: header controls, checkout steps, price hold, confirmation, error states and announcements.",
+              "apps": ["storefront"],
+              "terms": [
+                "account-menu",
+                "display-currency",
+                "checkout-step",
+                "price-hold",
+                "pending-confirmation",
+                "page-state",
+                "error-summary",
+                "live-region"
+              ]
+            },
+            {
+              "id": "storefront-branding",
+              "label": "Settings, branding and content",
+              "description": "Each OTA's storefront settings, theme with its contrast fallback, own content pages and uploaded assets.",
+              "apps": ["ota-admin", "ota-api", "storefront"],
+              "terms": [
+                "storefront-settings",
+                "theme-editor",
+                "contrast-fallback",
+                "content-page",
+                "storefront-asset"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "ota-back-office",
+          "label": "Back office (OTA admin)",
+          "description": "The OTA admin where an OTA's staff work bookings, payments and settings through the console operations of the OTA API.",
+          "apps": ["ota-admin", "ota-api"],
+          "children": [
+            {
+              "id": "console-workspace",
+              "label": "Console workspace",
+              "description": "The OTA admin's screens and controls: saved views, confirm dialogs, the TEST/LIVE switch, shopping and PNR import.",
+              "apps": ["ota-admin"],
+              "terms": [
+                "ota-admin",
+                "saved-view",
+                "confirm-dialog",
+                "action-key",
+                "environment-switch",
+                "shopping-on-behalf",
+                "pnr-import"
+              ]
+            },
+            {
+              "id": "console-operations",
+              "label": "Console operations and audit",
+              "description": "The `/v1/console/**` operations, raw Amadeus reads limited to the OTA's offices, and the staff action trail.",
+              "apps": ["ota-api", "ota-admin", "sdk"],
+              "terms": [
+                "console-namespace",
+                "console-scope",
+                "raw-amadeus",
+                "office-isolation",
+                "x-velexis-environment",
+                "staff-action",
+                "audited-read"
+              ]
+            },
+            {
+              "id": "staff-access",
+              "label": "Staff sessions and permissions",
+              "description": "Console sessions, staff roles and their fourteen permissions, and the Redis deny stamps that end staff sessions early.",
+              "apps": ["ota-admin", "ota-api"],
+              "terms": ["staff-session", "staff-role", "staff-permission", "staff-deny-cut-off"]
+            }
+          ]
+        },
+        {
+          "id": "sdk-integrations",
+          "label": "SDK and integrations",
+          "description": "How frontends and third parties call the OTA API: API keys, the JavaScript SDK, its session modes and its contract.",
+          "apps": ["sdk", "ota-api", "portal"],
+          "children": [
+            {
+              "id": "api-keys",
+              "label": "API keys",
+              "description": "Publishable, secret, hosting and console automation keys, their scopes and the one-time reveal of the first keys.",
+              "apps": ["portal", "platform-api", "ota-api", "sdk"],
+              "terms": [
+                "api-key",
+                "publishable-key",
+                "secret-key",
+                "key-scope",
+                "hosting-key",
+                "console-automation-key",
+                "initial-keys-reveal"
+              ]
+            },
+            {
+              "id": "sdk-client",
+              "label": "SDK client",
+              "description": "The client factory, its request core and generated route table, per-call options and the escape hatch.",
+              "apps": ["sdk"],
+              "terms": [
+                "velexis-sdk",
+                "client-family",
+                "request-core",
+                "route-table",
+                "operation-overrides",
+                "request-options",
+                "request-escape-hatch",
+                "jsdoc-types"
+              ]
+            },
+            {
+              "id": "sdk-sessions",
+              "label": "SDK session modes",
+              "description": "Cookie, token and server modes, how tokens are supplied and stored, and automatic refresh with its rotation window.",
+              "apps": ["sdk", "storefront", "ota-admin"],
+              "terms": [
+                "cookie-mode",
+                "token-mode",
+                "server-mode",
+                "token-source",
+                "session-result",
+                "session-hooks",
+                "automatic-refresh",
+                "rotation-window"
+              ]
+            },
+            {
+              "id": "sdk-resilience",
+              "label": "Errors, retries and paging",
+              "description": "The SDK's typed errors, its retry policy with Retry-After, and cursor pagination of list operations.",
+              "apps": ["sdk"],
+              "terms": ["velexis-error", "retry-policy", "retry-after", "cursor-pagination"]
+            },
+            {
+              "id": "sdk-contract",
+              "label": "Contract conformance",
+              "description": "The frozen SDK contract, the tests that hold the code to it, and the documented additions, deferrals and deviations.",
+              "apps": ["sdk", "ota-api"],
+              "terms": [
+                "contract-declarations",
+                "contract-test",
+                "parity-test",
+                "x-sdk-method",
+                "mvp-addition",
+                "deferred-operation",
+                "approved-deviation"
+              ]
+            },
+            {
+              "id": "sdk-release",
+              "label": "Builds and publishing",
+              "description": "The ESM and IIFE bundles and the draft npm publishing workflow with trusted publishing.",
+              "apps": ["sdk", "packages"],
+              "terms": ["esm-bundle", "iife-bundle", "sdk-publish-draft", "trusted-publishing"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "foundation",
+      "label": "Shared foundation",
+      "description": "What both products share: API conventions, PostgreSQL and Redis, application security controls and queues, mostly from packages/*.",
+      "apps": ["packages", "platform-api", "ota-api"],
+      "children": [
+        {
+          "id": "api-conventions",
+          "label": "API contracts and conventions",
+          "description": "The contract-first OpenAPI documents and the conventions every Velexis API follows on the wire.",
+          "apps": ["packages", "platform-api", "ota-api", "sdk"],
+          "children": [
+            {
+              "id": "openapi-contracts",
+              "label": "OpenAPI contracts",
+              "description": "The generated operations index, each operation's scope and the test that keeps routes and documents in step.",
+              "apps": ["packages", "platform-api", "ota-api"],
+              "terms": ["operations-index", "operation-scope", "route-parity"]
+            },
+            {
+              "id": "error-model",
+              "label": "Error model",
+              "description": "One error envelope with stable codes, field errors and a generated catalogue, thrown as `AppError` by both backends.",
+              "apps": ["packages", "platform-api", "ota-api", "portal", "sdk"],
+              "terms": [
+                "error-envelope",
+                "error-catalogue",
+                "app-error",
+                "field-errors",
+                "platform-error-code"
+              ]
+            },
+            {
+              "id": "wire-conventions",
+              "label": "Wire and data conventions",
+              "description": "Idempotency keys, optimistic concurrency with If-Match, prefixed ids and money as decimal strings.",
+              "apps": ["platform-api", "ota-api", "sdk"],
+              "terms": [
+                "idempotency-key",
+                "if-match",
+                "prefixed-id",
+                "money-decimal",
+                "money-as-a-decimal-string"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "data-and-storage",
+          "label": "Data and storage",
+          "description": "PostgreSQL schemas and roles, tenant isolation through tenantTx, migrations, reference data, Redis and file storage.",
+          "apps": ["packages", "platform-api", "ota-api", "deploy"],
+          "children": [
+            {
+              "id": "database-schemas",
+              "label": "Schemas, roles and types",
+              "description": "The platform and reference schemas, the database roles, the platform Kysely instance, type parsers and generated table types.",
+              "apps": ["packages", "platform-api", "ota-api"],
+              "terms": [
+                "platform-schema",
+                "reference-schema",
+                "platform-db",
+                "database-roles",
+                "type-parsers",
+                "table-types-codegen"
+              ]
+            },
+            {
+              "id": "tenant-isolation",
+              "label": "Tenant schemas and tenantTx",
+              "description": "One PostgreSQL schema per OTA, reached only through `tenantTx`, with a guard against leaked search paths and a hook that commits seeds with a new schema.",
+              "apps": ["packages", "ota-api"],
+              "terms": [
+                "tenant-schema",
+                "tenant-tx",
+                "tenanttx",
+                "search-path-leak-guard",
+                "before-commit-hook"
+              ]
+            },
+            {
+              "id": "migrations",
+              "label": "Migrations",
+              "description": "The one migration runner, its ledgers and reports, expand-and-contract rules and the fan-out over tenant schemas.",
+              "apps": ["packages", "deploy", "platform-api", "ota-api"],
+              "terms": [
+                "migration-runner",
+                "migration-ledger",
+                "migration-report",
+                "repeatable-migration",
+                "expand-and-contract",
+                "tenant-fan-out"
+              ]
+            },
+            {
+              "id": "reference-data",
+              "label": "Reference data",
+              "description": "The committed CSV snapshot of airports, airlines and other reference tables, its overrides and its loader.",
+              "apps": ["packages", "deploy"],
+              "terms": ["reference-data-snapshot", "reference-loader", "overrides-csv"]
+            },
+            {
+              "id": "redis-and-caching",
+              "label": "Redis and cache invalidation",
+              "description": "Redis kept without eviction for BullMQ, and the pub/sub channel that invalidates rows the OTA backend caches.",
+              "apps": ["platform-api", "ota-api", "deploy"],
+              "terms": ["noeviction-policy", "vx-invalidate"]
+            },
+            {
+              "id": "files-and-documents",
+              "label": "File storage and signed URLs",
+              "description": "The file store for documents and uploads and the short-lived signed links that serve them.",
+              "apps": ["packages", "ota-api", "storefront"],
+              "terms": ["storage-adapter", "signed-url"]
+            }
+          ]
+        },
+        {
+          "id": "security-controls",
+          "label": "Security controls",
+          "description": "Application-level protections shared by the apps: encryption and keys, redaction, browser session security and trust between services.",
+          "apps": ["packages", "platform-api", "ota-api", "portal", "storefront"],
+          "children": [
+            {
+              "id": "encryption-and-keys",
+              "label": "Encryption and keys",
+              "description": "Envelope encryption under a master key (KEK) kept outside the database, key files, rotation and the API key pepper.",
+              "apps": ["packages", "platform-api", "ota-api", "deploy"],
+              "terms": [
+                "envelope-encryption",
+                "kek",
+                "kek-rotation",
+                "master-key",
+                "key-file",
+                "associated-data",
+                "api-key-pepper"
+              ]
+            },
+            {
+              "id": "redaction-and-secrets",
+              "label": "Redaction and secret display",
+              "description": "Censoring secrets and personal data in logs and stored payloads, and showing secrets masked or only once.",
+              "apps": ["packages", "platform-api", "ota-api", "portal", "platform-admin"],
+              "terms": ["redact-paths", "redact-payload", "masked-value", "show-once-secret"]
+            },
+            {
+              "id": "browser-security",
+              "label": "Cookies, CSRF, CSP and redirects",
+              "description": "`__Host-` cookies, the double-submit CSRF token, content security policies and safe return paths.",
+              "apps": ["portal", "platform-admin", "ota-admin", "storefront", "deploy"],
+              "terms": [
+                "host-cookie",
+                "csrf-token",
+                "csp-nonce",
+                "content-security-policy",
+                "safe-next-path",
+                "return-path"
+              ]
+            },
+            {
+              "id": "service-trust",
+              "label": "Trust between services",
+              "description": "The shared secrets and headers by which BFF servers, the edge and the OTA admin identify themselves and the end user.",
+              "apps": ["portal", "platform-admin", "ota-admin", "platform-api", "ota-api", "deploy"],
+              "terms": ["bff-key", "end-user-headers", "edge-secret", "edge-caller", "service-key"]
+            }
+          ]
+        },
+        {
+          "id": "messaging",
+          "label": "Queues and background work",
+          "description": "BullMQ queues, the messages the two backends exchange, and the inbox and outbox patterns that make delivery reliable.",
+          "apps": ["packages", "platform-api", "ota-api"],
+          "children": [
+            {
+              "id": "queues-and-jobs",
+              "label": "Queues and jobs",
+              "description": "BullMQ queues of the platform and OTA workers (watched from the platform admin console) and the scheduled fan-out of per-tenant jobs.",
+              "apps": ["platform-api", "ota-api", "platform-admin"],
+              "terms": ["bullmq", "queue", "platform-queue", "ota-queue", "fan-out"]
+            },
+            {
+              "id": "cross-backend-messaging",
+              "label": "Cross-backend messaging",
+              "description": "The two queues on which the platform and the OTA worker ask and answer, and the common job envelope.",
+              "apps": ["platform-api", "ota-api", "packages"],
+              "terms": ["ota-tenant-ops", "platform-tenant-events", "job-envelope"]
+            },
+            {
+              "id": "inbox-and-outbox",
+              "label": "Inbox and outbox",
+              "description": "E-mails written in the same transaction as the change, and incoming webhooks stored once before processing.",
+              "apps": ["platform-api", "ota-api"],
+              "terms": ["outbox", "webhook-inbox"]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "operations",
+      "label": "Operations and delivery",
+      "description": "Running Velexis in production on one hardened Ubuntu VM: deployment, the edge, host security, monitoring and backups.",
+      "apps": ["deploy"],
+      "children": [
+        {
+          "id": "deployment-vm",
+          "label": "Deployment and VM",
+          "description": "The single VM, how it is provisioned and checked, how processes are isolated, and how a release is installed or rolled back.",
+          "apps": ["deploy"],
+          "children": [
+            {
+              "id": "vm-provisioning",
+              "label": "VM provisioning",
+              "description": "The single-VM design, idempotent provisioning, the read-only hardening check and the pinned Node.js major.",
+              "apps": ["deploy"],
+              "terms": ["single-vm", "provision-vm", "check-vm", "node-major-pin"]
+            },
+            {
+              "id": "runtime-isolation",
+              "label": "Trust zones and units",
+              "description": "One system user per trust zone, sandboxed systemd units, root-only env files and one-off commands.",
+              "apps": ["deploy"],
+              "terms": ["trust-zone", "unit-sandboxing", "env-file", "transient-unit", "velexis-run"]
+            },
+            {
+              "id": "release-and-deploy",
+              "label": "Releases and deploys",
+              "description": "Self-contained release folders with checksums, the root-owned deploy command, its SSH user and automatic rollback.",
+              "apps": ["deploy"],
+              "terms": ["release-folder", "sha256sums", "velexis-deploy", "deploy-user", "automatic-rollback"]
+            }
+          ]
+        },
+        {
+          "id": "edge-and-network",
+          "label": "Edge and network",
+          "description": "Caddy at the edge with TLS and the Coraza WAF, and the outbound allow-list that limits where the VM may connect.",
+          "apps": ["deploy", "storefront"],
+          "children": [
+            {
+              "id": "caddy-edge",
+              "label": "Caddy and TLS",
+              "description": "The Caddy build and service set-up, its admin socket, on-demand TLS for storefront hosts and log filtering.",
+              "apps": ["deploy"],
+              "terms": [
+                "caddy",
+                "velexis-caddy-build",
+                "caddy-drop-in",
+                "caddy-admin-socket",
+                "on-demand-tls",
+                "log-query-filter"
+              ]
+            },
+            {
+              "id": "web-application-firewall",
+              "label": "Web application firewall",
+              "description": "Coraza with the OWASP Core Rule Set inside Caddy, its narrow exclusions and the detection-only week before blocking.",
+              "apps": ["deploy"],
+              "terms": ["waf", "coraza-waf", "owasp-core-rule-set", "waf-exclusion", "detection-week"]
+            },
+            {
+              "id": "egress-control",
+              "label": "Outbound allow-list",
+              "description": "The nftables egress table that drops all output except allowed hosts, and time-limited emergency openings.",
+              "apps": ["deploy"],
+              "terms": ["outbound-allow-list", "emergency-opening"]
+            }
+          ]
+        },
+        {
+          "id": "host-security",
+          "label": "Host security",
+          "description": "Hardening and monitoring of the VM itself: SSH access, file integrity, the audit daemon and security log handling.",
+          "apps": ["deploy"],
+          "children": [
+            {
+              "id": "access-and-integrity",
+              "label": "SSH access and file integrity",
+              "description": "A second factor for admin SSH, AIDE file-integrity checks with their baseline and auditd watch rules.",
+              "apps": ["deploy"],
+              "terms": ["ssh-second-factor", "aide", "aide-re-baseline", "auditd"]
+            },
+            {
+              "id": "security-logs",
+              "label": "Security logs",
+              "description": "Hourly encrypted shipment of security log entries off the VM and their hourly review with immediate alerts.",
+              "apps": ["deploy"],
+              "terms": ["security-log-shipment", "security-log-review"]
+            }
+          ]
+        },
+        {
+          "id": "observability",
+          "label": "Observability and alerting",
+          "description": "How problems surface: health checks and failure alerts on the VM, and request ids that tie responses to log lines.",
+          "apps": ["deploy", "ota-api", "platform-api", "sdk"],
+          "children": [
+            {
+              "id": "health-and-alerting",
+              "label": "Health checks and alerts",
+              "description": "The five-minute on-VM health check and the root-owned mailer every failing unit and check reports through.",
+              "apps": ["deploy"],
+              "terms": ["on-vm-health-check", "velexis-alert"]
+            },
+            {
+              "id": "request-tracing",
+              "label": "Request tracing",
+              "description": "The request id on every response, error and log line, and the SDK hook that reports each response.",
+              "apps": ["ota-api", "platform-api", "sdk", "ota-admin"],
+              "terms": ["request-id", "response-hook"]
+            }
+          ]
+        },
+        {
+          "id": "backup-and-recovery",
+          "label": "Backups and recovery",
+          "description": "Nightly encrypted backup sets kept off-site and the rehearsed restore that proves they work.",
+          "apps": ["deploy"],
+          "terms": ["backup-set", "age-encryption", "off-site-bucket", "restore-drill"]
+        }
+      ]
+    },
+    {
+      "id": "engineering",
+      "label": "Engineering practice",
+      "description": "How Velexis is built and changed: architecture patterns, local development, tests and CI, and the rules and plans agents follow.",
+      "apps": ["packages", "deploy"],
+      "children": [
+        {
+          "id": "architecture-patterns",
+          "label": "Architecture and patterns",
+          "description": "The overall shape of the system and the patterns the apps share for frontends and configuration.",
+          "apps": ["portal", "platform-admin", "ota-admin", "platform-api", "ota-api", "packages"],
+          "children": [
+            {
+              "id": "system-shape",
+              "label": "System shape",
+              "description": "The control plane versus the OTA data plane, Next.js backends-for-frontend and their server actions.",
+              "apps": ["portal", "platform-admin", "ota-admin", "platform-api"],
+              "terms": ["control-plane", "bff", "server-action"]
+            },
+            {
+              "id": "configuration",
+              "label": "Configuration and feature switches",
+              "description": "The typed configuration loader every app uses and the feature switches that stay off by default.",
+              "apps": ["packages", "platform-api", "ota-api", "portal"],
+              "terms": ["define-config", "feature-switch"]
+            }
+          ]
+        },
+        {
+          "id": "local-development",
+          "label": "Local development",
+          "description": "Running the whole stack on a laptop: databases, keys, seed data, local doubles for e-mail, Stripe and Amadeus.",
+          "apps": ["packages", "deploy", "storefront", "ota-api", "platform-api"],
+          "children": [
+            {
+              "id": "local-stack",
+              "label": "Local stack and seed data",
+              "description": "One-time PostgreSQL and Redis set-up, development keys, the seed with its demo OTA, Mailpit, the Stripe CLI and the Vite proxy.",
+              "apps": ["packages", "deploy", "platform-api", "ota-api", "storefront"],
+              "terms": ["dev-setup", "dev-keys", "dev-seed", "demo-ota", "mailpit", "stripe-cli", "dev-proxy"]
+            },
+            {
+              "id": "amadeus-stub-tools",
+              "label": "Amadeus stub",
+              "description": "The local Amadeus double with recorded fixtures, selectable failure scenarios and in-memory orders.",
+              "apps": ["packages", "ota-api"],
+              "terms": ["amadeus-stub", "stub-scenario", "stub-orders", "fixture-recording"]
+            }
+          ]
+        },
+        {
+          "id": "ci-cd-testing",
+          "label": "CI/CD and testing",
+          "description": "The test layers from unit to end-to-end, performance budgets, and the GitHub workflows that run them and deploy.",
+          "apps": ["packages", "deploy", "sdk", "storefront"],
+          "children": [
+            {
+              "id": "backend-tests",
+              "label": "Unit and integration tests",
+              "description": "Template databases, test roles, per-worker Redis, a fake clock, OpenAPI response checks and signed Stripe events.",
+              "apps": ["packages", "platform-api", "ota-api"],
+              "terms": [
+                "test-template-database",
+                "test-roles",
+                "use-redis",
+                "fake-clock",
+                "expect-response-to-match",
+                "signed-stripe-event"
+              ]
+            },
+            {
+              "id": "e2e-tests",
+              "label": "End-to-end tests",
+              "description": "The Playwright stack on a fresh database, its projects per app and the storefront's automatic guards.",
+              "apps": ["packages", "portal", "platform-admin", "ota-admin", "storefront"],
+              "terms": ["e2e-stack", "playwright-project", "storefront-guards"]
+            },
+            {
+              "id": "sdk-tests",
+              "label": "SDK tests",
+              "description": "Offline SDK tests with a fake fetch and smoke tests against a running OTA API.",
+              "apps": ["sdk", "ota-api"],
+              "terms": ["fake-fetch", "sdk-smoke-tests"]
+            },
+            {
+              "id": "performance-budgets",
+              "label": "Performance and size budgets",
+              "description": "The storefront's per-page budgets, the SDK bundle size limit and the platform API smoke test.",
+              "apps": ["storefront", "sdk", "platform-api", "packages"],
+              "terms": ["performance-budget", "size-budget", "platform-smoke"]
+            },
+            {
+              "id": "ci-workflows",
+              "label": "CI and deploy workflows",
+              "description": "The CI, E2E and manual Deploy workflows of GitHub Actions and the production environment that holds deploy secrets.",
+              "apps": ["deploy", "packages"],
+              "terms": ["ci-workflow", "e2e-workflow", "deploy-workflow", "production-environment"]
+            }
+          ]
+        },
+        {
+          "id": "process-governance",
+          "label": "Process and governance",
+          "description": "The rules the repository enforces on itself, the agent task plans and contract-first workflow, and compliance bookkeeping.",
+          "apps": ["packages", "deploy", "portal"],
+          "children": [
+            {
+              "id": "repository-rules",
+              "label": "Repository rules",
+              "description": "CI checks that refuse hard-coded hosts, version ranges and unpinned Actions, session-level search paths, edits to frozen contract files and focused tests.",
+              "apps": ["packages", "deploy"],
+              "terms": [
+                "check-no-hardcoded-hosts",
+                "check-package-json",
+                "repository-guards",
+                "action-pinning"
+              ]
+            },
+            {
+              "id": "plans-and-contract-workflow",
+              "label": "Plans and contract-first workflow",
+              "description": "The linter of the agent task plans and the commands that lint OpenAPI documents and regenerate types.",
+              "apps": ["packages"],
+              "terms": ["plan-lint", "contracts-generate"]
+            },
+            {
+              "id": "compliance-and-legal",
+              "label": "Compliance and legal bookkeeping",
+              "description": "Keeping PCI evidence references pointing at the right lines and recording which terms of service a user accepted.",
+              "apps": ["packages", "portal", "platform-api"],
+              "terms": ["pci-refs-checker", "terms-version"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

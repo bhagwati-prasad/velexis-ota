@@ -1,0 +1,38 @@
+{
+  "id": "flow-change-contract",
+  "type": "flow",
+  "title": "Change an OpenAPI document (contract first)",
+  "caption": "packages/api-types/README.md and packages/errors/README.md; AGENTS.md §6. Never edit src/generated/ by hand.",
+  "steps": [
+    {
+      "title": "Edit the document",
+      "actor": "Developer",
+      "body": "`ota/backend/openapi/velexis-ota-booking-api.openapi.yaml` or `platform/backend/openapi/velexis-platform-api.openapi.yaml`. A new error code goes into `x-error-catalogue` with `status` and `description`; a code with field errors also needs an example with `fieldErrors` and an entry in `FIELD_ERROR_CODES`.",
+      "expect": ""
+    },
+    {
+      "title": "Lint",
+      "actor": "Developer",
+      "body": "`pnpm contracts:lint`.",
+      "expect": "No errors (warnings are printed, not fatal). A `.redocly.lint-ignore.yaml` fails the run."
+    },
+    {
+      "title": "Generate",
+      "actor": "Developer",
+      "body": "`pnpm contracts:generate`.",
+      "expect": "`wrote` for `packages/api-types/src/generated/{ota,platform,operations}.ts` and `packages/errors/src/generated/catalogue.ts`; a code with different statuses in the two documents fails and writes nothing."
+    },
+    {
+      "title": "Use it",
+      "actor": "Developer",
+      "body": "Handlers, route parity (operations index), SDK route table (`ota/sdk`), `expectResponseToMatch` in integration tests.",
+      "expect": "`new AppError('NEW_CODE')` compiles only after generation."
+    },
+    {
+      "title": "Commit together",
+      "actor": "Developer",
+      "body": "Document + generated files in one commit.",
+      "expect": "CI re-runs the generators and fails on any diff (`git diff --exit-code -- packages/api-types packages/errors`)."
+    }
+  ]
+}

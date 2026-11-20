@@ -1,0 +1,40 @@
+{
+  "id": "flow-shopping",
+  "type": "flow",
+  "title": "Quote a fare for a caller",
+  "caption": "shopping/actions.ts. amadeus:read (owner, admin, agent). Read-only, net prices, every call sent once (maxRetries 0), each an audited amadeus.<operation> staff action.",
+  "steps": [
+    {
+      "title": "Open shopping",
+      "actor": "Agent",
+      "screen": "/shopping",
+      "url": "http://localhost:3002/shopping",
+      "body": "Read the notices above the tabs.",
+      "expect": "Environment and offices named; \"net prices\"; the default markup rule in words; \"booking on behalf comes later\"."
+    },
+    {
+      "title": "Search offers",
+      "actor": "Agent",
+      "body": "From, to, departure (and return), 2 adults + 1 infant on lap, cabin, **Search offers**.",
+      "expect": "Offers with flights in local times, fare, bags, seats, last ticketing day and the **net total**; the verbatim answer in a collapsed JSON view."
+    },
+    {
+      "title": "Branded fares and price",
+      "actor": "Agent",
+      "body": "On an offer: **Branded fares**, then **Confirm price** (optionally with the detailed fare rules).",
+      "expect": "Each fare with its net total; the confirmed net price (both when it changed), booking requirements, bag options."
+    },
+    {
+      "title": "Seat availability",
+      "actor": "Agent",
+      "body": "Availability tab: from, to, day, seats; **Search availability**.",
+      "expect": "Seats per booking class (`J2 Y9 BL`) with the legend."
+    },
+    {
+      "title": "Edge cases",
+      "actor": "Tester",
+      "body": "2 infants for 1 adult; destination `ZZZ`; the stub's timeout scenario.",
+      "expect": "Field error before any call; \"no offers\"; \"Amadeus did not answer… Search again\" with exactly one `supplier_requests` row."
+    }
+  ]
+}

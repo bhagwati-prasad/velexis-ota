@@ -1,0 +1,95 @@
+{
+  "id": "price-hold-states",
+  "type": "state",
+  "title": "The price hold on /price.html",
+  "caption": "`src/pages/price.js`: a `role=\"timer\"` countdown from the priced offer's `expiresAt` (`min(now + offer_ttl_minutes, lastTicketingDate)` on the server).",
+  "states": [
+    {
+      "id": "loading",
+      "label": "Loading",
+      "kind": "initial"
+    },
+    {
+      "id": "held",
+      "label": "Price held for mm:ss",
+      "kind": "normal",
+      "detail": "Continue to checkout enabled."
+    },
+    {
+      "id": "changed",
+      "label": "The airline changed the price",
+      "kind": "normal",
+      "detail": "`priceChange.changed`: expected vs confirmed price side by side; \"Continue at the new price, €…\"."
+    },
+    {
+      "id": "warning",
+      "label": "5 minutes left",
+      "kind": "normal",
+      "detail": "Announced once by the live region (`EXPIRY_WARNING_SECONDS = 300`)."
+    },
+    {
+      "id": "expired",
+      "label": "Price expired",
+      "kind": "error",
+      "detail": "Continue disabled; Re-price links to the offer page."
+    },
+    {
+      "id": "gone",
+      "label": "This fare is no longer available",
+      "kind": "error",
+      "detail": "`404` or `410 OFFER_EXPIRED` from `getPricedOffer`."
+    },
+    {
+      "id": "checkout",
+      "label": "Checkout",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "loading",
+      "to": "held",
+      "label": "getPricedOffer 200"
+    },
+    {
+      "from": "loading",
+      "to": "changed",
+      "label": "priceChange.changed"
+    },
+    {
+      "from": "loading",
+      "to": "gone",
+      "label": "404 / 410"
+    },
+    {
+      "from": "changed",
+      "to": "held",
+      "label": "shown, countdown runs"
+    },
+    {
+      "from": "held",
+      "to": "warning",
+      "label": "300 s left"
+    },
+    {
+      "from": "warning",
+      "to": "expired",
+      "label": "expiresAt reached"
+    },
+    {
+      "from": "held",
+      "to": "checkout",
+      "label": "Continue to checkout"
+    },
+    {
+      "from": "warning",
+      "to": "checkout",
+      "label": "Continue to checkout"
+    },
+    {
+      "from": "expired",
+      "to": "loading",
+      "label": "Re-price (offer page → new prc_)"
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "id": "seq-stripe-connect",
+  "type": "sequence",
+  "title": "Connect the OTA's own Stripe account (Connect Standard)",
+  "caption": "The portal remembers the OTA in __Host-vxp_connect because Stripe's return names no OTA; the callback only redirects and never logs or renders the code.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Owner's browser",
+      "kind": "user"
+    },
+    {
+      "id": "p",
+      "label": "Portal (connectStripe)",
+      "kind": "ui"
+    },
+    {
+      "id": "cb",
+      "label": "/connect/stripe/callback",
+      "kind": "api"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    },
+    {
+      "id": "s",
+      "label": "Stripe Connect",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "p",
+      "label": "Connect with Stripe (step-up if needed)",
+      "kind": "call"
+    },
+    {
+      "from": "p",
+      "to": "api",
+      "label": "POST /v1/tenants/{id}/payment-connections/stripe-connect/start",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "p",
+      "label": "authorizeUrl (state in Redis stripe:oauth:*, 10 min)",
+      "kind": "return"
+    },
+    {
+      "from": "p",
+      "to": "b",
+      "label": "Set __Host-vxp_connect=<tenantId> (1 h); redirect to https://connect.stripe.com/oauth/authorize?…",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "s",
+      "label": "authorise the account",
+      "kind": "call"
+    },
+    {
+      "from": "s",
+      "to": "b",
+      "label": "302 /connect/stripe/callback?code=ac_…&state=…",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "cb",
+      "label": "GET callback",
+      "kind": "call"
+    },
+    {
+      "from": "cb",
+      "to": "api",
+      "label": "POST /v1/payment-connections/stripe-connect/callback {state, code}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "s",
+      "label": "oauth.token, accounts.retrieve",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "cb",
+      "label": "connection (connect_standard, active | pending)",
+      "kind": "return"
+    },
+    {
+      "from": "cb",
+      "to": "b",
+      "label": "303 /otas/ten_…/payments?stripeConnect=connected; cookie cleared",
+      "kind": "return"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "id": "flow-console-bookings",
+  "type": "flow",
+  "title": "Console: open the OTA admin and work a booking",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/sso-bookings.e2e.ts. The OTA API is reached only through the OTA admin's server (service key on loopback) or a secret key; there is no staff password on the OTA side.",
+  "steps": [
+    {
+      "title": "Own an OTA",
+      "actor": "OTA owner",
+      "url": "http://localhost:3000",
+      "body": "In the portal, sign up, verify, create an OTA (the OTA worker provisions `tenant_<key>`). The seeded demo OTA has no staff member.",
+      "expect": "Tenant active; your membership role `owner` in `platform.tenant_memberships`."
+    },
+    {
+      "title": "Open console",
+      "actor": "OTA owner",
+      "screen": "OTA admin /bookings",
+      "url": "http://localhost:3002/bookings",
+      "body": "Portal → the OTA → Open console.",
+      "expect": "`POST /v1/console/auth/sign-in` (portal token from `ptk:<sha256>`, single use, 60 s) → staff session; `staff_actions` row `staff.sign_in`; Redis `staffsess:<familyId>`. Posting the same hand-off form again → `401 PORTAL_TOKEN_INVALID`."
+    },
+    {
+      "title": "Needs attention",
+      "actor": "Agent",
+      "screen": "/bookings",
+      "body": "Filter `ticketingStatus=failed,manual_review`, `reconcileOutcome=manual_review`, deadlines within 24 h.",
+      "expect": "`GET /v1/console/bookings` lists only the current environment (test) of this tenant; net amounts visible in console scope."
+    },
+    {
+      "title": "Issue tickets",
+      "actor": "Agent",
+      "screen": "/bookings/[bookingId]",
+      "body": "A booking in `manual_review` (policy manual_review or the stub's `ticketing-failed` scenario): Issue tickets with a reason.",
+      "expect": "`POST …/issuance` → captures the authorised Stripe payment first, Flight Order Issue → booking `ticketed`; `staff_actions` `booking.issue` with redacted before/after; e-mail `booking.ticketed`."
+    },
+    {
+      "title": "Cancel (void)",
+      "actor": "Agent",
+      "body": "A booking ticketed today: Cancel.",
+      "expect": "`POST …/cancellation` → DELETE voids the tickets; booking `cancelled` (`cancelled_by = staff`); refund mode none/full/amount; airline cards never refunded through Stripe."
+    },
+    {
+      "title": "Note and resync",
+      "actor": "Agent",
+      "body": "Add an internal note; press Resync.",
+      "expect": "Note: `201`, a `booking_events` row `staff.note` (staff only unless `visibleToCustomer`), the text stored as typed in `summary` and `data` (no card-number check here, unlike the review-closure note); staff action `booking.note` with the note id only. Needs `bookings:write`: a finance user gets `403 FORBIDDEN`. Resync: Flight Order Management GET, segments/tickets updated, `429 RATE_LIMITED` within 10 s of the last refresh of the booking."
+    },
+    {
+      "title": "Forbidden actions",
+      "actor": "Viewer",
+      "body": "Sign in as a viewer and try Issue or open LIVE.",
+      "expect": "The admin hides the buttons; the API answers `403 FORBIDDEN` (`details.requiredPermission`) or `403 ENVIRONMENT_NOT_ALLOWED`, each with a `staff_actions` row `outcome = denied`."
+    }
+  ]
+}

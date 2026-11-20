@@ -1,0 +1,107 @@
+{
+  "id": "seq-open-console",
+  "type": "sequence",
+  "title": "Open console: from the portal into the OTA admin",
+  "caption": "The one-time portal token travels only in a form body; the launch page has Referrer-Policy strict-origin so the OTA admin sees the portal's Origin.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Browser",
+      "kind": "user"
+    },
+    {
+      "id": "rh",
+      "label": "console/launch route",
+      "kind": "api"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    },
+    {
+      "id": "r",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "oad",
+      "label": "OTA admin /sso",
+      "kind": "ui"
+    },
+    {
+      "id": "ota",
+      "label": "OTA API",
+      "kind": "api"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "rh",
+      "label": "POST /otas/ten_…/console/launch (form, no field)",
+      "kind": "call"
+    },
+    {
+      "from": "rh",
+      "to": "rh",
+      "label": "Origin == PUBLIC_PORTAL_URL? else 403; ten_ id? else 404",
+      "kind": "self"
+    },
+    {
+      "from": "rh",
+      "to": "api",
+      "label": "POST /v1/tenants/{id}/console-token",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "SET ptk:<sha256> {accountId, tenantId, membershipId, role, mfa} EX 60 NX",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "rh",
+      "label": "201 {portalToken ptk_…, consoleSsoUrl}",
+      "kind": "return",
+      "note": "TENANT_NOT_ACTIVE / MFA_REQUIRED / RATE_LIMITED → 303 with ?console=<problem>"
+    },
+    {
+      "from": "rh",
+      "to": "b",
+      "label": "hand-off page: form POST consoleSsoUrl, hidden portalToken, nonce script submits it",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "oad",
+      "label": "POST /sso portalToken=ptk_… (Origin: portal)",
+      "kind": "call"
+    },
+    {
+      "from": "oad",
+      "to": "ota",
+      "label": "console.auth.signIn {grantType: portal_token}",
+      "kind": "call"
+    },
+    {
+      "from": "ota",
+      "to": "r",
+      "label": "GETDEL ptk:<sha256>",
+      "kind": "call"
+    },
+    {
+      "from": "ota",
+      "to": "oad",
+      "label": "staff access + refresh tokens",
+      "kind": "return"
+    },
+    {
+      "from": "oad",
+      "to": "b",
+      "label": "__Host- cookies on the admin host, redirect /bookings",
+      "kind": "return"
+    }
+  ]
+}

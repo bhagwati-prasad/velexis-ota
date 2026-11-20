@@ -1,0 +1,53 @@
+{
+  "id": "membership-states",
+  "type": "state",
+  "title": "Membership status",
+  "caption": "`platform.tenant_memberships.status`. An OTA always keeps one active owner (409 LAST_OWNER).",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Roles owner, admin, agent, finance, viewer."
+    },
+    {
+      "id": "removed",
+      "label": "removed",
+      "kind": "normal",
+      "detail": "Removed by an owner/admin or left by the member; vx:invalidate membership."
+    },
+    {
+      "id": "suspended",
+      "label": "suspended (reserved)",
+      "kind": "normal",
+      "detail": "In the CHECK; not written by the MVP code."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "active",
+      "label": "createTenant (owner) / acceptInvitation"
+    },
+    {
+      "from": "active",
+      "to": "removed",
+      "label": "removeMember (or leave)"
+    },
+    {
+      "from": "removed",
+      "to": "active",
+      "label": "acceptInvitation of a new invitation"
+    },
+    {
+      "from": "active",
+      "to": "active",
+      "label": "updateMember (role change; owner grant needs step-up)"
+    }
+  ]
+}

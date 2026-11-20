@@ -1,0 +1,95 @@
+{
+  "id": "stub-order-states",
+  "type": "state",
+  "title": "A flight order in the Amadeus stub",
+  "caption": "tools/amadeus-stub/src/orders.ts. In memory, per server; a restarted stub forgets every order. `version` +1 per issue, PATCH, cancel and airline change.",
+  "states": [
+    {
+      "id": "none",
+      "label": "Not stored",
+      "kind": "initial"
+    },
+    {
+      "id": "active",
+      "label": "active (no tickets)",
+      "kind": "normal",
+      "detail": "Record locator: 6 random letters/digits; card stored masked `XXXXXXXXXXXX1111`."
+    },
+    {
+      "id": "issued",
+      "label": "active, ticketed",
+      "kind": "normal",
+      "detail": "One ETICKET per traveller, `000-0000000001`…"
+    },
+    {
+      "id": "airlineCancelled",
+      "label": "Segments CANCELLED by the airline",
+      "kind": "normal",
+      "detail": "`orders.cancelByAirline(id)`: still readable."
+    },
+    {
+      "id": "cancelled",
+      "label": "Cancelled by the agency (gone)",
+      "kind": "final",
+      "detail": "Every operation answers 404 code 1797."
+    },
+    {
+      "id": "refused",
+      "label": "Nothing stored",
+      "kind": "error",
+      "detail": "sold-out (34651), declined card 4000000000000002 (1304), timeout-lost (504 without write)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "none",
+      "to": "active",
+      "label": "POST /v1/booking/flight-orders"
+    },
+    {
+      "from": "none",
+      "to": "issued",
+      "label": "create with issue=true"
+    },
+    {
+      "from": "none",
+      "to": "refused",
+      "label": "scenario / declined card"
+    },
+    {
+      "from": "active",
+      "to": "issued",
+      "label": "POST …/issuance (ticketing-failed → stays active, 9112)"
+    },
+    {
+      "from": "issued",
+      "to": "issued",
+      "label": "issue again → 400 9112 already issued"
+    },
+    {
+      "from": "active",
+      "to": "airlineCancelled",
+      "label": "orders.cancelByAirline"
+    },
+    {
+      "from": "issued",
+      "to": "airlineCancelled",
+      "label": "orders.cancelByAirline"
+    },
+    {
+      "from": "active",
+      "to": "cancelled",
+      "label": "DELETE (version-conflict 409 / cancel-refused 400 keep it)"
+    },
+    {
+      "from": "issued",
+      "to": "cancelled",
+      "label": "DELETE"
+    },
+    {
+      "from": "airlineCancelled",
+      "to": "cancelled",
+      "label": "DELETE"
+    }
+  ]
+}

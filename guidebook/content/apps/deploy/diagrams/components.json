@@ -1,0 +1,129 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "deploy/ folder: what is installed where",
+  "caption": "deploy/README.md 'How the files map to the VM'. Templates in the repository; root-owned copies on the VM; env files written once by provision-vm.sh.",
+  "groups": [
+    { "id": "repo", "label": "Repository deploy/" },
+    { "id": "vm", "label": "VM paths" },
+    { "id": "ci", "label": "CI / GitHub" }
+  ],
+  "nodes": [
+    {
+      "id": "scripts",
+      "label": "scripts/*.sh",
+      "group": "repo",
+      "kind": "lib",
+      "detail": "deploy, backup, restore, alert, run-as, healthcheck, ship-logs, log-review, egress, provision-vm, check-vm, pack-release, dev-setup."
+    },
+    {
+      "id": "units",
+      "label": "systemd/*.service, *.timer",
+      "group": "repo",
+      "kind": "lib",
+      "detail": "7 app units, 5 timer pairs, `velexis-alert@.service`, `caddy.service.d/velexis.conf`."
+    },
+    {
+      "id": "caddyfile",
+      "label": "caddy/Caddyfile + waf/*.conf",
+      "group": "repo",
+      "kind": "edge",
+      "detail": "Hosts, headers, log filters, WAF snippets; `coraza.conf`, `exclusions.conf`, generated `logdata.conf`."
+    },
+    {
+      "id": "caddybuild",
+      "label": "caddy/build/build-caddy.sh, versions.env",
+      "group": "repo",
+      "kind": "lib",
+      "detail": "Reproducible xcaddy build; fails unless SHA-256 = `CADDY_SHA256`."
+    },
+    {
+      "id": "envs",
+      "label": "env/*.env.example",
+      "group": "repo",
+      "kind": "lib",
+      "detail": "One template per app; `@@...@@` generated, `CHANGE_ME` filled by hand."
+    },
+    {
+      "id": "pgconf",
+      "label": "postgres/bootstrap.sql, velexis.conf",
+      "group": "repo",
+      "kind": "db",
+      "detail": "Database, four roles, schemas `platform` and `reference`, default privileges; tuning for 8 GB."
+    },
+    {
+      "id": "egresslist",
+      "label": "egress/allowed-hosts.conf",
+      "group": "repo",
+      "kind": "lib",
+      "detail": "One host, port, protocol, user and reason per line."
+    },
+    {
+      "id": "sbin",
+      "label": "/usr/local/sbin/velexis-*",
+      "group": "vm",
+      "kind": "worker",
+      "detail": "Root-owned copies, re-installed by every deploy (egress only by `--steps egress`)."
+    },
+    {
+      "id": "systemd",
+      "label": "/etc/systemd/system/",
+      "group": "vm",
+      "kind": "worker",
+      "detail": "Installed from the release snapshot `/var/lib/velexis/system/<sha>/`."
+    },
+    {
+      "id": "etccaddy",
+      "label": "/etc/caddy/Caddyfile, /etc/caddy/waf/",
+      "group": "vm",
+      "kind": "edge",
+      "detail": "Validated with `caddy validate` before replacing the live files."
+    },
+    {
+      "id": "etcvelexis",
+      "label": "/etc/velexis/*.env, keys/",
+      "group": "vm",
+      "kind": "db",
+      "detail": "`root:root 0600`, read by systemd only; key folders 0500 per zone."
+    },
+    {
+      "id": "pgcluster",
+      "label": "PostgreSQL conf.d, database velexis",
+      "group": "vm",
+      "kind": "db",
+      "detail": "`/etc/postgresql/16/main/conf.d/velexis.conf`."
+    },
+    {
+      "id": "nft",
+      "label": "nftables inet velexis_egress",
+      "group": "vm",
+      "kind": "edge",
+      "detail": "Policy drop on output; refreshed every 2 minutes."
+    },
+    {
+      "id": "pack",
+      "label": "pack-release.sh in deploy.yml",
+      "group": "ci",
+      "kind": "worker",
+      "detail": "Builds `release/<sha>/` with RELEASE.json, SHA256SUMS, `caddy/bin/caddy`."
+    },
+    {
+      "id": "citests",
+      "label": "ci.yml deploy-files, systemd-units, check-vm",
+      "group": "ci",
+      "kind": "worker",
+      "detail": "shellcheck, Caddy build + smoke, deploy/healthcheck/ship-logs/log-review tests, units smoke, check-vm test."
+    }
+  ],
+  "edges": [
+    { "from": "scripts", "to": "sbin", "label": "provision-vm.sh, velexis-deploy", "kind": "data" },
+    { "from": "units", "to": "systemd", "label": "snapshot then install", "kind": "data" },
+    { "from": "caddyfile", "to": "etccaddy", "label": "validate then install", "kind": "data" },
+    { "from": "caddybuild", "to": "pack", "label": "caddy/bin/caddy", "kind": "data" },
+    { "from": "envs", "to": "etcvelexis", "label": "once, if missing", "kind": "data" },
+    { "from": "pgconf", "to": "pgcluster", "label": "provision-vm.sh", "kind": "data" },
+    { "from": "egresslist", "to": "nft", "label": "--steps egress, velexis-egress", "kind": "data" },
+    { "from": "pack", "to": "sbin", "label": "release deploy/ copy", "kind": "async" },
+    { "from": "citests", "to": "scripts", "label": "tests on every PR", "kind": "sync" }
+  ]
+}

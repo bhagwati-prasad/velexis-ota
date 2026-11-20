@@ -1,0 +1,459 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "Platform backend modules, processors and stores",
+  "caption": "NestJS modules of the API process (layers 0-4), the worker's processors, and the stores and queues they use. Click a node for its folder and job.",
+  "groups": [
+    {
+      "id": "in",
+      "label": "Inbound"
+    },
+    {
+      "id": "api",
+      "label": "API process (AppModule)"
+    },
+    {
+      "id": "worker",
+      "label": "Worker process (WorkerModule)"
+    },
+    {
+      "id": "stores",
+      "label": "Stores and queues"
+    },
+    {
+      "id": "ext",
+      "label": "Other apps and services"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "portal",
+      "label": "Portal / admin servers",
+      "group": "in",
+      "kind": "ui",
+      "app": "portal",
+      "detail": "Call `/v1/**` with Bearer tokens and the PADR-0019 BFF headers."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "group": "in",
+      "kind": "edge",
+      "detail": "Forwards `/webhooks/*` and calls `/internal/tls/ask` on loopback."
+    },
+    {
+      "id": "pipeline",
+      "label": "Request pipeline",
+      "group": "api",
+      "kind": "lib",
+      "detail": "`common/`: request context (nestjs-cls), Redis throttler, `PortalAuthGuard` / `AdminAuthGuard` / `InternalOnlyGuard` / `StripeSignatureGuard`, `MfaEnrolmentGuard`, `TenantRoleGuard`, `FeatureGuard`, `RecentMfaGuard`, Ajv OpenAPI validation, idempotency, error filter."
+    },
+    {
+      "id": "auth",
+      "label": "Auth + Accounts",
+      "group": "api",
+      "kind": "api",
+      "detail": "`auth/`, `accounts/`: sign-up, verify, sign-in, MFA challenge, refresh, password reset, step-up, `me`, MFA set-up, sessions."
+    },
+    {
+      "id": "tenants",
+      "label": "Tenants + Provisioning",
+      "group": "api",
+      "kind": "api",
+      "detail": "`tenants/`, `provisioning/`: key availability, create OTA, setup progress, retry, reveal keys, onboarding, go-live, suspend/resume/migrate."
+    },
+    {
+      "id": "members",
+      "label": "Memberships",
+      "group": "api",
+      "kind": "api",
+      "detail": "`memberships/`: members, roles, invitations, console token (`ptk:`)."
+    },
+    {
+      "id": "keys",
+      "label": "API keys",
+      "group": "api",
+      "kind": "api",
+      "detail": "`api-keys/`: create, rename/origins, roll, revoke; HMAC with the pepper."
+    },
+    {
+      "id": "domains",
+      "label": "Domains + TLS ask",
+      "group": "api",
+      "kind": "api",
+      "detail": "`domains/`: sub-domain, custom domains, checks, primary, `tlsAsk`."
+    },
+    {
+      "id": "conns",
+      "label": "Connections",
+      "group": "api",
+      "kind": "api",
+      "detail": "`supplier-connections/`, `payment-connections/`, `common/credentials/`: Amadeus pool and connections, Stripe Connect / API keys / Velexis mode, credential submissions."
+    },
+    {
+      "id": "billing",
+      "label": "Billing + BillingSync",
+      "group": "api",
+      "kind": "api",
+      "detail": "`billing/`: plans, subscriptions, Checkout, Customer Portal, invoices; `billing/sync/`: webhook receiver."
+    },
+    {
+      "id": "settle",
+      "label": "Settlements",
+      "group": "api",
+      "kind": "api",
+      "detail": "`settlements/`: payout accounts, statements, CSV."
+    },
+    {
+      "id": "admin",
+      "label": "AdminModule",
+      "group": "api",
+      "kind": "api",
+      "detail": "`admin/`: thin controllers for every `/v1/admin/**` route, dashboard, queue inspector, admin CLI."
+    },
+    {
+      "id": "base",
+      "label": "Audit + Notifications",
+      "group": "api",
+      "kind": "lib",
+      "detail": "`audit/` (`platform_audit_log` in the caller's transaction), `notifications/` (outbox in the caller's transaction)."
+    },
+    {
+      "id": "wte",
+      "label": "tenant-events processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`provisioning/tenant-events.processor.ts`: post-steps, failure handler, migrate/suspend/resume answers."
+    },
+    {
+      "id": "wmail",
+      "label": "email processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`notifications/email.processor.ts`: `email.send`, `email.sweep` (every minute)."
+    },
+    {
+      "id": "wstripe",
+      "label": "stripe-events processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`billing/sync/stripe-events.processor.ts`: re-fetch, handlers, status rules; Connect account events."
+    },
+    {
+      "id": "wdom",
+      "label": "domain-checks processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`domains/domain-checks.processor.ts`: `domain.verify`, `domain.recheck`, `domain.tls_probe`."
+    },
+    {
+      "id": "wconn",
+      "label": "verification processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`supplier-connections/verification.processor.ts`: `amadeus_account.verify`, `credentials.verify`, `credentials.sweep`."
+    },
+    {
+      "id": "wstl",
+      "label": "settlements processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`settlements/settlements.processor.ts`: `settlement.generate`."
+    },
+    {
+      "id": "wmaint",
+      "label": "maintenance processor",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`common/queues/maintenance.processor.ts`: runs every `@MaintenanceJob` schedule of `scheduler.registry.ts`."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL platform + reference",
+      "group": "stores",
+      "kind": "db",
+      "detail": "Role `velexis_platform_app`; no access to tenant schemas."
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "stores",
+      "kind": "cache",
+      "detail": "BullMQ prefix `vx`; keys of `common/redis/redis-keys.ts`; channel `vx:invalidate`."
+    },
+    {
+      "id": "qota",
+      "label": "ota-tenant-ops",
+      "group": "stores",
+      "kind": "queue",
+      "term": "ota-tenant-ops",
+      "detail": "Produced here, consumed by the OTA worker."
+    },
+    {
+      "id": "qplat",
+      "label": "platform-* queues (7)",
+      "group": "stores",
+      "kind": "queue",
+      "detail": "`platform-tenant-events`, `platform-emails`, `platform-stripe-events`, `platform-domains`, `platform-connections`, `platform-settlements`, `platform-maintenance`."
+    },
+    {
+      "id": "ota",
+      "label": "OTA worker / OTA API",
+      "group": "ext",
+      "kind": "worker",
+      "app": "ota-api",
+      "detail": "Provision/migrate/suspend/resume tenant schemas; reads platform tables."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Velexis account; pinned `apiVersion`, idempotency keys, 10 s timeout."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus OAuth",
+      "group": "ext",
+      "kind": "external",
+      "detail": "`POST {baseUrl}/v1/security/oauth2/token`, token discarded."
+    },
+    {
+      "id": "smtp",
+      "label": "SMTP / DNS",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Nodemailer to `SMTP_URL`; `node:dns` Resolver on `DNS_RESOLVERS`."
+    }
+  ],
+  "edges": [
+    {
+      "from": "portal",
+      "to": "pipeline",
+      "label": "/v1/**",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "pipeline",
+      "label": "/webhooks/*, /internal/tls/ask",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "auth",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "tenants",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "members",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "keys",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "domains",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "conns",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "billing",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "settle",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pipeline",
+      "to": "admin",
+      "label": "/v1/admin/**",
+      "kind": "sync"
+    },
+    {
+      "from": "admin",
+      "to": "tenants",
+      "label": "suspend, retry, migrate",
+      "kind": "sync"
+    },
+    {
+      "from": "tenants",
+      "to": "base",
+      "label": "audit + outbox",
+      "kind": "sync"
+    },
+    {
+      "from": "auth",
+      "to": "base",
+      "label": "audit + outbox",
+      "kind": "sync"
+    },
+    {
+      "from": "base",
+      "to": "pg",
+      "label": "same transaction",
+      "kind": "data"
+    },
+    {
+      "from": "tenants",
+      "to": "qota",
+      "label": "dispatch after commit",
+      "kind": "async"
+    },
+    {
+      "from": "billing",
+      "to": "qplat",
+      "label": "stripe.event",
+      "kind": "async"
+    },
+    {
+      "from": "domains",
+      "to": "qplat",
+      "label": "domain.verify",
+      "kind": "async"
+    },
+    {
+      "from": "conns",
+      "to": "qplat",
+      "label": "credentials.verify",
+      "kind": "async"
+    },
+    {
+      "from": "qota",
+      "to": "ota",
+      "label": "tenant.*",
+      "kind": "async"
+    },
+    {
+      "from": "ota",
+      "to": "qplat",
+      "label": "tenant.provisioned …",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wte",
+      "label": "platform-tenant-events",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wmail",
+      "label": "platform-emails",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wstripe",
+      "label": "platform-stripe-events",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wdom",
+      "label": "platform-domains",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wconn",
+      "label": "platform-connections",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wstl",
+      "label": "platform-settlements",
+      "kind": "async"
+    },
+    {
+      "from": "qplat",
+      "to": "wmaint",
+      "label": "platform-maintenance",
+      "kind": "async"
+    },
+    {
+      "from": "wte",
+      "to": "pg",
+      "label": "post-steps",
+      "kind": "data"
+    },
+    {
+      "from": "wstripe",
+      "to": "stripe",
+      "label": "re-fetch",
+      "kind": "sync"
+    },
+    {
+      "from": "wstl",
+      "to": "stripe",
+      "label": "balance transactions",
+      "kind": "sync"
+    },
+    {
+      "from": "wconn",
+      "to": "amadeus",
+      "label": "token request",
+      "kind": "sync"
+    },
+    {
+      "from": "wmail",
+      "to": "smtp",
+      "label": "SMTP",
+      "kind": "sync"
+    },
+    {
+      "from": "wdom",
+      "to": "smtp",
+      "label": "DNS lookups",
+      "kind": "sync"
+    },
+    {
+      "from": "auth",
+      "to": "redis",
+      "label": "mfach:, staffdeny:",
+      "kind": "data"
+    },
+    {
+      "from": "members",
+      "to": "redis",
+      "label": "ptk: (60 s)",
+      "kind": "data"
+    },
+    {
+      "from": "tenants",
+      "to": "redis",
+      "label": "vx:invalidate",
+      "kind": "async"
+    },
+    {
+      "from": "redis",
+      "to": "ota",
+      "label": "vx:invalidate, GETDEL ptk:",
+      "kind": "async"
+    }
+  ]
+}

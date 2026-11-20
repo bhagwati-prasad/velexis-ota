@@ -1,0 +1,38 @@
+{
+  "id": "flow-custom-domain",
+  "type": "flow",
+  "title": "Add and verify a custom domain",
+  "caption": "Needs FEATURE_CUSTOM_DOMAINS=true, STOREFRONT_IPV4 set and a plan with limits.customDomains > 0.",
+  "steps": [
+    {
+      "title": "Add",
+      "actor": "Owner",
+      "body": "`POST /v1/tenants/{tenantId}/domains {hostname: \"travel.acme.example.com\"}`.",
+      "expect": "`pending` row with records to create: `TXT _velexis.<host>`, `CNAME` to `<key>.ota.example.com` (or A/AAAA). `422 DOMAIN_INVALID` for a Velexis host or bad name; `409 DOMAIN_TAKEN`. Switch off or a plan with `customDomains = 0` (`early_access`): `403 FEATURE_DISABLED`."
+    },
+    {
+      "title": "Check now",
+      "actor": "Owner",
+      "body": "`POST …/domains/{domainId}/check` (1 per minute per domain).",
+      "expect": "Job `domain.verify` on `platform-domains`; a second call within a minute `429`."
+    },
+    {
+      "title": "Verified",
+      "actor": "Worker",
+      "body": "DNS found through `DNS_RESOLVERS`.",
+      "expect": "`verification_status = 'verified'`; e-mail `domain.verified`; vx:invalidate domain."
+    },
+    {
+      "title": "Make primary",
+      "actor": "Owner",
+      "body": "`POST …/domains/{domainId}/make-primary`.",
+      "expect": "Only one primary per tenant; unverified `409 DOMAIN_NOT_VERIFIED`."
+    },
+    {
+      "title": "TLS",
+      "actor": "Caddy",
+      "body": "`GET /internal/tls/ask?domain=<host>` from loopback.",
+      "expect": "`200` only for a verified custom domain of an active OTA with the switch on, or `<key>.<base>` of a provisioning/active/suspended OTA."
+    }
+  ]
+}

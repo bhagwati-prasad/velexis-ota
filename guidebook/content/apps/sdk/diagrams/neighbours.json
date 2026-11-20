@@ -1,0 +1,128 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Who uses the SDK, and what it talks to",
+  "caption": "The SDK is a library: it runs inside its callers and talks only to the OTA booking API. Each caller picks one session mode when it creates its client. Click a node for details.",
+  "groups": [
+    { "id": "callers", "label": "Code that embeds the SDK" },
+    { "id": "sdk", "label": "@velexis/ota-sdk (ota/sdk)" },
+    { "id": "edge", "label": "Edge" },
+    { "id": "api", "label": "OTA backend" },
+    { "id": "build", "label": "Build and contract inputs" }
+  ],
+  "nodes": [
+    {
+      "id": "storefront",
+      "label": "Hosted storefront (browser)",
+      "group": "callers",
+      "kind": "ui",
+      "app": "storefront",
+      "term": "cookie-mode",
+      "detail": "`createVelexisClient({ baseUrl: \"/api\", session: \"cookie\" })` in `ota/frontend/src/lib/client.js`. Derived clients: `withOptions({ currency })` (boot.js) and `withOptions({ maxRetries: 0 })` for fare rules (pages/booking.js)."
+    },
+    {
+      "id": "otaadmin",
+      "label": "OTA admin server (Next.js)",
+      "group": "callers",
+      "kind": "ui",
+      "app": "ota-admin",
+      "term": "server-mode",
+      "detail": "`createConsoleClient` in `ota/admin/src/lib/velexis.ts`: `secretKey = OTA_ADMIN_SERVICE_KEY`, `baseUrl = OTA_API_URL` (loopback), the staff access token, `sessionKind: \"staff\"`, `environment`, end-user headers. No refresh token: the admin refreshes itself (OADR-0018)."
+    },
+    {
+      "id": "browser3p",
+      "label": "Third-party browser app",
+      "group": "callers",
+      "kind": "user",
+      "term": "token-mode",
+      "detail": "`publishableKey: \"pk_…\"`, tokens held by the integrator. Its page origin must be in the key's allowed origins (`platform.api_keys.allowed_origins`), else `403 ORIGIN_NOT_ALLOWED`."
+    },
+    {
+      "id": "server3p",
+      "label": "Third-party server / custom console",
+      "group": "callers",
+      "kind": "user",
+      "term": "server-mode",
+      "detail": "`secretKey: \"sk_…\"` (refused when `document` exists). Per request `withOptions({ accessToken, refreshToken, endUser })`. A `storefront`-scoped key cannot reach the console; a `console:automation` key can, within its permissions."
+    },
+    {
+      "id": "smoke",
+      "label": "SDK smoke tests",
+      "group": "callers",
+      "kind": "worker",
+      "term": "sdk-smoke-tests",
+      "detail": "`test/smoke/*.smoke.test.js`: token mode and server mode against the local API and the Amadeus stub, with the three `dev:seed` keys. Nightly in `.github/workflows/e2e.yml`."
+    },
+    {
+      "id": "core",
+      "label": "createVelexisClient + 8 namespaces",
+      "group": "sdk",
+      "kind": "lib",
+      "term": "velexis-sdk",
+      "detail": "`src/index.js`: `storefront`, `reference`, `flights`, `checkout`, `bookings`, `auth`, `account`, `console`, plus `withOptions` and `request`. 129 methods."
+    },
+    {
+      "id": "session",
+      "label": "Session (cookie / token / server)",
+      "group": "sdk",
+      "kind": "lib",
+      "term": "automatic-refresh",
+      "detail": "`src/internal/session.js`: credentials per mode, CSRF, the automatic refresh, the client family."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy (storefront host /api/*)",
+      "group": "edge",
+      "kind": "edge",
+      "app": "deploy",
+      "term": "edge-caller",
+      "detail": "Strips `/api`, adds `X-Velexis-Edge` and `X-Velexis-Host`. Only cookie-mode calls go this way."
+    },
+    {
+      "id": "api",
+      "label": "OTA API :4000",
+      "group": "api",
+      "kind": "api",
+      "app": "ota-api",
+      "detail": "`ota/backend`: validates every request against the OpenAPI document, resolves the key or edge caller, runs in the tenant schema through tenantTx."
+    },
+    {
+      "id": "openapi",
+      "label": "OpenAPI document",
+      "group": "build",
+      "kind": "lib",
+      "term": "x-sdk-method",
+      "detail": "`ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`: every operation's `x-sdk-method`, `x-error-codes`, `x-idempotent-by-design`, `x-scope`. `pnpm --filter @velexis/ota-sdk generate` turns it into the route table."
+    },
+    {
+      "id": "contract",
+      "label": "Contract .d.ts (frozen)",
+      "group": "build",
+      "kind": "lib",
+      "term": "contract-declarations",
+      "detail": "`docs/velexis-sdk/sdk/src/*.d.ts`: never edited. The contract test compiles the SDK's emitted types against them."
+    },
+    {
+      "id": "apitypes",
+      "label": "@velexis/api-types",
+      "group": "build",
+      "kind": "lib",
+      "app": "packages",
+      "detail": "Generated schema types; JSDoc imports only. The build copies the OTA part into `dist/types/api-types.d.ts`."
+    }
+  ],
+  "edges": [
+    { "from": "storefront", "to": "core", "label": "imports (cookie mode)", "kind": "sync" },
+    { "from": "otaadmin", "to": "core", "label": "imports (server mode, staff)", "kind": "sync" },
+    { "from": "browser3p", "to": "core", "label": "imports (token mode)", "kind": "sync" },
+    { "from": "server3p", "to": "core", "label": "imports (server mode)", "kind": "sync" },
+    { "from": "smoke", "to": "core", "label": "src/index.js directly", "kind": "sync" },
+    { "from": "core", "to": "session", "label": "core.call → session.send", "kind": "sync" },
+    { "from": "session", "to": "caddy", "label": "same-origin /api/* with cookies", "kind": "sync" },
+    { "from": "caddy", "to": "api", "label": "edge credential", "kind": "sync" },
+    { "from": "session", "to": "api", "label": "HTTPS with X-Api-Key (+ Bearer)", "kind": "sync" },
+    { "from": "openapi", "to": "core", "label": "generate → operations.js", "kind": "data" },
+    { "from": "contract", "to": "core", "label": "contract test", "kind": "data" },
+    { "from": "apitypes", "to": "core", "label": "JSDoc types", "kind": "data" }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "id": "portal",
+  "name": "Portal",
+  "kind": "frontend",
+  "product": "platform",
+  "summary": "Where an OTA owner signs up, creates and configures OTAs, manages the team, billing and API keys.",
+  "audience": ["OTA owner", "OTA staff"],
+  "repoPath": "platform/frontend",
+  "package": "@velexis/platform-frontend",
+  "stack": ["Next.js App Router", "React", "Tailwind CSS", "Server actions (BFF)"],
+  "local": {
+    "url": "http://localhost:3000",
+    "port": 3000,
+    "command": "pnpm --filter @velexis/platform-frontend dev",
+    "notes": "Needs the platform API on port 3100 and Mailpit for e-mails."
+  },
+  "production": { "host": "platform.example.com" },
+  "dependsOn": ["platform-api"],
+  "talksTo": [{ "app": "platform-api", "how": "HTTPS from the server (BFF), session cookie" }],
+  "data": ["platform.accounts", "platform.tenants", "platform.tenant_memberships"],
+  "docs": ["platform/docs/architecture.md", "platform/docs/data-model.md"],
+  "adrs": [
+    "docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md",
+    "docs/mvp/adr/0004-postgresql-schema-per-tenant.md"
+  ],
+  "roles": [
+    { "name": "OTA owner", "can": "Everything in their OTAs, including billing and deleting the OTA." },
+    { "name": "Admin", "can": "Team, settings, domains and API keys; not billing." },
+    { "name": "Viewer", "can": "Read-only access to the OTA's pages." }
+  ],
+  "screens": [
+    {
+      "route": "/sign-up",
+      "title": "Sign up",
+      "purpose": "Create a portal account.",
+      "code": "platform/frontend/src/app/(auth)/sign-up/page.tsx"
+    },
+    {
+      "route": "/sign-in",
+      "title": "Sign in",
+      "purpose": "E-mail and password, then MFA when enabled.",
+      "code": "platform/frontend/src/app/(auth)/sign-in/page.tsx"
+    },
+    {
+      "route": "/dashboard",
+      "title": "Dashboard",
+      "purpose": "List of the account's OTAs.",
+      "code": "platform/frontend/src/app/(app)/dashboard/page.tsx"
+    },
+    {
+      "route": "/otas/new",
+      "title": "New OTA",
+      "purpose": "Create an OTA (tenant).",
+      "code": "platform/frontend/src/app/(app)/otas/new/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/billing",
+      "title": "Billing",
+      "purpose": "Plan, subscription and invoices.",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/billing/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/team",
+      "title": "Team",
+      "purpose": "Invite members and change roles.",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/team/page.tsx"
+    }
+  ],
+  "endpoints": [],
+  "tags": ["nextjs", "bff", "sign-up"]
+}

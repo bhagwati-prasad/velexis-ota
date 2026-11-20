@@ -1,0 +1,26 @@
+{
+  "id": "check-api-health",
+  "title": "Check the platform API is healthy",
+  "summary": "Two quick calls that prove the [[app:platform-api]] and its database are up.",
+  "apps": ["platform-api"],
+  "roles": ["Developer"],
+  "duration": "2 min",
+  "prerequisites": ["The platform API runs locally."],
+  "steps": [
+    {
+      "id": "ready",
+      "app": "platform-api",
+      "title": "Readiness",
+      "url": "http://localhost:3100/health/ready",
+      "actions": "Open the URL.",
+      "expect": "HTTP 200 and a JSON body."
+    },
+    {
+      "id": "me-anonymous",
+      "app": "platform-api",
+      "title": "Anonymous /v1/me",
+      "actions": "Run `curl -i http://localhost:3100/v1/me`.",
+      "expect": "HTTP 401 with a problem+json body; no stack trace."
+    }
+  ]
+}

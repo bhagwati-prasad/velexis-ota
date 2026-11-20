@@ -1,0 +1,38 @@
+{
+  "id": "flow-drive-stub",
+  "type": "flow",
+  "title": "Drive the Amadeus stub by hand",
+  "caption": "tools/amadeus-stub/README.md. The stub binds 127.0.0.1 only and refuses to start in production.",
+  "steps": [
+    {
+      "title": "Start",
+      "actor": "Developer",
+      "body": "`pnpm stub:amadeus` (or `STUB_PORT=4901 pnpm stub:amadeus`).",
+      "expect": "`amadeus-stub: listening on http://127.0.0.1:4900 (ready in … ms …`, then one line per request: `amadeus-stub: GET /v2/shopping/flight-offers 200 [success] 3 ms`."
+    },
+    {
+      "title": "Token",
+      "actor": "Developer",
+      "body": "`curl -s -X POST http://127.0.0.1:4900/v1/security/oauth2/token -d 'grant_type=client_credentials&client_id=x&client_secret=y'`",
+      "expect": "`200` with `access_token` and `expires_in: 1799`. Without `grant_type`: `400` code 38187."
+    },
+    {
+      "title": "Search",
+      "actor": "Developer",
+      "body": "`curl -s -H \"Authorization: Bearer $T\" 'http://127.0.0.1:4900/v2/shopping/flight-offers?originLocationCode=MAD&destinationLocationCode=PAR&departureDate=2027-01-15&adults=1&max=2'`",
+      "expect": "`200`, `meta.count` 2. With `destinationLocationCode=ZZZ`: `{\"meta\":{\"count\":0},\"data\":[]}`."
+    },
+    {
+      "title": "Scenario",
+      "actor": "Developer",
+      "body": "Add `-H 'X-Stub-Scenario: server-error'` (or `rate-limited`, `timeout`).",
+      "expect": "`500` code 141; `429` code 38194; `timeout` holds 30 s then `504`. `X-Stub-Scenario: nope` → `400` code 90001 listing the names."
+    },
+    {
+      "title": "Validation",
+      "actor": "Developer",
+      "body": "Drop `originLocationCode`.",
+      "expect": "`400` code 32171 `MANDATORY DATA MISSING`, `source.parameter: originLocationCode`."
+    }
+  ]
+}

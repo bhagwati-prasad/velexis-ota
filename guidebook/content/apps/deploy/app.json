@@ -1,0 +1,260 @@
+{
+  "id": "deploy",
+  "name": "Deploy and operations (single VM)",
+  "kind": "infrastructure",
+  "product": "shared",
+  "summary": "Everything that runs Velexis on one Ubuntu 24.04 VM without Docker: provisioning and its read-only check, the release-and-deploy pipeline with automatic rollback, Caddy with the Coraza WAF and on-demand TLS, seven sandboxed systemd units in five trust zones, PostgreSQL 16 and Redis 7.4 settings, the outbound allow-list, backups and restores, the on-VM health check, the security logs and their review, plus the GitHub workflows (CI, E2E, Deploy) that feed it.",
+  "audience": [
+    "Owner and operator of the VM (deploys, rollbacks, backups, restore drills, alerts)",
+    "Bug hunter checking what a deploy, a health check or a backup actually changed",
+    "Developers changing units, the Caddyfile, env templates or the deploy scripts"
+  ],
+  "repoPath": "deploy",
+  "package": "none (bash scripts, Caddyfile, systemd units, SQL and env templates; no npm package)",
+  "stack": [
+    "Ubuntu 24.04 LTS, systemd (units, timers, transient units, DynamicUser)",
+    "Caddy 2.8.4 built with coraza-caddy v2.0.0, Coraza v3.8.1 and OWASP CRS v4.7.0 (Go 1.26.11, pinned SHA-256)",
+    "PostgreSQL 16 (PGDG), Redis 7.4 (packages.redis.io), Node.js 24 (NodeSource, pinned major)",
+    "bash 5 + curl, jq, openssl, age, zstd, rclone, nftables, ufw, auditd, AIDE, fail2ban, chrony",
+    "GitHub Actions: ci.yml, e2e.yml, deploy.yml (actions pinned to full commit SHAs)",
+    "Tests: deploy.test.sh, healthcheck.test.sh, backup-restore.test.sh, ship-logs/log-review tests, check-vm.test.sh, units-smoke.sh, caddy-smoke.sh"
+  ],
+  "local": {
+    "port": 5432,
+    "command": "bash deploy/scripts/dev-setup.sh",
+    "notes": "Locally only `dev-setup.sh` applies: it starts PostgreSQL 16 (127.0.0.1:5432) and Redis 7.4 (127.0.0.1:6379), runs `deploy/postgres/bootstrap.sql` with the development passwords of `.env.example` (development only: `dev_migrator`, `dev_provisioner`, `dev_platform`, `dev_ota`, `dev_test_admin`, Redis `dev_redis`) and refuses to run where `/etc/velexis` exists. Then `pnpm dev:keys`, `pnpm build && pnpm db:migrate && pnpm db:seed:reference`, `pnpm dev`. The VM scripts have test harnesses that run without root (`bash deploy/scripts/test/deploy.test.sh`, `healthcheck.test.sh`, ...); never run `provision-vm.sh` or `check-vm.test.sh` on your own machine."
+  },
+  "production": {
+    "host": "One VM; public hosts platform.example.com, admin.platform.example.com, api.platform.example.com, admin.ota.example.com, api.ota.example.com, *.ota.example.com and verified custom domains (ports 80/443 via Caddy, 22 for SSH)",
+    "release": "/srv/velexis/releases/<sha> (current = /srv/velexis/current)",
+    "config": "/etc/velexis/*.env (root:root 0600), /etc/velexis/keys/{platform,ota}/",
+    "logs": "journald (30 days), /var/log/velexis/, /var/log/velexis/security/, bucket logs/"
+  },
+  "dependsOn": ["platform-api", "portal", "platform-admin", "ota-api", "ota-admin", "storefront", "packages"],
+  "talksTo": [
+    {
+      "app": "platform-api",
+      "how": "Caddy proxies api.platform.example.com to 127.0.0.1:3100; on-demand TLS asks GET 127.0.0.1:3100/internal/tls/ask; velexis-deploy polls 127.0.0.1:3100 and :3101 /health/ready"
+    },
+    {
+      "app": "ota-api",
+      "how": "Caddy proxies api.ota.example.com and storefront /api/* to 127.0.0.1:4000 (X-Velexis-Edge, X-Velexis-Host set by Caddy); deploy publishes the tenant fan-out report via velexis-run ota node dist/cli.js tenants:report-migrations"
+    },
+    {
+      "app": "portal",
+      "how": "Caddy proxies platform.example.com to 127.0.0.1:3000 (maintenance page on 502/503/504); unit velexis-portal"
+    },
+    {
+      "app": "platform-admin",
+      "how": "Caddy proxies admin.platform.example.com to 127.0.0.1:3001; unit velexis-platform-admin"
+    },
+    {
+      "app": "ota-admin",
+      "how": "Caddy proxies admin.ota.example.com to 127.0.0.1:3002; unit velexis-ota-admin"
+    },
+    {
+      "app": "storefront",
+      "how": "Caddy serves /srv/velexis/current/storefront as static files with a strict CSP; the health check compares the payment pages with payment-page-inventory.json daily"
+    },
+    {
+      "app": "packages",
+      "how": "Runs @velexis/db migrate.js (platform, reference, tenants) and the reference-data loader as transient units with a dynamic user"
+    }
+  ],
+  "data": [
+    "platform.schema_migrations",
+    "reference.schema_migrations",
+    "tenant_<key>.schema_migrations",
+    "platform.tenants (schema_version)",
+    "platform.tenant_schema_migrations",
+    "platform.provisioning_jobs",
+    "platform.platform_audit_log",
+    "Redis queue platform-tenant-events (deploy fan-out report)",
+    "Redis key tlsask:<host> (platform API, 60 s)",
+    "/var/lib/velexis/* state files (deploy-history, caddy-dropin.sha256, reference-data.sha256, migrate-<sha>.json, backup-last-success, healthcheck/, egress/, ship-logs/, log-review/, provision/)"
+  ],
+  "docs": [
+    "deploy/README.md",
+    "docs/mvp/deployment-single-vm.md",
+    "docs/mvp/runbooks/outbound-allow-list.md",
+    "docs/mvp/runbooks/restore-drill.md",
+    "docs/mvp/runbooks/ssh-access.md",
+    "docs/mvp/runbooks/master-key-rotation.md",
+    "docs/mvp/runbooks/node-upgrade.md",
+    "ota/docs/runbooks/README.md",
+    "platform/docs/runbooks/platform-operations.md",
+    "ota/docs/pci/README.md",
+    "deploy/caddy/test/README.md",
+    "tools/ci/README.md"
+  ],
+  "adrs": [
+    "docs/mvp/adr/0007-single-vm-without-docker.md",
+    "docs/mvp/adr/0009-background-jobs-bullmq.md",
+    "docs/mvp/adr/0010-secrets-envelope-encryption.md",
+    "docs/mvp/adr/0016-observability.md",
+    "docs/mvp/adr/0018-hosted-storefront-custom-domains.md",
+    "docs/mvp/adr/0023-release-artefact-and-deploy-user.md",
+    "docs/mvp/adr/0026-system-users-per-trust-zone.md",
+    "docs/mvp/adr/0027-pci-scope-and-vm-controls.md",
+    "docs/mvp/adr/0028-how-work-reaches-main.md",
+    "docs/mvp/adr/0029-nodejs-24-runtime.md"
+  ],
+  "roles": [
+    {
+      "name": "Developer / operator (admin user)",
+      "can": "SSH with key + FIDO2 or TOTP second factor, sudo: provision, check-vm, velexis-deploy, velexis-run, backups, restores, emergency egress openings"
+    },
+    {
+      "name": "deploy (system user)",
+      "can": "SSH key only (restrict, no TTY); rsync into /srv/velexis/incoming and sudo /usr/local/sbin/velexis-deploy only"
+    },
+    {
+      "name": "GitHub production environment",
+      "can": "Holds DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS; the deploy job needs the developer's approval and runs only from main or v* tags"
+    },
+    {
+      "name": "Zone users velexis-platform, velexis-ota, velexis-portal, velexis-platform-admin, velexis-ota-admin",
+      "can": "Run their units; read releases via group velexis; backend zones read their own key folder; no env file, no other zone"
+    },
+    {
+      "name": "caddy",
+      "can": "Runs Caddy; owns /run/caddy (admin socket); reads world-readable storefront files"
+    },
+    {
+      "name": "PostgreSQL roles",
+      "can": "velexis_migrator (DDL, deploy only), velexis_provisioner (tenant schemas), velexis_platform_app (DML platform/reference), velexis_ota_app (DML tenants, read platform/reference)"
+    }
+  ],
+  "screens": [],
+  "endpoints": [
+    {
+      "method": "CLI",
+      "path": "sudo velexis-deploy <sha> | --rollback | --status",
+      "operationId": "deploy.sh",
+      "purpose": "Activate an uploaded release, roll back to the previous one, or show current release and unit states (all three take the deploy lock; root only)"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo velexis-run <zone> <command...>",
+      "operationId": "run-as.sh",
+      "purpose": "One-off CLI as a zone user with its unit's env files, folder and sandbox (exit 125 = refused)"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo velexis-healthcheck [--status | --payment-pages]",
+      "operationId": "healthcheck.sh",
+      "purpose": "On-VM checks every 5 min; alerts only on state changes"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo systemctl start velexis-backup",
+      "operationId": "backup.sh",
+      "purpose": "Encrypted backup now (also nightly 02:30 UTC)"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo velexis-restore list | fetch | db | storage | redis | config | drill",
+      "operationId": "restore.sh",
+      "purpose": "Fetch, verify and restore a backup set; scratch database by default"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo velexis-shiplogs [--status]",
+      "operationId": "ship-logs.sh",
+      "purpose": "Ship security logs (hourly :05) encrypted to the bucket's logs/"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo velexis-logreview [--status | --summary]",
+      "operationId": "log-review.sh",
+      "purpose": "Hourly review (:20), immediate alerts, daily summary after 06:00 UTC"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo velexis-egress [refresh | validate | check-apt | apt-hosts | parse]",
+      "operationId": "egress.sh",
+      "purpose": "Load/refresh the nftables table inet velexis_egress (every 2 min)"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo bash provision-vm.sh [--steps a,b]",
+      "operationId": "provision-vm.sh",
+      "purpose": "Idempotent VM provisioning: packages node harden users postgres redis caddy keys database envfiles scripts caddyconf summary (+ ssh, egress by name)"
+    },
+    {
+      "method": "CLI",
+      "path": "sudo bash check-vm.sh [--only groups] [--templates dir]",
+      "operationId": "check-vm.sh",
+      "purpose": "Read-only PASS/FAIL per hardening item; never prints a value"
+    },
+    {
+      "method": "CLI",
+      "path": "bash deploy/scripts/dev-setup.sh",
+      "operationId": "dev-setup.sh",
+      "purpose": "Local PostgreSQL/Redis bootstrap with development passwords"
+    },
+    {
+      "method": "CLI",
+      "path": "bash deploy/scripts/pack-release.sh [out-root]",
+      "operationId": "pack-release.sh",
+      "purpose": "Build release/<sha>/ with RELEASE.json, SHA256SUMS and caddy/bin/caddy (CI)"
+    },
+    {
+      "method": "GET",
+      "path": "https://api.platform.example.com/health/live",
+      "operationId": "uptime-platform-api",
+      "purpose": "External uptime monitor: 200 with \"status\":\"ok\""
+    },
+    {
+      "method": "GET",
+      "path": "https://api.ota.example.com/health/live",
+      "operationId": "uptime-ota-api",
+      "purpose": "External uptime monitor: 200 with \"status\":\"ok\""
+    },
+    {
+      "method": "GET",
+      "path": "http://127.0.0.1:<port>/health/ready",
+      "operationId": "readiness",
+      "purpose": "Loopback readiness of each unit (3000-3002, 3100, 3101, 4000, 4001); 404 through Caddy"
+    },
+    {
+      "method": "GET",
+      "path": "http://127.0.0.1:3100/internal/tls/ask?domain=<host>",
+      "operationId": "tlsAsk",
+      "purpose": "Caddy's on-demand TLS gate; 200 issues a certificate, 404 refuses (positive answers cached in Redis tlsask:<host> 60 s)"
+    },
+    {
+      "method": "WORKFLOW",
+      "path": "Actions > Deploy > Run workflow (main or v*)",
+      "operationId": "deploy.yml",
+      "purpose": "build (no secrets) + e2e, then deploy (production environment, approval)"
+    },
+    {
+      "method": "WORKFLOW",
+      "path": "CI on every pull request and push to main",
+      "operationId": "ci.yml",
+      "purpose": "plan-lint, deploy-files, systemd-units, check-vm, dev-setup, build-test, integration, alt-hosts, sdk-node22"
+    },
+    {
+      "method": "WORKFLOW",
+      "path": "E2E nightly 02:23 UTC, on demand, label e2e, called by Deploy",
+      "operationId": "e2e.yml",
+      "purpose": "Playwright projects portal, platform-admin, storefront, ota-admin (+ Stripe projects, SDK smoke)"
+    }
+  ],
+  "tags": [
+    "infrastructure",
+    "single-vm",
+    "systemd",
+    "caddy",
+    "waf",
+    "tls",
+    "backups",
+    "restore",
+    "monitoring",
+    "security-logs",
+    "egress",
+    "ci-cd",
+    "pci"
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "id": "seq-sign-in-mfa",
+  "type": "sequence",
+  "title": "Sign in with two-factor authentication",
+  "caption": "The MFA challenge lives in a 5-minute SameSite=Strict cookie; session cookies are written only after the code.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Browser",
+      "kind": "user"
+    },
+    {
+      "id": "p",
+      "label": "Portal (sign-in actions)",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    },
+    {
+      "id": "r",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "db",
+      "label": "PostgreSQL",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "p",
+      "label": "POST sign-in form (email, password, hidden next)",
+      "kind": "call"
+    },
+    {
+      "from": "p",
+      "to": "p",
+      "label": "Zod: address ≤254, password typed; safeNextPath(next)",
+      "kind": "self"
+    },
+    {
+      "from": "p",
+      "to": "api",
+      "label": "POST /v1/auth/sign-in (no Bearer, end-user headers)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "lockout counters, password check",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "SET mfach:<sha256> (5 min, 5 attempts)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "p",
+      "label": "{mfaRequired, mfaChallengeToken, expiresIn}",
+      "kind": "return"
+    },
+    {
+      "from": "p",
+      "to": "b",
+      "label": "Set __Host-vxp_mfa (Strict) + __Host-vxp_next; 303 /sign-in/mfa",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "p",
+      "label": "POST code (or recovery code, method=recovery)",
+      "kind": "call"
+    },
+    {
+      "from": "p",
+      "to": "api",
+      "label": "POST /v1/auth/mfa/verify {mfaChallengeToken, code}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "account_sessions: new family (audience portal, 30-day family expiry)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "p",
+      "label": "PortalSession",
+      "kind": "return"
+    },
+    {
+      "from": "p",
+      "to": "b",
+      "label": "Set __Host-vxp_at + __Host-vxp_rt; delete mfa/next cookies; 303 next or /dashboard",
+      "kind": "return",
+      "note": "MFA_CHALLENGE_INVALID → /sign-in?mfa=expired"
+    }
+  ]
+}

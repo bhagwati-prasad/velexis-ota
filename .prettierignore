@@ -15,6 +15,7 @@ packages/db/src/generated/
 packages/errors/src/generated/
 ota/backend/src/amadeus/generated/
 ota/sdk/src/internal/operations.js
+guidebook/dist/
 
 # OpenAPI documents are formatted by their own tooling (Redocly); never reflow them.
 **/openapi/

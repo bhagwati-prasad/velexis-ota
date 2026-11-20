@@ -1,0 +1,42 @@
+{
+  "id": "flow-work-bookings",
+  "type": "flow",
+  "title": "Work the needs-attention list",
+  "caption": "Dashboard counts and the bookings list's saved views ask the API the same question (bookings/views.ts).",
+  "steps": [
+    {
+      "title": "Read the dashboard",
+      "actor": "Agent",
+      "screen": "/",
+      "url": "http://localhost:3002/",
+      "body": "Look at the three counts and the authorised payments.",
+      "expect": "A count that is not 0 is amber; \"10,000+\" for a `null` total; a failed tile shows its own error and request id."
+    },
+    {
+      "title": "Open the view",
+      "actor": "Agent",
+      "screen": "/bookings",
+      "body": "Click a count (e.g. Ticketing failed or in manual review).",
+      "expect": "`/bookings` with the view marked and the same total; rows with reference, locator, lead traveller, status, ticketing + deadline, payment, total with net and markup."
+    },
+    {
+      "title": "Narrow and page",
+      "actor": "Agent",
+      "body": "Add a filter (Channel = Imported) and go to the next page.",
+      "expect": "The URL holds every filter and `cursor`; **First page** drops the cursor; a deadline view keeps `asOf`."
+    },
+    {
+      "title": "Open a booking",
+      "actor": "Agent",
+      "screen": "/bookings/<bookingId>",
+      "body": "Open a row.",
+      "expect": "**What needs staff** names the reason; Booking actions match the permissions and `consoleActions`."
+    },
+    {
+      "title": "Act and check",
+      "actor": "Agent",
+      "body": "Issue, cancel or resync, then go back to the view.",
+      "expect": "The booking left the view; the dashboard count dropped by one."
+    }
+  ]
+}

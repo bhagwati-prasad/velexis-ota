@@ -1,0 +1,39 @@
+{
+  "id": "flow-cancel-booking",
+  "type": "flow",
+  "title": "Cancel a booking",
+  "caption": "Mirrors sso-bookings.e2e.ts (an airline-card booking ticketed today, voided). The step comes from the API's cancellationMode in storefront_settings.time_zone.",
+  "steps": [
+    {
+      "title": "Open the dialog",
+      "actor": "Agent",
+      "screen": "/bookings/<bookingId>",
+      "body": "Press **Cancel the booking**.",
+      "expect": "The Amadeus step in words: release (nothing ticketed), void (tickets issued today) or a request to the airline; the money choices of the payment."
+    },
+    {
+      "title": "Fill it",
+      "actor": "Agent",
+      "body": "Choose a **Reason category** (e.g. The customer asked), type a reason, choose the money (none / full / amount), keep or untick the e-mail.",
+      "expect": "Airline card: only \"No refund from the console\" (the void reverses the airline's charge). Request to the airline: no refund choice."
+    },
+    {
+      "title": "Confirm",
+      "actor": "Agent",
+      "body": "Press **Cancel the booking**.",
+      "expect": "Release/void: Cancelled. Request: \"Cancellation requested from the airline: the booking is not cancelled yet.\" with the API's warning; Cancel no longer offered."
+    },
+    {
+      "title": "Check the data",
+      "actor": "Tester",
+      "body": "`SELECT status, cancelled_by, cancel_reason FROM tenant_<key>.bookings WHERE id='<id>';`, `SELECT amount, reason, status FROM tenant_<key>.refunds WHERE booking_id='<id>';`",
+      "expect": "`cancelled / staff / customer_request: <reason>`; a refund row for a Stripe refund (none for an airline card); `booking.cancel` staff action with `mode`; Mailpit `booking.cancelled` (or `booking.cancellation_requested`)."
+    },
+    {
+      "title": "Edge: refund above what is left",
+      "actor": "Tester",
+      "body": "Choose **amount** above the captured amount.",
+      "expect": "\"at most …\" on the amount (the API's `details.refundable`); nothing cancelled."
+    }
+  ]
+}

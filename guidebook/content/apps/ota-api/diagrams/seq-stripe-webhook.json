@@ -1,0 +1,66 @@
+{
+  "id": "seq-stripe-webhook",
+  "type": "sequence",
+  "title": "Stripe webhook → payment_events → ota-stripe-events",
+  "caption": "The receiver trusts only the signature and the tenant rule of its endpoint; the worker never trusts the event body and re-reads the object from Stripe (src/payments/webhooks/webhook-receiver.service.ts, stripe-events.processor.ts, payment-state.ts).",
+  "actors": [
+    { "id": "stripe", "label": "Stripe", "kind": "external" },
+    { "id": "api", "label": "OTA API /webhooks/stripe/**", "kind": "api" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" },
+    { "id": "q", "label": "ota-stripe-events", "kind": "queue" },
+    { "id": "w", "label": "OTA worker", "kind": "worker" }
+  ],
+  "steps": [
+    {
+      "from": "stripe",
+      "to": "api",
+      "label": "POST /webhooks/stripe/velexis/test (or connect/{env}, c/{connectionId}) + Stripe-Signature, raw body",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "verify signature with STRIPE_WEBHOOK_SECRET_* (5 min tolerance) → else 400 INVALID_REQUEST signature_invalid",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "livemode = environment; tenant from metadata.velexis_tenant_id (velexis) or the connection (connect, c/)",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "payment by metadata.payment_id / PaymentIntent id; INSERT payment_events (source webhook, provider_event_id unique)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "q",
+      "label": "stripe.event {tenantId, paymentEventId} (job id = Stripe event id)",
+      "kind": "async",
+      "note": "Redis down or lookup failure: 503, Stripe sends again. A duplicate event id writes no second row. Unknown tenant/payment or any mismatch: 200 without effect (security event in the log)."
+    },
+    { "from": "api", "to": "stripe", "label": "200 {received: true}", "kind": "return" },
+    { "from": "w", "to": "q", "label": "consume (concurrency 4)", "kind": "call" },
+    {
+      "from": "w",
+      "to": "stripe",
+      "label": "re-read PaymentIntent / charge / refund (never trust the body)",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "payment-state rules: authorized → captured | canceled; captured never moves back; refunds pending → processing → succeeded | failed; version check",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "payment and refund rows updated with their payment_events (status_from/status_to); staff alert on disputes",
+      "kind": "call"
+    }
+  ]
+}

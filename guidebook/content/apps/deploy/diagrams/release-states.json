@@ -1,0 +1,124 @@
+{
+  "id": "release-states",
+  "type": "state",
+  "title": "Lifecycle of a release on the VM",
+  "caption": "deploy/scripts/deploy.sh. Paths: /srv/velexis/incoming/<sha> → /srv/velexis/releases/<sha>; snapshot /var/lib/velexis/system/<sha>/; history /var/lib/velexis/deploy-history.",
+  "states": [
+    {
+      "id": "built",
+      "label": "Packed in CI",
+      "kind": "initial",
+      "detail": "`release-<sha>.tar` artefact of the build job (7 days)."
+    },
+    {
+      "id": "uploaded",
+      "label": "Uploaded (incoming/<sha>)",
+      "kind": "normal",
+      "detail": "Owned by `deploy`, 0750. Unused uploads older than a day are removed by the next deploy."
+    },
+    {
+      "id": "refused",
+      "label": "Refused",
+      "kind": "error",
+      "detail": "Checksum, RELEASE.json, Node major or env-file check failed: nothing changed."
+    },
+    {
+      "id": "installed",
+      "label": "Installed (releases/<sha>, snapshot)",
+      "kind": "normal",
+      "detail": "`root:velexis`, read-only; units and Caddyfile staged from the snapshot."
+    },
+    {
+      "id": "migrated",
+      "label": "Migrated",
+      "kind": "normal",
+      "detail": "platform, reference, tenant fan-out; report published; reference data loaded if changed."
+    },
+    {
+      "id": "current",
+      "label": "Current and healthy",
+      "kind": "normal",
+      "detail": "`/srv/velexis/current` points here; every unit answered /health/ready."
+    },
+    {
+      "id": "rolledback",
+      "label": "Rolled back from",
+      "kind": "error",
+      "detail": "A unit failed its health check: previous release's snapshot re-installed, `current` switched back, exit 1."
+    },
+    {
+      "id": "previous",
+      "label": "Previous (rollback target)",
+      "kind": "normal",
+      "detail": "`--rollback` switches back to the last activated sha different from the current one."
+    },
+    {
+      "id": "pruned",
+      "label": "Pruned",
+      "kind": "final",
+      "detail": "Beyond the newest five (by folder time), never the current or rollback target; its snapshot goes too."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "built",
+      "to": "uploaded",
+      "label": "rsync by deploy job"
+    },
+    {
+      "from": "uploaded",
+      "to": "refused",
+      "label": "verify/env check fails"
+    },
+    {
+      "from": "uploaded",
+      "to": "installed",
+      "label": "verified, snapshot, mv"
+    },
+    {
+      "from": "installed",
+      "to": "migrated",
+      "label": "migrations + report OK"
+    },
+    {
+      "from": "installed",
+      "to": "installed",
+      "label": "migration fails: running release keeps its units; deploy again"
+    },
+    {
+      "from": "migrated",
+      "to": "current",
+      "label": "switch + all units healthy"
+    },
+    {
+      "from": "migrated",
+      "to": "rolledback",
+      "label": "a unit unhealthy after 90 s"
+    },
+    {
+      "from": "current",
+      "to": "previous",
+      "label": "a newer release becomes current"
+    },
+    {
+      "from": "previous",
+      "to": "current",
+      "label": "sudo velexis-deploy --rollback"
+    },
+    {
+      "from": "current",
+      "to": "current",
+      "label": "same sha deployed again (no file changes; migrations no-op, report re-sent, every unit restarted)"
+    },
+    {
+      "from": "previous",
+      "to": "pruned",
+      "label": "older than the newest five"
+    },
+    {
+      "from": "rolledback",
+      "to": "pruned",
+      "label": "aged out"
+    }
+  ]
+}

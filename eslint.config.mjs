@@ -21,6 +21,8 @@ const TYPED_SOURCES = [
 ];
 const NEXT_APPS = ["platform/frontend", "platform/admin", "ota/admin"];
 const BROWSER_JS = ["ota/frontend/**/*.js", "ota/sdk/src/**/*.js"];
+// The guidebook's site code: classic browser scripts (no modules, so the site opens from file://).
+const GUIDEBOOK_JS = ["guidebook/assets/js/**/*.js"];
 const NODE_CODE = [
   "platform/**/*.{ts,tsx,js,mjs}",
   "ota/backend/**/*.{ts,js,mjs}",
@@ -51,6 +53,19 @@ const AMADEUS_ONLY =
   "Only src/amadeus/ talks to Amadeus (OADR-0001 point 1): call AmadeusClient instead of fetch or an HTTP client.";
 // `default` too: `import https from "node:https"` would otherwise reach `https.request` past the named imports.
 const HTTP_CLIENT_EXPORTS = ["default", "request", "get", "Agent", "ClientRequest", "globalAgent"];
+
+/**
+ * HTML sinks of browser code (the storefront, the SDK and the guidebook; see "Browser code" below): the plugin's
+ * default sinks plus an iframe's `srcdoc`, `Document.parseHTMLUnsafe` and `DOMParser.parseFromString`.
+ */
+const NO_UNSANITIZED_RULES = {
+  "no-unsanitized/method": [
+    "error",
+    {},
+    { parseHTMLUnsafe: { properties: [0] }, parseFromString: { properties: [0] } },
+  ],
+  "no-unsanitized/property": ["error", {}, { srcdoc: {} }],
+};
 
 export default tseslint.config(
   {
@@ -245,12 +260,7 @@ export default tseslint.config(
     plugins: { "no-unsanitized": noUnsanitized },
     languageOptions: { globals: { ...globals.browser }, sourceType: "module" },
     rules: {
-      "no-unsanitized/method": [
-        "error",
-        {},
-        { parseHTMLUnsafe: { properties: [0] }, parseFromString: { properties: [0] } },
-      ],
-      "no-unsanitized/property": ["error", {}, { srcdoc: {} }],
+      ...NO_UNSANITIZED_RULES,
       "no-restricted-syntax": [
         "error",
         {
@@ -261,6 +271,30 @@ export default tseslint.config(
     },
   },
   { files: ["ota/sdk/src/**/*.js"], rules: { "no-restricted-syntax": "off" } },
+
+  // The guidebook (lead decisions (35d) and (35e) of 2026-11-20; guidebook/README.md): classic scripts that share one
+  // namespace, window.VG, and read d3, marked and DOMPurify from the CDN (three.js through import(), never a global).
+  // The storefront's HTML-sink rules apply: markdown reaches the page only as DOMPurify's output (core/markdown.js).
+  {
+    files: GUIDEBOOK_JS,
+    plugins: { "no-unsanitized": noUnsanitized },
+    languageOptions: {
+      sourceType: "script",
+      globals: {
+        ...globals.browser,
+        d3: "readonly",
+        marked: "readonly",
+        DOMPurify: "readonly",
+        VG: "readonly",
+      },
+    },
+    rules: NO_UNSANITIZED_RULES,
+  },
+  {
+    // The two files that create the namespace when it does not exist yet (text.js also runs inside tools/build.mjs).
+    files: ["guidebook/assets/js/core/text.js", "guidebook/assets/js/core/vg.js"],
+    languageOptions: { globals: { VG: "writable" } },
+  },
 
   // Next.js apps (portal, platform admin, OTA admin).
   {
@@ -292,7 +326,12 @@ export default tseslint.config(
 
   // Plain Node tools and scripts may print to the console.
   {
-    files: ["tools/**/*.{js,mjs,ts}", "deploy/**/*.{js,mjs}", "**/scripts/**/*.{js,mjs,ts}"],
+    files: [
+      "tools/**/*.{js,mjs,ts}",
+      "deploy/**/*.{js,mjs}",
+      "**/scripts/**/*.{js,mjs,ts}",
+      "guidebook/tools/**/*.mjs",
+    ],
     languageOptions: { globals: { ...globals.node } },
     rules: { "no-console": "off" },
   },

@@ -1,0 +1,103 @@
+{
+  "id": "migration-file-states",
+  "type": "state",
+  "title": "A migration file, from the repository to the ledger",
+  "caption": "packages/db/src/migrate/*. A numbered file is applied once and never edited once merged; an R__ file is re-applied whenever its SHA-256 changes.",
+  "states": [
+    {
+      "id": "new",
+      "label": "In the folder, not in the ledger",
+      "kind": "initial",
+      "detail": "Validated before any connection: name `NNNN_name.sql` or `R__name.sql`, header `-- velexis:phase`, UTF-8 without BOM, no BEGIN/COMMIT."
+    },
+    {
+      "id": "invalid",
+      "label": "Refused (MigrationFilesError)",
+      "kind": "error",
+      "detail": "Every problem of the folder reported at once; exit 1; nothing applied."
+    },
+    {
+      "id": "applying",
+      "label": "Applying (own transaction)",
+      "kind": "normal",
+      "detail": "`SET LOCAL lock_timeout 5s`, `statement_timeout 10min`. A `no-transaction` file runs statement by statement."
+    },
+    {
+      "id": "applied",
+      "label": "applied (ledger row)",
+      "kind": "final",
+      "detail": "`status = applied`, `checksum` = SHA-256 of the raw bytes, `execution_ms`."
+    },
+    {
+      "id": "failed",
+      "label": "Failed (rolled back)",
+      "kind": "error",
+      "detail": "No ledger row; the run stops with exit 1; files before it stay applied. A failed no-transaction file may leave statements applied (write them idempotently)."
+    },
+    {
+      "id": "mismatch",
+      "label": "checksum_mismatch",
+      "kind": "error",
+      "detail": "An applied file was edited: exit 2 before anything is applied. Fix: restore the file, add a new migration."
+    },
+    {
+      "id": "repeatChanged",
+      "label": "R__ file changed",
+      "kind": "normal",
+      "detail": "Platform and reference sets only; GRANT/REVOKE/COMMENT ON only."
+    },
+    {
+      "id": "orphan",
+      "label": "Ledger row without file",
+      "kind": "normal",
+      "detail": "After rolling back to an older release: a notice on stderr, otherwise ignored."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "new",
+      "to": "invalid",
+      "label": "bad name / header / transaction statement"
+    },
+    {
+      "from": "new",
+      "to": "applying",
+      "label": "pnpm db:migrate / migrate.js"
+    },
+    {
+      "from": "applying",
+      "to": "applied",
+      "label": "COMMIT with ledger row"
+    },
+    {
+      "from": "applying",
+      "to": "failed",
+      "label": "SQL error, lock timeout"
+    },
+    {
+      "from": "failed",
+      "to": "applying",
+      "label": "fix and run again"
+    },
+    {
+      "from": "applied",
+      "to": "mismatch",
+      "label": "file edited after merge"
+    },
+    {
+      "from": "applied",
+      "to": "repeatChanged",
+      "label": "R__ content changed"
+    },
+    {
+      "from": "repeatChanged",
+      "to": "applying",
+      "label": "next run"
+    },
+    {
+      "from": "applied",
+      "to": "orphan",
+      "label": "file removed (older release)"
+    }
+  ]
+}

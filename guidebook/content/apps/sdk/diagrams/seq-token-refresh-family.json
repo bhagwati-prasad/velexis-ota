@@ -1,0 +1,83 @@
+{
+  "id": "seq-token-refresh-family",
+  "type": "sequence",
+  "title": "Token / server mode: one refresh per refresh token in a client family",
+  "caption": "A third-party server derives two request clients for one visitor from its root client (withOptions({ accessToken: A1, refreshToken: R1, endUser })). Both calls get 401 TOKEN_EXPIRED; the family sends ONE POST /v1/auth/refresh with R1 and the API key only, records R1 → (A2, R2), reports the new pair once, and both calls are sent again with A2. internal/session.js refreshTokens, startRefresh, runRefresh, resolveRefresh.",
+  "actors": [
+    { "id": "srv", "label": "Integrator server", "kind": "ui" },
+    { "id": "c1", "label": "Request client 1", "kind": "lib" },
+    { "id": "c2", "label": "Request client 2", "kind": "lib" },
+    { "id": "fam", "label": "Family (refreshing, replaced)", "kind": "cache" },
+    { "id": "api", "label": "OTA API", "kind": "api" }
+  ],
+  "steps": [
+    { "from": "srv", "to": "c1", "label": "account.get({}) with A1 / R1", "kind": "call" },
+    {
+      "from": "srv",
+      "to": "c2",
+      "label": "bookings.list({}) with A1 / R1 (same visitor, concurrent)",
+      "kind": "call"
+    },
+    {
+      "from": "c1",
+      "to": "api",
+      "label": "GET /v1/account  X-Api-Key: sk_…  Authorization: Bearer A1",
+      "kind": "call"
+    },
+    { "from": "c2", "to": "api", "label": "GET /v1/bookings  Bearer A1", "kind": "call" },
+    { "from": "api", "to": "c1", "label": "401 TOKEN_EXPIRED", "kind": "return" },
+    {
+      "from": "c1",
+      "to": "fam",
+      "label": "resolveRefresh(R1): no rotation recorded → refreshing.get(R1) empty → startRefresh",
+      "kind": "call"
+    },
+    {
+      "from": "c1",
+      "to": "api",
+      "label": "POST /v1/auth/refresh { refreshToken: R1 } with the API key, host and endUser only (never A1)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "c2", "label": "401 TOKEN_EXPIRED", "kind": "return" },
+    {
+      "from": "c2",
+      "to": "fam",
+      "label": "refreshing.get(R1) → joins the same promise (holds the new token from now)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "c1",
+      "label": "200 AuthSessionResult { session: { accessToken: A2, refreshToken: R2, … } }",
+      "kind": "return",
+      "note": "API side: customer_sessions row of R1 gets rotated_at / replaced_by_id; a new row holds hash(R2) in the same family_id."
+    },
+    {
+      "from": "c1",
+      "to": "fam",
+      "label": "replaced.record([R1], {A2, R2}); leave refreshing",
+      "kind": "call"
+    },
+    {
+      "from": "c1",
+      "to": "srv",
+      "label": "onSessionRefreshed(session with A2/R2): write the httpOnly cookies (awaited, errors ignored)",
+      "kind": "async"
+    },
+    { "from": "c1", "to": "api", "label": "GET /v1/account again with Bearer A2", "kind": "call" },
+    {
+      "from": "c2",
+      "to": "api",
+      "label": "GET /v1/bookings again with Bearer A2 (no second refresh)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "srv", "label": "200 / 200", "kind": "return" },
+    {
+      "from": "srv",
+      "to": "fam",
+      "label": "11 s later a late request still carries R1 in a token function",
+      "kind": "call",
+      "note": "Outside the 10 s rotation window and not held as the client's own string: R1 is sent as it is, the API answers 401 REFRESH_TOKEN_REUSED and revokes the whole family (the newest A2/R2 stop working too). That is deliberate: a stolen rotated token trips reuse detection."
+    }
+  ]
+}

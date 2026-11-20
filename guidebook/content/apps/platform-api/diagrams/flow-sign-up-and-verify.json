@@ -1,0 +1,32 @@
+{
+  "id": "flow-sign-up-and-verify",
+  "type": "flow",
+  "title": "Sign-up, verification and account security",
+  "caption": "What the API does for the portal's sign-up, verify, MFA set-up and password reset screens.",
+  "steps": [
+    {
+      "title": "Sign up",
+      "actor": "Visitor",
+      "body": "Portal `/sign-up` → `signUp`. Password: 12+ characters with a letter and a digit, not on the breached list.",
+      "expect": "`202`; `auth.verify_email` e-mail; weak password `422 PASSWORD_TOO_WEAK`; 6th sign-up from one IP within an hour `429 RATE_LIMITED`."
+    },
+    {
+      "title": "Verify",
+      "actor": "Visitor",
+      "body": "Open the link → `verifyEmail`.",
+      "expect": "Account `active`; audit `account.email_verified`."
+    },
+    {
+      "title": "Turn on MFA",
+      "actor": "Owner",
+      "body": "`startMfaSetup` (secret kept encrypted in Redis `mfasetup:<accountId>` for 10 min, returns otpauth URL) then `enableMfa {code}`.",
+      "expect": "`accounts.mfa_enabled = true`; recovery codes shown once; e-mail `auth.mfa_changed`; vx:invalidate account."
+    },
+    {
+      "title": "Reset a forgotten password",
+      "actor": "Visitor",
+      "body": "`requestPasswordReset {email}` → link in `auth.password_reset` (1 h) → `confirmPasswordReset {token, newPassword}`.",
+      "expect": "`202` whatever the address; after confirm every session revoked, `staffdeny:acct:<id>` written, `auth.password_changed` e-mail."
+    }
+  ]
+}

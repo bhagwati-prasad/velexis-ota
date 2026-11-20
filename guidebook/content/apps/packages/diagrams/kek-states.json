@@ -1,0 +1,76 @@
+{
+  "id": "kek-states",
+  "type": "state",
+  "title": "A key-encryption key (master-v<N>.key)",
+  "caption": "ADR-0010 rotation; runbook docs/mvp/runbooks/master-key-rotation.md. Key ids are `local:v<N>`; files are identical copies in /etc/velexis/keys/platform/ and /etc/velexis/keys/ota/.",
+  "states": [
+    {
+      "id": "generated",
+      "label": "Generated (32 random bytes, base64, mode 0400)",
+      "kind": "initial",
+      "detail": "`provision-vm.sh --steps keys` on the VM; `pnpm dev:keys` locally (mode 0600)."
+    },
+    {
+      "id": "current",
+      "label": "Current (MASTER_KEY_CURRENT)",
+      "kind": "normal",
+      "detail": "Wraps every new DEK."
+    },
+    {
+      "id": "old",
+      "label": "Old: decrypt only",
+      "kind": "normal",
+      "detail": "Still loaded by `fromDir`; envelopes naming it still decrypt."
+    },
+    {
+      "id": "rewrapping",
+      "label": "Re-wrapping (secrets:rewrap in both backends)",
+      "kind": "normal",
+      "detail": "`remainingByKekId` counts rows still under it."
+    },
+    {
+      "id": "removed",
+      "label": "Removed from both folders",
+      "kind": "final",
+      "detail": "Only when both commands report zero rows under it; back up /etc/velexis afterwards."
+    },
+    {
+      "id": "broken",
+      "label": "Refused at start (KeyProviderError)",
+      "kind": "error",
+      "detail": "Group/other mode bits, not 32 bytes, `master-v01.key`, or no file for MASTER_KEY_CURRENT."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "generated",
+      "to": "current",
+      "label": "MASTER_KEY_CURRENT=local:vN + restart"
+    },
+    {
+      "from": "generated",
+      "to": "broken",
+      "label": "bad mode / length / name"
+    },
+    {
+      "from": "current",
+      "to": "old",
+      "label": "a newer key becomes current"
+    },
+    {
+      "from": "old",
+      "to": "rewrapping",
+      "label": "run secrets:rewrap"
+    },
+    {
+      "from": "rewrapping",
+      "to": "removed",
+      "label": "remainingByKekId = {}"
+    },
+    {
+      "from": "rewrapping",
+      "to": "old",
+      "label": "failed or skipped rows remain"
+    }
+  ]
+}

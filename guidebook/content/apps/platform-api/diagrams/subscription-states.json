@@ -1,0 +1,128 @@
+{
+  "id": "subscription-states",
+  "type": "state",
+  "title": "Subscription status",
+  "caption": "`platform.subscriptions.status`. Stripe rows copy Stripe after a re-fetch; manual rows are moved by the admin and billing.manual_trials. Effects on the tenant come from status-rules.ts.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "incomplete",
+      "label": "incomplete",
+      "kind": "normal",
+      "detail": "M5 OTA waiting for its first Checkout payment; provisioning gate closed."
+    },
+    {
+      "id": "trialing",
+      "label": "trialing",
+      "kind": "normal",
+      "detail": "Manual trial before M5 (trial_ends_at) or a Stripe trial."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Clears billing_notice; resumes a billing suspension."
+    },
+    {
+      "id": "past_due",
+      "label": "past_due",
+      "kind": "error",
+      "detail": "billing_notice past_due (banner)."
+    },
+    {
+      "id": "paused",
+      "label": "paused",
+      "kind": "error",
+      "detail": "Treated like past_due."
+    },
+    {
+      "id": "unpaid",
+      "label": "unpaid",
+      "kind": "error",
+      "detail": "Suspends an active OTA (billing)."
+    },
+    {
+      "id": "canceled",
+      "label": "canceled",
+      "kind": "final",
+      "detail": "Suspends an active OTA (billing)."
+    },
+    {
+      "id": "incomplete_expired",
+      "label": "incomplete_expired",
+      "kind": "final",
+      "detail": "Provisioning OTA → failed by billing.abandoned_checkouts."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "trialing",
+      "label": "createTenant before M5 (manual)"
+    },
+    {
+      "from": "start",
+      "to": "incomplete",
+      "label": "createTenant with FEATURE_STRIPE_BILLING"
+    },
+    {
+      "from": "incomplete",
+      "to": "active",
+      "label": "checkout.session.completed + re-fetch"
+    },
+    {
+      "from": "incomplete",
+      "to": "trialing",
+      "label": "Checkout with a Stripe trial"
+    },
+    {
+      "from": "incomplete",
+      "to": "incomplete_expired",
+      "label": "Stripe expiry / abandoned 48 h"
+    },
+    {
+      "from": "trialing",
+      "to": "active",
+      "label": "payment / adminUpdateManualSubscription"
+    },
+    {
+      "from": "trialing",
+      "to": "past_due",
+      "label": "manual trial ended (billing.manual_trials)"
+    },
+    {
+      "from": "active",
+      "to": "past_due",
+      "label": "invoice.payment_failed"
+    },
+    {
+      "from": "past_due",
+      "to": "active",
+      "label": "payment succeeded"
+    },
+    {
+      "from": "past_due",
+      "to": "canceled",
+      "label": "Stripe gives up / manual trial 14 days past due"
+    },
+    {
+      "from": "active",
+      "to": "canceled",
+      "label": "cancel in Customer Portal (period end)"
+    },
+    {
+      "from": "past_due",
+      "to": "unpaid",
+      "label": "Stripe dunning setting"
+    },
+    {
+      "from": "active",
+      "to": "paused",
+      "label": "Stripe pause"
+    }
+  ]
+}

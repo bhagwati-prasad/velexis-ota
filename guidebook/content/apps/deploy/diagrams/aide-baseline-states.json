@@ -1,0 +1,53 @@
+{
+  "id": "aide-baseline-states",
+  "type": "state",
+  "title": "AIDE's baseline and its re-baseline record",
+  "caption": "provision-vm.sh (one-time re-baseline, lead decisions (22d), (23b)); check-vm.sh group system; record /var/lib/velexis/provision/aide-rebaseline; database /var/lib/aide/aide.db.",
+  "states": [
+    {
+      "id": "harden",
+      "label": "Database from step harden",
+      "kind": "initial",
+      "detail": "`aideinit` during `harden`; later steps' files are not in it yet."
+    },
+    {
+      "id": "started",
+      "label": "started",
+      "kind": "normal",
+      "detail": "Re-baseline running at the end of the first run after which every step but `summary` completed."
+    },
+    {
+      "id": "rebaselined",
+      "label": "rebaselined <time> <sha256>",
+      "kind": "normal",
+      "detail": "check-vm.sh compares aide.db's SHA-256 with the record's last `rebaselined`/`manual` line."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "check-vm.sh reports FAIL naming the failed or interrupted attempt."
+    },
+    {
+      "id": "manual",
+      "label": "manual <time> <sha256>",
+      "kind": "normal",
+      "detail": "A re-baseline by hand (deployment §12) after reviewing a report."
+    },
+    {
+      "id": "missing",
+      "label": "aide.db missing after re-baseline",
+      "kind": "error",
+      "detail": "`harden` warns and never makes a new one; restore the night's copy from the config backup after review."
+    }
+  ],
+  "transitions": [
+    { "from": "harden", "to": "started", "label": "all steps completed once" },
+    { "from": "started", "to": "rebaselined", "label": "aideinit succeeded" },
+    { "from": "started", "to": "failed", "label": "aideinit failed / cut off" },
+    { "from": "rebaselined", "to": "manual", "label": "operator re-baselines after review" },
+    { "from": "manual", "to": "manual", "label": "later manual re-baselines" },
+    { "from": "rebaselined", "to": "missing", "label": "database removed" },
+    { "from": "missing", "to": "manual", "label": "restored or re-made by hand" }
+  ]
+}

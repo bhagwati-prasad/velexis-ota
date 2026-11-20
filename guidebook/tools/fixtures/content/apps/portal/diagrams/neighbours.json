@@ -1,0 +1,95 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Portal and its neighbours",
+  "caption": "The browser talks only to the portal; the portal calls the [[app:platform-api]] from the server.",
+  "groups": [
+    { "id": "people", "label": "People" },
+    { "id": "front", "label": "Frontends" },
+    { "id": "back", "label": "APIs and workers" },
+    { "id": "data", "label": "Data" },
+    { "id": "ext", "label": "External" }
+  ],
+  "nodes": [
+    {
+      "id": "owner",
+      "label": "OTA owner",
+      "group": "people",
+      "kind": "user",
+      "detail": "Signs up and manages OTAs."
+    },
+    { "id": "caddy", "label": "Caddy", "group": "front", "kind": "edge", "detail": "TLS and reverse proxy." },
+    {
+      "id": "portal",
+      "label": "Portal",
+      "group": "front",
+      "kind": "ui",
+      "app": "portal",
+      "detail": "Next.js [[bff]]."
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "group": "back",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "NestJS."
+    },
+    {
+      "id": "worker",
+      "label": "Platform worker",
+      "group": "back",
+      "kind": "worker",
+      "detail": "[[bullmq]] jobs: provisioning, e-mails."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "group": "data",
+      "kind": "db",
+      "term": "tenant-schema",
+      "detail": "`platform` schema and one `tenant_<key>` schema per OTA."
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "data",
+      "kind": "cache",
+      "detail": "Queues and rate limits."
+    },
+    {
+      "id": "queue",
+      "label": "provisioning queue",
+      "group": "data",
+      "kind": "queue",
+      "detail": "Tenant provisioning jobs."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "ext",
+      "kind": "external",
+      "term": "stripe",
+      "detail": "Subscriptions."
+    },
+    {
+      "id": "lib",
+      "label": "@velexis/db",
+      "group": "back",
+      "kind": "lib",
+      "detail": "`tenantTx` and Kysely types."
+    }
+  ],
+  "edges": [
+    { "from": "owner", "to": "caddy", "label": "HTTPS", "kind": "sync" },
+    { "from": "caddy", "to": "portal", "label": "proxy", "kind": "sync" },
+    { "from": "portal", "to": "api", "label": "REST (server side)", "kind": "sync" },
+    { "from": "api", "to": "pg", "label": "SQL", "kind": "data" },
+    { "from": "api", "to": "queue", "label": "enqueue", "kind": "async" },
+    { "from": "queue", "to": "redis", "label": "stored in", "kind": "data" },
+    { "from": "worker", "to": "queue", "label": "consume", "kind": "async" },
+    { "from": "worker", "to": "pg", "label": "create schema", "kind": "data" },
+    { "from": "api", "to": "stripe", "label": "billing", "kind": "sync" },
+    { "from": "api", "to": "lib", "label": "uses", "kind": "sync" }
+  ]
+}

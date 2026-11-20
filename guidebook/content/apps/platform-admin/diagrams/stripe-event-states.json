@@ -1,0 +1,36 @@
+{
+  "id": "stripe-event-states",
+  "type": "state",
+  "title": "Stripe event in the inbox",
+  "caption": "platform.stripe_events.status. /stripe-events lists failed and ignored first and offers Reprocess on those two only; the answer (202) comes before the worker runs.",
+  "states": [
+    {
+      "id": "received",
+      "label": "received",
+      "kind": "initial",
+      "detail": "Stored by the webhook receiver; queued on `platform-stripe-events`."
+    },
+    { "id": "processing", "label": "processing", "kind": "normal" },
+    { "id": "processed", "label": "processed", "kind": "final" },
+    {
+      "id": "ignored",
+      "label": "ignored",
+      "kind": "normal",
+      "detail": "No OTA found, unhandled type or switch off. **Reprocess**."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "After 5 tries; `last_error` as `CODE: message`. Fix the cause, then **Reprocess**."
+    }
+  ],
+  "transitions": [
+    { "from": "received", "to": "processing", "label": "worker re-fetches from Stripe" },
+    { "from": "processing", "to": "processed", "label": "applied" },
+    { "from": "processing", "to": "ignored", "label": "nothing to apply" },
+    { "from": "processing", "to": "failed", "label": "error (retried, then final)" },
+    { "from": "failed", "to": "received", "label": "Reprocess (adminReprocessStripeEvent)" },
+    { "from": "ignored", "to": "received", "label": "Reprocess" }
+  ]
+}

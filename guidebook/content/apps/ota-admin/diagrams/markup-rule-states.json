@@ -1,0 +1,55 @@
+{
+  "id": "markup-rule-states",
+  "type": "state",
+  "title": "A markup or fee rule",
+  "caption": "markup_rules / fee_rules: is_active, active_from, active_until, version. The default markup rule (is_default, priority 1000) stays active, has no window and cannot be deleted (409 default_rule). Code: settings/pricing-actions.ts, pricing-rules.ts.",
+  "states": [
+    {
+      "id": "new",
+      "label": "New (form)",
+      "kind": "initial",
+      "detail": "`/settings/markups/new` or `/settings/fees/new`, owner/admin only."
+    },
+    {
+      "id": "scheduled",
+      "label": "Active, window not started",
+      "kind": "normal",
+      "detail": "`is_active` and `active_from` in the future: not applied yet."
+    },
+    {
+      "id": "applied",
+      "label": "Active and applied",
+      "kind": "normal",
+      "detail": "Matches the next search's offers by scope and priority."
+    },
+    {
+      "id": "inactive",
+      "label": "Inactive",
+      "kind": "normal",
+      "detail": "`is_active = false`; listed under **Inactive**."
+    },
+    {
+      "id": "expired",
+      "label": "Window ended",
+      "kind": "normal",
+      "detail": "`active_until` passed: no longer applied, still listed."
+    },
+    {
+      "id": "deleted",
+      "label": "Deleted",
+      "kind": "final",
+      "detail": "`DELETE` with `If-Match`, no reason; `settings.markupRules.delete` keeps the rule as `before`."
+    }
+  ],
+  "transitions": [
+    { "from": "new", "to": "applied", "label": "Create (Idempotency-Key)" },
+    { "from": "new", "to": "scheduled", "label": "Create with a future window" },
+    { "from": "scheduled", "to": "applied", "label": "active_from reached" },
+    { "from": "applied", "to": "expired", "label": "active_until reached" },
+    { "from": "applied", "to": "inactive", "label": "Save with Active unticked (not the default rule)" },
+    { "from": "inactive", "to": "applied", "label": "Save with Active ticked" },
+    { "from": "applied", "to": "deleted", "label": "Delete rule (not the default rule)" },
+    { "from": "inactive", "to": "deleted", "label": "Delete rule" },
+    { "from": "expired", "to": "deleted", "label": "Delete rule" }
+  ]
+}

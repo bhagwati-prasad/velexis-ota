@@ -1,0 +1,44 @@
+{
+  "id": "manual-subscription-states",
+  "type": "state",
+  "title": "Manual subscription",
+  "caption": "platform.subscriptions with billing_provider = 'manual'. The admin edits plan, trial end and status (Trial, Active, Canceled) with a reason and If-Match; the daily billing.manual_trials (08:10 UTC, only with FEATURE_STRIPE_BILLING) moves trials. Stripe-billed rows have no edit form.",
+  "states": [
+    { "id": "start", "label": "OTA created before M5 / by admin", "kind": "initial" },
+    {
+      "id": "trialing",
+      "label": "trialing (Trial)",
+      "kind": "normal",
+      "detail": "Banner `trial_ending` 14 and 3 days before the end."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Paid outside Stripe; go-live accepts it; no trial notice, never past_due."
+    },
+    {
+      "id": "past_due",
+      "label": "past_due",
+      "kind": "error",
+      "detail": "Trial ended. After 14 days: canceled and the OTA suspended for `billing`."
+    },
+    {
+      "id": "canceled",
+      "label": "canceled",
+      "kind": "final",
+      "detail": "Reopen to Trial/Active refused with `409 current_exists` while another current subscription exists."
+    }
+  ],
+  "transitions": [
+    { "from": "start", "to": "trialing", "label": "trial_ends_at set" },
+    { "from": "trialing", "to": "active", "label": "admin: status Active" },
+    { "from": "trialing", "to": "past_due", "label": "daily run on the end day" },
+    { "from": "past_due", "to": "trialing", "label": "admin moves the trial end later" },
+    { "from": "past_due", "to": "canceled", "label": "daily run, 14 days later (+ suspend billing)" },
+    { "from": "trialing", "to": "canceled", "label": "admin: status Canceled" },
+    { "from": "active", "to": "canceled", "label": "admin: status Canceled" },
+    { "from": "canceled", "to": "trialing", "label": "admin reopens (no other current row)" },
+    { "from": "past_due", "to": "active", "label": "admin: status Active" }
+  ]
+}

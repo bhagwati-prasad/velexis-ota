@@ -1,0 +1,96 @@
+{
+  "id": "seq-test-database",
+  "type": "sequence",
+  "title": "Integration tests: one template per run, one clone per file",
+  "caption": "packages/testing/src/vitest-global-setup.ts and test-database.ts. Role velexis_test_admin exists only locally and in CI (dev-setup.sh), never on the VM.",
+  "actors": [
+    {
+      "id": "vitest",
+      "label": "Vitest (main process)",
+      "kind": "worker"
+    },
+    {
+      "id": "file",
+      "label": "Test file (worker)",
+      "kind": "worker"
+    },
+    {
+      "id": "lib",
+      "label": "@velexis/testing",
+      "kind": "lib"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "vitest",
+      "to": "lib",
+      "label": "globalSetup",
+      "kind": "call"
+    },
+    {
+      "from": "lib",
+      "to": "pg",
+      "label": "CREATE DATABASE velexis_test_tpl_<runId> OWNER velexis_migrator + database grants",
+      "kind": "call"
+    },
+    {
+      "from": "lib",
+      "to": "pg",
+      "label": "schemas.sql; runMigrations platform + reference; migrateTenantSchema tenant_alpha, tenant_beta (create)",
+      "kind": "call"
+    },
+    {
+      "from": "lib",
+      "to": "pg",
+      "label": "REFERENCE_FIXTURE as velexis_platform_app (EUR GBP USD, FR GB US, CDG ORY LHR JFK LAX, AF BA AA)",
+      "kind": "call"
+    },
+    {
+      "from": "lib",
+      "to": "pg",
+      "label": "throwaway _flush database create + drop (forces a checkpoint)",
+      "kind": "call"
+    },
+    {
+      "from": "file",
+      "to": "lib",
+      "label": "createTestDatabase() in beforeAll",
+      "kind": "call"
+    },
+    {
+      "from": "lib",
+      "to": "pg",
+      "label": "CREATE DATABASE velexis_test_<runId>_<random> TEMPLATE … + grants again (0.1–0.4 s)",
+      "kind": "call"
+    },
+    {
+      "from": "file",
+      "to": "pg",
+      "label": "app under test with db.urlFor('ota' | 'platform' | 'migrator' | 'provisioner')",
+      "kind": "call"
+    },
+    {
+      "from": "file",
+      "to": "lib",
+      "label": "db.drop() in afterAll",
+      "kind": "call"
+    },
+    {
+      "from": "lib",
+      "to": "pg",
+      "label": "ALLOW_CONNECTIONS false; each app role terminates its own sessions; DROP DATABASE … WITH (FORCE); retry",
+      "kind": "call"
+    },
+    {
+      "from": "vitest",
+      "to": "lib",
+      "label": "teardown: drop left-over clones of this run, then the template",
+      "kind": "call"
+    }
+  ]
+}

@@ -1,0 +1,168 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "Inside the platform admin",
+  "caption": "Every request passes the middleware; pages are server components that call lib/api.ts; every mutation is a server action. Client components get only the fields they show.",
+  "groups": [
+    { "id": "edge", "label": "Request edge" },
+    { "id": "auth", "label": "(auth) sign-in" },
+    { "id": "console", "label": "(app) signed-in console" },
+    { "id": "handlers", "label": "Route handlers" },
+    { "id": "lib", "label": "lib (server-only)" },
+    { "id": "ext", "label": "Outside" }
+  ],
+  "nodes": [
+    {
+      "id": "mw",
+      "label": "middleware.ts",
+      "group": "edge",
+      "kind": "edge",
+      "detail": "Deny by default (only `/sign-in`, `/sign-in/mfa`, `/sign-out` are public), refreshes an access token within 30 s of expiry, CSP with a fresh nonce, `X-Robots-Tag: noindex`. Skips `/_next/`, `/favicon.ico`, `/health/`.",
+      "term": "admin-middleware"
+    },
+    {
+      "id": "signin",
+      "label": "(auth)/sign-in",
+      "group": "auth",
+      "kind": "ui",
+      "detail": "`page.tsx`, `sign-in-form.tsx`, `actions.ts` (`signIn`): Zod check, `adminSignIn`, writes `__Host-vxa_mfa`, redirects to `/sign-in/mfa?next=`."
+    },
+    {
+      "id": "mfa",
+      "label": "(auth)/sign-in/mfa",
+      "group": "auth",
+      "kind": "ui",
+      "detail": "`mfa-form.tsx`, `actions.ts` (`verifyMfa`): TOTP (6 digits) or recovery code (16-24 chars) → `adminVerifyMfa` → session cookies."
+    },
+    {
+      "id": "layout",
+      "label": "(app)/layout.tsx + AdminShell",
+      "group": "console",
+      "kind": "ui",
+      "detail": "`adminGetMe` once per request; navigation filtered by milestone switches; environment badge; Sign out form."
+    },
+    {
+      "id": "pages",
+      "label": "(app)/**/page.tsx",
+      "group": "console",
+      "kind": "ui",
+      "detail": "Server components: validate URL filters, call the API with `cache: no-store`, render server tables or hand selected fields to client tables."
+    },
+    {
+      "id": "forms",
+      "label": "Client forms and tables",
+      "group": "console",
+      "kind": "ui",
+      "detail": "`*-form.tsx`, `*-actions.tsx`, `*-table.tsx`, `tabs.tsx`: `useActionState` around server actions."
+    },
+    {
+      "id": "dialogs",
+      "label": "ReasonDialog / StepUpDialog / ConfirmDialog",
+      "group": "console",
+      "kind": "ui",
+      "detail": "`components/reason-dialog.tsx` (5-500 code points), `components/step-up-dialog.tsx` (TOTP, retries the action), `components/confirm-dialog.tsx`.",
+      "term": "reason-dialog"
+    },
+    {
+      "id": "actions",
+      "label": "Server actions (actions.ts)",
+      "group": "console",
+      "kind": "api",
+      "detail": "One file per area; Zod-check ids, reasons and fields before any call; `revalidatePath` on success; `{stepUp: true}` on `REAUTH_REQUIRED`.",
+      "term": "server-action"
+    },
+    {
+      "id": "stepup",
+      "label": "(app)/step-up-actions.ts",
+      "group": "console",
+      "kind": "api",
+      "detail": "`stepUp`: TOTP → `adminStepUp` → `setSession` (new cookies with `mfa_at` now)."
+    },
+    {
+      "id": "csv",
+      "label": "export.csv / lines.csv",
+      "group": "handlers",
+      "kind": "api",
+      "detail": "GET streams the API's CSV (`parseAs: stream`), `Cache-Control: no-store`; HEAD answers 405."
+    },
+    {
+      "id": "signout",
+      "label": "sign-out/route.ts",
+      "group": "handlers",
+      "kind": "api",
+      "detail": "POST only; `Origin` must equal `PUBLIC_PLATFORM_ADMIN_URL`'s origin (403 otherwise)."
+    },
+    {
+      "id": "health",
+      "label": "health/live, health/ready",
+      "group": "handlers",
+      "kind": "api",
+      "detail": "`ready` calls `PLATFORM_API_URL/health/live` with a 2 s timeout."
+    },
+    {
+      "id": "api",
+      "label": "lib/api.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`openapi-fetch` client; refuses any path outside `/v1/admin/`; no redirects; returns `{data}` or `{error}` with the platform code, field errors, details, `Retry-After`."
+    },
+    {
+      "id": "session",
+      "label": "lib/session.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Cookie names and attributes, JWT `exp`/`aud` read (no signature check), `safeNextPath`, single-flight refresh (10 s reuse)."
+    },
+    {
+      "id": "enduser",
+      "label": "lib/end-user.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`X-Velexis-End-User-IP` (right-most X-Forwarded-For), `-Agent` (512 chars), `X-Velexis-Bff-Key`.",
+      "term": "end-user-headers"
+    },
+    {
+      "id": "config",
+      "label": "lib/config.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`ADMIN_CONFIG_SCHEMA`, `getConfig()` (cached, frozen), https enforced in production."
+    },
+    {
+      "id": "strings",
+      "label": "lib/errors.ts + lib/strings.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Every platform error code → the admin's message; every label of the UI."
+    },
+    {
+      "id": "papi",
+      "label": "Platform API",
+      "group": "ext",
+      "kind": "external",
+      "app": "platform-api",
+      "detail": "127.0.0.1:3100 in dev and on the VM."
+    }
+  ],
+  "edges": [
+    { "from": "mw", "to": "session", "label": "read cookies, refresh", "kind": "sync" },
+    { "from": "mw", "to": "api", "label": "adminRefresh", "kind": "sync" },
+    { "from": "signin", "to": "api", "label": "adminSignIn", "kind": "sync" },
+    { "from": "mfa", "to": "api", "label": "adminVerifyMfa", "kind": "sync" },
+    { "from": "layout", "to": "api", "label": "adminGetMe", "kind": "sync" },
+    { "from": "pages", "to": "api", "label": "GET /v1/admin/...", "kind": "sync" },
+    { "from": "pages", "to": "forms", "label": "props: shown fields only", "kind": "data" },
+    { "from": "forms", "to": "dialogs", "label": "reason / step-up / confirm", "kind": "sync" },
+    { "from": "forms", "to": "actions", "label": "FormData", "kind": "sync" },
+    { "from": "dialogs", "to": "stepup", "label": "TOTP code", "kind": "sync" },
+    { "from": "actions", "to": "api", "label": "POST/PATCH/DELETE", "kind": "sync" },
+    { "from": "stepup", "to": "session", "label": "setSession", "kind": "sync" },
+    { "from": "csv", "to": "api", "label": "stream CSV", "kind": "sync" },
+    { "from": "signout", "to": "api", "label": "adminSignOut", "kind": "sync" },
+    { "from": "health", "to": "papi", "label": "GET /health/live", "kind": "sync" },
+    { "from": "api", "to": "enduser", "label": "headers", "kind": "sync" },
+    { "from": "api", "to": "config", "label": "PLATFORM_API_URL, BFF key", "kind": "sync" },
+    { "from": "api", "to": "papi", "label": "HTTP loopback", "kind": "sync" },
+    { "from": "actions", "to": "strings", "label": "worded errors", "kind": "data" }
+  ]
+}

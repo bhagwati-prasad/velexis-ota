@@ -1,0 +1,6 @@
+[
+  { "from": "page:overview", "to": "app:portal", "label": "introduces" },
+  { "from": "journey:sign-up-and-create-ota", "to": "term:provisioning", "label": "exercises" },
+  { "from": "class:Tenant", "to": "term:schema-per-tenant", "label": "explained by", "note": "ADR-0004" },
+  { "from": "page:getting-started", "to": "term:mailpit", "label": "needs" }
+]

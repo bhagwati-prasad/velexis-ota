@@ -1,0 +1,32 @@
+{
+  "id": "flow-run-tests",
+  "type": "flow",
+  "title": "Run unit and integration tests",
+  "caption": "ADR-0015, ADR-0022, docs/mvp/local-development.md §7.",
+  "steps": [
+    {
+      "title": "Unit tests",
+      "actor": "Developer",
+      "body": "`pnpm test` (4 packages at a time) or `pnpm --filter @velexis/db test`.",
+      "expect": "Nothing needs to run; Vitest 4.1.12."
+    },
+    {
+      "title": "Integration prerequisites",
+      "actor": "Developer",
+      "body": "PostgreSQL, Redis and Mailpit running; `TEST_DATABASE_ADMIN_URL`, `REDIS_URL`, `MAILPIT_API_URL`, `SMTP_URL` in `.env.local`.",
+      "expect": "`pg_isready` and `REDISCLI_AUTH=dev_redis redis-cli ping` answer."
+    },
+    {
+      "title": "Run",
+      "actor": "Developer",
+      "body": "`pnpm test:int` (one package at a time) or `pnpm --filter @velexis/testing test:int`.",
+      "expect": "A template `velexis_test_tpl_<runId>` built once, a clone per test file; your `velexis` database untouched."
+    },
+    {
+      "title": "Check clean-up",
+      "actor": "Developer",
+      "body": "`psql \"$TEST_DATABASE_ADMIN_URL\" -At -c \"SELECT datname FROM pg_database WHERE datname LIKE 'velexis\\_test\\_%'\"`.",
+      "expect": "Empty after a run that ended normally."
+    }
+  ]
+}

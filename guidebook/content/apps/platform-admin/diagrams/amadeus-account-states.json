@@ -1,0 +1,47 @@
+{
+  "id": "amadeus-account-states",
+  "type": "state",
+  "title": "Velexis Amadeus account",
+  "caption": "platform.amadeus_accounts.status, one account per environment (amadeus_accounts_environment_uq). While pending_verification the page refreshes every 5 s for up to 2 minutes.",
+  "states": [
+    {
+      "id": "none",
+      "label": "no account",
+      "kind": "initial",
+      "detail": "**Set up the Test/Live account** (step-up)."
+    },
+    {
+      "id": "pending",
+      "label": "pending_verification (Not verified)",
+      "kind": "normal",
+      "detail": "Verification job queued on the platform worker (token request to the host)."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "OTAs on the shared account can search; offices assignable."
+    },
+    {
+      "id": "invalid",
+      "label": "invalid_credentials",
+      "kind": "error",
+      "detail": "`last_error` shows HTTP status and Amadeus code only. **Rotate secret** or **Edit details**."
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "normal",
+      "detail": "Every OTA on this shared account loses Amadeus access. **Verify and enable**."
+    }
+  ],
+  "transitions": [
+    { "from": "none", "to": "pending", "label": "Save and verify (adminCreateAmadeusAccount, step-up)" },
+    { "from": "pending", "to": "active", "label": "verification ok" },
+    { "from": "pending", "to": "invalid", "label": "verification refused" },
+    { "from": "active", "to": "pending", "label": "Verify now / Rotate secret / new host or client id" },
+    { "from": "invalid", "to": "pending", "label": "Rotate secret / Verify now" },
+    { "from": "active", "to": "disabled", "label": "Disable account (confirm)" },
+    { "from": "disabled", "to": "pending", "label": "Verify and enable" }
+  ]
+}

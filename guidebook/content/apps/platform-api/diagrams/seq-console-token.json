@@ -1,0 +1,106 @@
+{
+  "id": "seq-console-token",
+  "type": "sequence",
+  "title": "Open console: one-time portal token for the OTA admin",
+  "caption": "createConsoleToken stores a 60-second token in Redis that the OTA API takes once with GETDEL (PADR-0007).",
+  "actors": [
+    {
+      "id": "m",
+      "label": "Member's browser",
+      "kind": "user"
+    },
+    {
+      "id": "fe",
+      "label": "Portal server",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API (memberships/)",
+      "kind": "api"
+    },
+    {
+      "id": "r",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "oa",
+      "label": "OTA admin server",
+      "kind": "ui"
+    },
+    {
+      "id": "o",
+      "label": "OTA API",
+      "kind": "api"
+    }
+  ],
+  "steps": [
+    {
+      "from": "m",
+      "to": "fe",
+      "label": "Open console (POST)",
+      "kind": "call"
+    },
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/tenants/{tenantId}/console-token (30/min per account)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "fresh checks: session still valid (401), e-mail verified (403 EMAIL_NOT_VERIFIED), membership active (404), tenant active (409 TENANT_NOT_ACTIVE + suspensionReason), live OTA needs MFA (403 MFA_REQUIRED)",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "SET ptk:<sha256> {v, accountId, tenantId, membershipId, role, mfa, issuedAt, requestId} EX 60 NX (503 if Redis down)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "audit console.token_issued (key deleted again if the audit fails)",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "{portalToken ptk_…, expiresAt, consoleSsoUrl} Cache-Control: no-store",
+      "kind": "return"
+    },
+    {
+      "from": "fe",
+      "to": "m",
+      "label": "auto-submitting form POST to consoleSsoUrl",
+      "kind": "return"
+    },
+    {
+      "from": "m",
+      "to": "oa",
+      "label": "POST /sso portalToken",
+      "kind": "call"
+    },
+    {
+      "from": "oa",
+      "to": "o",
+      "label": "console sign-in with portal_token",
+      "kind": "call"
+    },
+    {
+      "from": "o",
+      "to": "r",
+      "label": "GETDEL ptk:<sha256> (second use fails)",
+      "kind": "call"
+    },
+    {
+      "from": "o",
+      "to": "oa",
+      "label": "staff session",
+      "kind": "return"
+    }
+  ]
+}

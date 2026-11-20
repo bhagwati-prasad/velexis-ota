@@ -1,0 +1,34 @@
+{
+  "id": "flow-guest-lookup",
+  "type": "flow",
+  "title": "Find a booking as a guest (reference + last name)",
+  "caption": "bookings.lookup (src/bookings/guest-access.service.ts, lookup.controller.ts). Limit: 5 failures per 15 minutes per IP and per reference. The guest token handed out at checkout lasts 30 days or until 7 days after the last flight, whichever is later.",
+  "steps": [
+    {
+      "title": "Open the lookup page",
+      "actor": "Guest",
+      "screen": "/lookup.html",
+      "url": "http://localhost:5173/lookup.html",
+      "body": "Type the booking reference (VX + 6 characters, from the confirmation e-mail) or the airline record locator, and the last name of any traveller (case- and accent-insensitive).",
+      "expect": "`POST /v1/bookings/lookup {bookingReference, lastName}` → `200` BookingSummary; a `booking_access_tokens` row (`issued_via = lookup`, 24 h), staff-only event `booking.lookup`, and cookie `__Host-vx_bt` (HttpOnly, up to five tokens, newest first; key callers get `bookingToken` in the body). Only bookings of the storefront environment that are not `failed` are found."
+    },
+    {
+      "title": "Wrong name, wrong reference",
+      "actor": "Guest",
+      "body": "Try a wrong last name, then a wrong reference.",
+      "expect": "Every mismatch (unknown reference, wrong name, other environment, failed booking) answers the same `404 NOT_FOUND` with the same message: the answers differ only in `requestId`."
+    },
+    {
+      "title": "Rate limit",
+      "actor": "Tester",
+      "body": "Fail five times from one IP within 15 minutes.",
+      "expect": "The sixth answers `429 RATE_LIMITED` with `Retry-After` (Redis `rl:ota_lookup_ip:*` / `rl:ota_lookup_reference:*`)."
+    },
+    {
+      "title": "What a guest may do",
+      "actor": "Guest",
+      "body": "Read the booking, documents, timeline; change contacts; quote and cancel when allowed.",
+      "expect": "Only this booking: another booking id with the same cookie → `404`. `allowedActions` says what is allowed and why not."
+    }
+  ]
+}

@@ -1,0 +1,159 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Where the OTA API and worker sit",
+  "caption": "Every caller of the OTA API and everything the API and the worker talk to. The platform side is reached through tables, Redis and queues only, never synchronous HTTP. Click a node for details.",
+  "groups": [
+    { "id": "callers", "label": "Callers" },
+    { "id": "edge", "label": "Edge" },
+    { "id": "ota", "label": "OTA backend (ota/backend)" },
+    { "id": "data", "label": "Data" },
+    { "id": "platform", "label": "Platform side" },
+    { "id": "ext", "label": "External services" }
+  ],
+  "nodes": [
+    {
+      "id": "traveller",
+      "label": "Traveller's browser",
+      "group": "callers",
+      "kind": "user",
+      "detail": "Uses the hosted storefront (`<key>.ota.example.com`) or a third-party site."
+    },
+    {
+      "id": "storefront",
+      "label": "Hosted storefront",
+      "group": "callers",
+      "kind": "ui",
+      "app": "storefront",
+      "detail": "Static pages + SDK in cookie mode; every API call goes to `/api/*` on its own host."
+    },
+    {
+      "id": "thirdparty",
+      "label": "Third-party frontend / server",
+      "group": "callers",
+      "kind": "ui",
+      "app": "sdk",
+      "detail": "`X-Api-Key: pk_…` from a browser (origin allow-list) or `sk_…` from a server.",
+      "term": "api-key"
+    },
+    {
+      "id": "otaadmin",
+      "label": "OTA admin (Next.js, :3002)",
+      "group": "callers",
+      "kind": "ui",
+      "app": "ota-admin",
+      "detail": "Server-side only, on loopback: `OTA_ADMIN_SERVICE_KEY`, staff bearer token, `X-Velexis-Environment`, end-user IP/agent headers.",
+      "term": "service-key"
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "ext",
+      "kind": "external",
+      "detail": "PaymentIntents (manual capture), refunds; posts signed webhooks to `/webhooks/stripe/**`.",
+      "term": "stripe"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy (+ WAF)",
+      "group": "edge",
+      "kind": "edge",
+      "app": "deploy",
+      "detail": "Proxies `api.ota.example.com` and `/api/*` of every storefront host to 127.0.0.1:4000; adds `X-Velexis-Edge` and `X-Velexis-Host` for storefront hosts; blocks `/internal/*` and `/health/ready`.",
+      "term": "edge-secret"
+    },
+    {
+      "id": "api",
+      "label": "OTA API dist/main.js :4000",
+      "group": "ota",
+      "kind": "api",
+      "detail": "117 implemented operations + 19 deferred (`501`). Guards, OpenAPI validation, idempotency, tenantTx."
+    },
+    {
+      "id": "worker",
+      "label": "OTA worker dist/worker.js (health :4001)",
+      "group": "ota",
+      "kind": "worker",
+      "detail": "BullMQ consumers and schedulers: provisioning, Stripe events, payments, bookings sync/reconcile, ticketing, notifications, documents, maintenance."
+    },
+    {
+      "id": "cli",
+      "label": "CLI dist/cli.js",
+      "group": "ota",
+      "kind": "lib",
+      "detail": "`dev:seed`, `tenants:report-migrations`, `amadeus:ping`, `secrets:rewrap`, `tenants:scrub-card-copies`."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL 16: tenant_<key>, reference, platform (read)",
+      "group": "data",
+      "kind": "db",
+      "detail": "Role `velexis_ota_app` (DML on tenant schemas); worker also `velexis_provisioner` for DDL.",
+      "term": "tenant-schema"
+    },
+    {
+      "id": "redis",
+      "label": "Redis 7",
+      "group": "data",
+      "kind": "cache",
+      "detail": "Caches, Amadeus tokens and buckets, rate limits, staff sessions, BullMQ queues (prefix `vx`)."
+    },
+    {
+      "id": "storage",
+      "label": "Storage STORAGE_DIR",
+      "group": "data",
+      "kind": "db",
+      "detail": "`tenant_<key>/…` PDFs and storefront images (local disk adapter)."
+    },
+    {
+      "id": "platformapi",
+      "label": "Platform API + worker",
+      "group": "platform",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "Owns tenants, keys, memberships, connections. Sends `ota-tenant-ops`, consumes `platform-tenant-events`, publishes `vx:invalidate`, writes `ptk:*` portal tokens."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus Enterprise (stub :4900 locally)",
+      "group": "ext",
+      "kind": "external",
+      "detail": "12 operations: search, availability, upsell, price, create order, issue, order management, by-reference, queue list, OAuth.",
+      "term": "amadeus-enterprise"
+    },
+    {
+      "id": "smtp",
+      "label": "SMTP (Mailpit :1025 locally)",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Worker only. Mailpit UI http://127.0.0.1:8025."
+    }
+  ],
+  "edges": [
+    { "from": "traveller", "to": "storefront", "label": "browses", "kind": "sync" },
+    { "from": "storefront", "to": "caddy", "label": "/api/* same origin", "kind": "sync" },
+    { "from": "thirdparty", "to": "caddy", "label": "api.ota.example.com, X-Api-Key", "kind": "sync" },
+    { "from": "caddy", "to": "api", "label": "127.0.0.1:4000", "kind": "sync" },
+    { "from": "otaadmin", "to": "api", "label": "loopback, service key + staff token", "kind": "sync" },
+    { "from": "stripe", "to": "caddy", "label": "webhooks", "kind": "async" },
+    { "from": "api", "to": "pg", "label": "tenantTx / platform reads", "kind": "data" },
+    { "from": "worker", "to": "pg", "label": "tenantTx, provisioner DDL", "kind": "data" },
+    { "from": "api", "to": "redis", "label": "caches, limits, jobs", "kind": "data" },
+    { "from": "worker", "to": "redis", "label": "BullMQ consumers", "kind": "data" },
+    { "from": "api", "to": "amadeus", "label": "search, price, order", "kind": "sync" },
+    { "from": "worker", "to": "amadeus", "label": "issue, sync, reconcile, queues", "kind": "sync" },
+    { "from": "api", "to": "stripe", "label": "PaymentIntents", "kind": "sync" },
+    { "from": "worker", "to": "stripe", "label": "capture retry, void, refunds", "kind": "sync" },
+    { "from": "worker", "to": "smtp", "label": "e-mails", "kind": "async" },
+    { "from": "worker", "to": "storage", "label": "PDFs", "kind": "data" },
+    { "from": "api", "to": "storage", "label": "downloads, images", "kind": "data" },
+    {
+      "from": "platformapi",
+      "to": "redis",
+      "label": "ota-tenant-ops, vx:invalidate, ptk:*",
+      "kind": "async"
+    },
+    { "from": "worker", "to": "platformapi", "label": "platform-tenant-events", "kind": "async" },
+    { "from": "cli", "to": "pg", "label": "dev:seed, rewrap, scrub", "kind": "data" }
+  ]
+}

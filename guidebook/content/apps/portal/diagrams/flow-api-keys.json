@@ -1,0 +1,46 @@
+{
+  "id": "flow-api-keys",
+  "type": "flow",
+  "title": "Create, roll and revoke API keys",
+  "caption": "PF-30. Owners and admins of an active OTA.",
+  "steps": [
+    {
+      "title": "Open API keys",
+      "actor": "Owner",
+      "screen": "API keys",
+      "url": "http://localhost:3000/otas/<tenantId>/api-keys",
+      "body": "The Test keys tab lists the two keys of the set-up (\"at set-up\").",
+      "expect": "Each key as `prefix…last4`, last used (up to 5 min behind) or Never; no full key anywhere."
+    },
+    {
+      "title": "Create a secret key",
+      "actor": "Owner",
+      "body": "Name \"Storefront prod\", kind Secret, use Storefront, **Create the key**.",
+      "expect": "\"Your new secret test key\" with \"Copy this now: it is shown only once\"; `platform.api_keys` gains a row with `key_hash`, `scopes = {storefront}`; audit `api_key.created`."
+    },
+    {
+      "title": "Publishable key with origins",
+      "actor": "Owner",
+      "body": "Kind Publishable, add `https://www.acme.example.com` and `http://localhost:5173`.",
+      "expect": "Accepted on a test key; a path, wildcard, upper case or trailing slash is refused at its row; **Add an origin** is disabled once 20 origins are listed."
+    },
+    {
+      "title": "Console automation key",
+      "actor": "Owner",
+      "body": "Use Console automation and tick at least one permission.",
+      "expect": "`scopes = {console:automation, <permissions…>}`; no permission → refused without a call."
+    },
+    {
+      "title": "Roll",
+      "actor": "Owner",
+      "body": "**Roll** a key, old key stops \"in 24 hours\".",
+      "expect": "New key shown once; old row `expires_at` ≈ now + 24 h; audit `api_key.rolled`."
+    },
+    {
+      "title": "Revoke",
+      "actor": "Owner",
+      "body": "**Revoke** → confirm.",
+      "expect": "Row says \"The key is revoked.\"; `revoked_at`, `revoked_by_account_id` set; the OTA API refuses the key within 60 s."
+    }
+  ]
+}

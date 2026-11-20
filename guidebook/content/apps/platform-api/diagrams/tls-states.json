@@ -1,0 +1,66 @@
+{
+  "id": "tls-states",
+  "type": "state",
+  "title": "Storefront host TLS status",
+  "caption": "`platform.tenant_domains.tls_status`, written by the daily `domains.tls_probe` (04:40 UTC) and `adminRecheckDomain`; a change publishes vx:invalidate domain.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal"
+    },
+    {
+      "id": "issued",
+      "label": "issued",
+      "kind": "normal",
+      "detail": "`tls_expires_at` known."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error"
+    },
+    {
+      "id": "expired",
+      "label": "expired",
+      "kind": "error"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending",
+      "label": "row created"
+    },
+    {
+      "from": "pending",
+      "to": "issued",
+      "label": "probe finds a valid certificate"
+    },
+    {
+      "from": "pending",
+      "to": "failed",
+      "label": "probe fails"
+    },
+    {
+      "from": "issued",
+      "to": "expired",
+      "label": "certificate past expiry"
+    },
+    {
+      "from": "failed",
+      "to": "issued",
+      "label": "later probe succeeds"
+    },
+    {
+      "from": "expired",
+      "to": "issued",
+      "label": "renewed"
+    }
+  ]
+}

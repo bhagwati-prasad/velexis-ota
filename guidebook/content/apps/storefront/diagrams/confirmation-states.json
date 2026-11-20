@@ -1,0 +1,105 @@
+{
+  "id": "confirmation-states",
+  "type": "state",
+  "title": "Confirmation and booking page: ticketing polling",
+  "caption": "`src/pages/confirmation.js` (and the same banner logic in `booking.js`): `bookings.get` then `bookings.getTicketingStatus({ refresh: true })` after each `pollAfterSeconds`.",
+  "states": [
+    {
+      "id": "loading",
+      "label": "Loading the booking",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "We are confirming your booking with the airline",
+      "kind": "normal",
+      "detail": "`bookingStatus = pending`: polled every 10 s, at most 30 minutes."
+    },
+    {
+      "id": "issuing",
+      "label": "Booking confirmed; tickets are being issued",
+      "kind": "normal",
+      "detail": "Polled for at most 10 minutes; the e-mail follows."
+    },
+    {
+      "id": "ticketed",
+      "label": "Your tickets are issued",
+      "kind": "final",
+      "detail": "Ticket numbers, link to the booking page and documents."
+    },
+    {
+      "id": "failed",
+      "label": "Did not go through; not charged",
+      "kind": "error"
+    },
+    {
+      "id": "late",
+      "label": "We will e-mail you — Check again",
+      "kind": "normal"
+    },
+    {
+      "id": "noaccess",
+      "label": "Find your booking",
+      "kind": "error",
+      "detail": "`401`: no session and no guest token → `/lookup.html`."
+    },
+    {
+      "id": "notfound",
+      "label": "We could not find this booking",
+      "kind": "error",
+      "detail": "`404` or an address without a valid `bkg_…`."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "loading",
+      "to": "pending",
+      "label": "pending (or pending=1)"
+    },
+    {
+      "from": "loading",
+      "to": "issuing",
+      "label": "confirmed, tickets not issued"
+    },
+    {
+      "from": "loading",
+      "to": "ticketed",
+      "label": "ticketed"
+    },
+    {
+      "from": "loading",
+      "to": "noaccess",
+      "label": "401"
+    },
+    {
+      "from": "loading",
+      "to": "notfound",
+      "label": "404"
+    },
+    {
+      "from": "pending",
+      "to": "issuing",
+      "label": "order found"
+    },
+    {
+      "from": "pending",
+      "to": "failed",
+      "label": "decided: failed"
+    },
+    {
+      "from": "pending",
+      "to": "late",
+      "label": "30 minutes"
+    },
+    {
+      "from": "late",
+      "to": "pending",
+      "label": "Check again"
+    },
+    {
+      "from": "issuing",
+      "to": "ticketed",
+      "label": "tickets issued"
+    }
+  ]
+}

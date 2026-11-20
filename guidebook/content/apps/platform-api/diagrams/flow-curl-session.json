@@ -1,0 +1,38 @@
+{
+  "id": "flow-curl-session",
+  "type": "flow",
+  "title": "Call the API directly with curl",
+  "caption": "The portal is the normal client, but every operation can be called on loopback with a Bearer token. Without the BFF headers the end-user IP is the socket address.",
+  "steps": [
+    {
+      "title": "Sign up",
+      "actor": "Tester",
+      "body": "`curl -s -X POST http://127.0.0.1:3100/v1/auth/sign-up -H 'content-type: application/json' -d '{\"email\":\"anna@example.com\",\"password\":\"Northern-Lights-2026\",\"fullName\":\"Anna Berg\",\"acceptTerms\":true,\"termsVersion\":\"2026-10-01\"}'`",
+      "expect": "`202 {\"status\":\"verification_sent\"}` (same answer for an existing address). Row in `platform.accounts` with `status = 'pending_verification'`; e-mail `auth.verify_email` in Mailpit."
+    },
+    {
+      "title": "Verify the address",
+      "actor": "Tester",
+      "body": "Copy the `token` query value of the link in Mailpit, then `POST /v1/auth/verify-email {\"token\":\"…\"}`.",
+      "expect": "`200`; `accounts.status = 'active'`, `email_verified_at` set; `account_tokens.consumed_at` set. A second use answers `400 VERIFICATION_TOKEN_INVALID`."
+    },
+    {
+      "title": "Sign in",
+      "actor": "Tester",
+      "body": "`POST /v1/auth/sign-in {email, password}`.",
+      "expect": "Without MFA: `PortalSession` with `accessToken` (15 min) and `refreshToken`. With MFA: `{mfaRequired: true, mfaChallengeToken, expiresIn}`, then `POST /v1/auth/mfa/verify {mfaChallengeToken, code}`."
+    },
+    {
+      "title": "Call an operation",
+      "actor": "Tester",
+      "body": "`curl -s http://127.0.0.1:3100/v1/me -H \"authorization: Bearer $TOKEN\"`; then `GET /v1/tenants`.",
+      "expect": "`200` JSON. Errors use `{\"error\":{\"code\",\"message\",\"status\",\"requestId\"}}`; quote the `requestId` in bug reports."
+    },
+    {
+      "title": "Refresh",
+      "actor": "Tester",
+      "body": "`POST /v1/auth/refresh {\"refreshToken\":\"…\"}` when the access token expires.",
+      "expect": "A new pair; presenting the old refresh token again answers `401 REFRESH_TOKEN_REUSED` and revokes the family."
+    }
+  ]
+}

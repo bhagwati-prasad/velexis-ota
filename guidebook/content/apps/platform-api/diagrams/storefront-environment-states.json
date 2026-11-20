@@ -1,0 +1,37 @@
+{
+  "id": "storefront-environment-states",
+  "type": "state",
+  "title": "Storefront environment (test → live)",
+  "caption": "`platform.tenants.storefront_environment`. One-way: no operation switches a live OTA back to test.",
+  "states": [
+    {
+      "id": "start",
+      "label": "new OTA",
+      "kind": "initial"
+    },
+    {
+      "id": "test",
+      "label": "test",
+      "kind": "normal",
+      "detail": "Test Amadeus office, Stripe test mode; only test API keys."
+    },
+    {
+      "id": "live",
+      "label": "live",
+      "kind": "final",
+      "detail": "`live_enabled_at`, `live_enabled_by_account_id` set; live keys allowed; owners/admins must have MFA (MfaEnrolmentGuard)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "test",
+      "label": "createTenant"
+    },
+    {
+      "from": "test",
+      "to": "live",
+      "label": "goLive {confirm: true}: owner, FEATURE_LIVE_SWITCH, step-up, all preconditions met"
+    }
+  ]
+}

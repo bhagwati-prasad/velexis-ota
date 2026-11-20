@@ -1,0 +1,40 @@
+{
+  "id": "flow-billing",
+  "type": "flow",
+  "title": "Billing: plan, Checkout, Customer Portal, invoices",
+  "caption": "PF-71 to PF-75. Owners act, finance reads; Checkout needs FEATURE_STRIPE_BILLING and Stripe test values.",
+  "steps": [
+    {
+      "title": "Read the subscription",
+      "actor": "Owner",
+      "screen": "Billing",
+      "url": "http://localhost:3000/otas/<tenantId>/billing",
+      "body": "Open Billing.",
+      "expect": "Plan name, status, \"Free trial, no payment details needed\" for a manual trial, trial end and period end in the OTA's time zone."
+    },
+    {
+      "title": "Choose a plan",
+      "actor": "Owner",
+      "body": "Pick a plan (Annual billing switch), **Continue to payment**.",
+      "expect": "Stripe Checkout opens (URL only from the API, https only); cancel → `?checkout=canceled` neutral notice."
+    },
+    {
+      "title": "Pay",
+      "actor": "Owner",
+      "body": "Test card 4242 4242 4242 4242 in Stripe test mode.",
+      "expect": "Back via `/setup?checkout=success` → `/billing?checkout=success`: \"Confirming your payment\" until the webhook made the subscription `trialing`/`active`, then \"Payment confirmed\"."
+    },
+    {
+      "title": "Manage in Stripe",
+      "actor": "Owner",
+      "body": "**Manage in Stripe**.",
+      "expect": "303 to Stripe's Customer Portal; return URL is the billing page. Without a Stripe customer: \"choose a plan first\"."
+    },
+    {
+      "title": "Invoices",
+      "actor": "Finance member",
+      "body": "Read the invoices table.",
+      "expect": "Newest first, totals with `Money` (`5000 JPY` → ¥5,000), View/Download PDF only for https links; drafts \"Not available yet\"."
+    }
+  ]
+}

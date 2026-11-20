@@ -1,0 +1,44 @@
+{
+  "id": "flow-release",
+  "type": "flow",
+  "title": "Review and release 1.0.0 (owner decisions pending)",
+  "caption": "README §9 and ota/sdk/release/CHANGES.md. Nothing here runs today: the draft workflow lives in ota/sdk/release/ and GitHub only runs .github/workflows/. Read-only checks first; the publish needs the owner.",
+  "steps": [
+    {
+      "title": "Read what is waiting for you",
+      "actor": "Owner",
+      "body": "`ota/sdk/release/sdk-publish.draft.yml` (the workflow) and the latest section of `ota/sdk/release/CHANGES.md` (history, checks, the SHA-256 to approve).",
+      "expect": "`sha256sum ota/sdk/release/sdk-publish.draft.yml` equals the hash named in the newest *For the owner* section."
+    },
+    {
+      "title": "Check the package is not publishable by accident",
+      "actor": "Owner",
+      "body": "`grep -n '\"private\"\\|\"license\"\\|\"version\"' ota/sdk/package.json` and `cat ota/sdk/src/version.js`.",
+      "expect": "`\"private\": true`, `\"license\": \"UNLICENSED\"`, `\"version\": \"1.0.0\"`, `VERSION = \"1.0.0\"`; `CHANGELOG.md` says `1.0.0 (unreleased)`."
+    },
+    {
+      "title": "Check the pins test",
+      "actor": "Owner",
+      "body": "`node --test tools/ci/sdk-draft-pins.test.mjs` (a CI test of the draft's action pins against the live workflows).",
+      "expect": "Passes. A github-actions Dependabot pull request that moves the pin of an action the draft also uses turns it red until an agent copies the pin into the draft and records the new SHA-256 in `ota/sdk/release/CHANGES.md`; one that bumps only an action the draft does not use (`actions/cache`) stays green."
+    },
+    {
+      "title": "Decide",
+      "actor": "Owner",
+      "body": "Choose the licence (H-14), approve the draft by its SHA-256, create the npm organisation and the GitHub environment `npm` with a short-lived `NPM_TOKEN` (1.0.0 only).",
+      "expect": "An agent then moves the draft to `.github/workflows/sdk-publish.yml` (deleting only its two DRAFT lines) and makes the release commit (removes `private`, sets `license` and `repository`, dates the CHANGELOG)."
+    },
+    {
+      "title": "Tag, dry run, publish",
+      "actor": "Owner",
+      "body": "On `main`: `git tag -a sdk-v1.0.0 -m \"@velexis/ota-sdk 1.0.0\"` and push the tag; Actions → *SDK publish* → Run workflow on the tag with `dry_run` on, then off with `credential: npm-token`.",
+      "expect": "Dry run: tests, build, pack, `npm publish --dry-run`, no release. Real run: the package on npm with provenance and a GitHub release with the tarball integrity and the IIFE's SRI hash."
+    },
+    {
+      "title": "After the publish",
+      "actor": "Owner",
+      "body": "`npm view @velexis/ota-sdk@1.0.0 version`; `npm audit signatures` in an empty project that installs it; add the trusted publisher on npmjs.com within 2 days; revoke the token.",
+      "expect": "Later versions publish with `credential: trusted-publishing` only; the workflow refuses `npm-token` for them."
+    }
+  ]
+}

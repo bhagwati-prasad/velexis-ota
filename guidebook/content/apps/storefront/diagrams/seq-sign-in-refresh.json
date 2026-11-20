@@ -1,0 +1,119 @@
+{
+  "id": "seq-sign-in-refresh",
+  "type": "sequence",
+  "title": "Sign in, My bookings and the silent refresh",
+  "caption": "`account-sign-in.js`, `bookings.js`, the SDK's cookie session (ota/docs/flows/my-bookings-and-guest-lookup.md §1). Tokens never reach JavaScript: they live in httpOnly `__Host-` cookies.",
+  "actors": [
+    {
+      "id": "t",
+      "label": "Customer",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "Page module + SDK",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "t",
+      "to": "b",
+      "label": "sign-in form (email, password, remember me)",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/auth/sign-in (X-CSRF-Token)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "rl:ota_sign_in (per IP), t:…:authfail:<sha256(email)>",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "customer_identities (Argon2id), customer_sessions (refresh hash, family)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "200 + Set-Cookie __Host-vx_at (900 s), __Host-vx_rt, new __Host-vx_csrf",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "location to next (safe path) or /account/",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET /v1/bookings?timeframe=upcoming&limit=20&sort=departure",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "bookings_customer_upcoming_idx (environment = storefront environment)",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "15 minutes later: GET /v1/bookings/{id} (access cookie gone)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "401 TOKEN_EXPIRED",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "SDK: POST /v1/auth/refresh (cookie __Host-vx_rt), once",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "rotate refresh token in the family (reuse → family revoked)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "Set-Cookie new __Host-vx_at, __Host-vx_rt",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "the original call again",
+      "kind": "call"
+    }
+  ]
+}

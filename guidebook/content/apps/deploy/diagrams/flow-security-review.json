@@ -1,0 +1,38 @@
+{
+  "id": "flow-security-review",
+  "type": "flow",
+  "title": "Daily security log review and an AIDE change",
+  "caption": "docs/mvp/deployment-single-vm.md §12; deploy/scripts/log-review.sh and ship-logs.sh.",
+  "steps": [
+    {
+      "title": "Read the daily summary",
+      "actor": "Developer",
+      "body": "E-mail `security log review <date>: …` (first run at or after 06:00 UTC).",
+      "expect": "Shipment status, SSH logins by user/source/method, sudo, auditd keys, AIDE's last check and age, WAF matches, airline-card route errors, egress refusals, fail2ban, app security events."
+    },
+    {
+      "title": "Check the shipment",
+      "actor": "Developer",
+      "body": "`sudo velexis-shiplogs --status`; `sudo velexis-logreview --status`.",
+      "expect": "Last verified shipment under two hours old; cursor moving."
+    },
+    {
+      "title": "Explain an AIDE change",
+      "actor": "Developer",
+      "body": "`security alert: AIDE found changes outside a deploy`: read `/var/log/aide/aide.log`, `/var/log/dpkg.log`, `ausearch -k velexis-aide`.",
+      "expect": "Every entry explained (package update, your own change) or treated as an incident."
+    },
+    {
+      "title": "Re-baseline by hand",
+      "actor": "Developer",
+      "body": "After review, the manual re-baseline of deployment §12 (adds a `manual` line to `/var/lib/velexis/provision/aide-rebaseline`).",
+      "expect": "`check-vm.sh --only system` PASS for the database's SHA-256."
+    },
+    {
+      "title": "Read logs off the VM",
+      "actor": "Developer",
+      "body": "On a machine with the data key: `age -d -i velexis-data.key <chunk> | zstdcat | jq`. On the VM: `sudo zstdcat /var/log/velexis/security/security-<day>.jsonl.zst | jq 'select(.cat == \"ssh\")'`.",
+      "expect": "No `[uri]` query value, no secret in any line."
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "flow-amadeus-pool",
+  "type": "flow",
+  "title": "Amadeus accounts and the office pool",
+  "caption": "Mirrors admin-amadeus-pool.e2e.ts. The stub (pnpm stub:amadeus, http://127.0.0.1:4900) stands in for Amadeus outside production.",
+  "steps": [
+    {
+      "title": "Set up an environment's account",
+      "screen": "/amadeus/accounts",
+      "url": "http://localhost:3001/amadeus/accounts",
+      "body": "**Set up the Live account**: Name, Amadeus host, Client id, Client secret → **Save and verify** (asks for a TOTP code when your last code is older than 15 min).",
+      "expect": "'The Live account is saved.', status Not verified, then Active within ~20 s (page refreshes every 5 s); client id shows only its last 4; secret 'Stored encrypted, never shown'; 'Only 0 offices are available in Live.' warning."
+    },
+    {
+      "title": "Add offices in bulk",
+      "screen": "/amadeus/offices",
+      "url": "http://localhost:3001/amadeus/offices?environment=test",
+      "body": "In **Add offices** pick the account, paste one 9-character id per line (lower case is fine, repeat one), optional notes → **Add offices**.",
+      "expect": "'3 offices were added:' with the Added offices and the Skipped ids lists; new rows Available."
+    },
+    {
+      "title": "Assign to a waiting OTA",
+      "body": "**Assign office <id>** → type the OTA key (or tenant id) → **Assign office**.",
+      "expect": "'Office <id> is assigned to <key>.' with connection Active; the OTA's Connections tab card shows the office; the owner's portal Amadeus page shows it."
+    },
+    {
+      "title": "Retire and edit notes",
+      "body": "**Retire office <id>** with a reason; **Edit notes** on any office.",
+      "expect": "Retired offices offer no Assign/Retire; notes use If-Match (stale → 412 with reload link)."
+    },
+    {
+      "title": "Pool levels",
+      "screen": "/",
+      "body": "Add 3 live offices, then look at the accounts page and the dashboard.",
+      "expect": "'3 Available' link per environment; the low-pool warning (below 3) disappears."
+    }
+  ]
+}

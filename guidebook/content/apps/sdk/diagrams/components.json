@@ -1,0 +1,182 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "Inside ota/sdk",
+  "caption": "Public modules mirror the contract files one to one; each namespace method is one line through the generated route table; the request core, the session and the transport do the work. Scripts generate the table and build the bundles. Click a node for its file.",
+  "groups": [
+    { "id": "public", "label": "Public modules (src/)" },
+    { "id": "ns", "label": "Namespaces (src/namespaces/)" },
+    { "id": "internal", "label": "Request core (src/internal/)" },
+    { "id": "scripts", "label": "Scripts (scripts/)" },
+    { "id": "out", "label": "Outputs (dist/, not committed)" },
+    { "id": "ext", "label": "Outside the package" }
+  ],
+  "nodes": [
+    {
+      "id": "index",
+      "label": "index.js",
+      "group": "public",
+      "kind": "lib",
+      "detail": "`createVelexisClient`, `VERSION`, re-exports; `clientOf(core)` builds the eight namespaces, `withOptions` and `request`."
+    },
+    {
+      "id": "shared",
+      "label": "shared.js",
+      "group": "public",
+      "kind": "lib",
+      "term": "velexis-error",
+      "detail": "`VelexisError` and its 13 subclasses, `isVelexisError`, `Page`, `VelexisClientOptions`, `RequestOptions`; `toJSON()` redaction of keys, tokens and JWTs."
+    },
+    {
+      "id": "mods",
+      "label": "identity.js, flights.js, bookings.js, console.js",
+      "group": "public",
+      "kind": "lib",
+      "detail": "Typedefs that mirror the contract `.d.ts` files, and the factories `createStorefrontApi` … `createConsoleApi`."
+    },
+    {
+      "id": "version",
+      "label": "version.js / types.js",
+      "group": "public",
+      "kind": "lib",
+      "detail": "`VERSION = \"1.0.0\"` (equals package.json, `test/unit/version.test.js`); `Schemas`, `Paths`, `Operations` from `@velexis/api-types`."
+    },
+    {
+      "id": "nsfiles",
+      "label": "storefront, reference, flights, checkout, bookings, auth, account, console",
+      "group": "ns",
+      "kind": "lib",
+      "detail": "One factory per namespace. Special logic: auth (strip tokens in cookie mode, adopt session results), checkout (airline-card error scrubbing), bookings/account/console (`requireIfMatch`), console (multipart upload, `originSystemCode: \"GDS\"` default)."
+    },
+    {
+      "id": "client",
+      "label": "client.js",
+      "group": "internal",
+      "kind": "lib",
+      "term": "request-core",
+      "detail": "Option validation (`TypeError` naming the option, never its value), mode choice, `core.call` (path/query/header/body split), `core.request` (escape hatch), `derive` for `withOptions`."
+    },
+    {
+      "id": "session",
+      "label": "session.js",
+      "group": "internal",
+      "kind": "lib",
+      "term": "client-family",
+      "detail": "Credentials per mode, CSRF copy and re-fetch, the automatic refresh, the client family (`createFamily`: `refreshing`, `replaced` with 512 tokens, 10 s `ROTATION_WINDOW_MS`), `adopt` of session results."
+    },
+    {
+      "id": "http",
+      "label": "http.js",
+      "group": "internal",
+      "kind": "lib",
+      "term": "retry-policy",
+      "detail": "Headers, `fetch`, timeout per attempt (body included), retries on 429/503/504/network errors with back-off 0.5 s → 8 s ± 20 %, `Retry-After` (> 30 s ends the call), `onResponse`."
+    },
+    {
+      "id": "errors",
+      "label": "errors.js",
+      "group": "internal",
+      "kind": "lib",
+      "term": "error-envelope",
+      "detail": "`errorClassFor(status, code)`, fallback codes for responses without the envelope, `parseRetryAfter`, `connectionError` (status 0)."
+    },
+    {
+      "id": "pagination",
+      "label": "pagination.js",
+      "group": "internal",
+      "kind": "lib",
+      "term": "cursor-pagination",
+      "detail": "`Page<T>`: `data`, `page.nextCursor`, `next()`, `for await`; extra fields (`total`, `facets`, `snapshot` …) copied onto the page."
+    },
+    {
+      "id": "ops",
+      "label": "operations.js (GENERATED)",
+      "group": "internal",
+      "kind": "lib",
+      "term": "route-table",
+      "detail": "129 frozen entries keyed `namespace_method`: method, path, path/query/header params, idempotency, retry class, timeout, environment flag, body kind. Never edited by hand."
+    },
+    {
+      "id": "ifmatch",
+      "label": "if-match.js / ids.js",
+      "group": "internal",
+      "kind": "lib",
+      "term": "if-match",
+      "detail": "`requireIfMatch` / `optionalIfMatch` (version number → `\"<n>\"`); `uuidV4` for `Idempotency-Key` (randomUUID, getRandomValues fallback)."
+    },
+    {
+      "id": "gen",
+      "label": "generate-operations.mjs + operation-overrides.json",
+      "group": "scripts",
+      "kind": "worker",
+      "term": "operation-overrides",
+      "detail": "Reads the OpenAPI document, applies reviewed timeouts and `retry: never`, writes `operations.js` and `test/contract/methods.generated.ts`. CI fails on a diff."
+    },
+    {
+      "id": "build",
+      "label": "build.mjs + check-size.mjs",
+      "group": "scripts",
+      "kind": "worker",
+      "term": "size-budget",
+      "detail": "esbuild ESM + IIFE, `tsc` declarations, copy of the OTA API types; fails above 25 KB min+gzip (1.0.0: 15.8 KB)."
+    },
+    {
+      "id": "esm",
+      "label": "velexis-sdk.mjs",
+      "group": "out",
+      "kind": "lib",
+      "term": "esm-bundle",
+      "detail": "ES2022, minified, source map. `exports[\".\"].import` and `default`."
+    },
+    {
+      "id": "iife",
+      "label": "velexis-sdk.iife.js",
+      "group": "out",
+      "kind": "lib",
+      "term": "iife-bundle",
+      "detail": "Defines `window.Velexis` only; `exports[\"./iife\"]`."
+    },
+    {
+      "id": "types",
+      "label": "dist/types/*.d.ts",
+      "group": "out",
+      "kind": "lib",
+      "detail": "One per module plus `api-types.d.ts`; self-contained (no `@velexis/api-types` import)."
+    },
+    {
+      "id": "openapi",
+      "label": "OpenAPI document",
+      "group": "ext",
+      "kind": "external",
+      "term": "x-sdk-method",
+      "detail": "`ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`."
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "group": "ext",
+      "kind": "api",
+      "app": "ota-api",
+      "detail": "Every request ends here."
+    }
+  ],
+  "edges": [
+    { "from": "index", "to": "mods", "label": "re-exports factories", "kind": "sync" },
+    { "from": "mods", "to": "nsfiles", "label": "factory per namespace", "kind": "sync" },
+    { "from": "nsfiles", "to": "ops", "label": "op.<method>", "kind": "sync" },
+    { "from": "nsfiles", "to": "client", "label": "core.call(op, params, options)", "kind": "sync" },
+    { "from": "nsfiles", "to": "ifmatch", "label": "requireIfMatch", "kind": "sync" },
+    { "from": "client", "to": "session", "label": "session.send", "kind": "sync" },
+    { "from": "client", "to": "pagination", "label": "wrap list bodies", "kind": "sync" },
+    { "from": "session", "to": "http", "label": "send(config, request)", "kind": "sync" },
+    { "from": "http", "to": "errors", "label": "map non-2xx", "kind": "sync" },
+    { "from": "http", "to": "api", "label": "fetch", "kind": "sync" },
+    { "from": "errors", "to": "shared", "label": "error classes", "kind": "sync" },
+    { "from": "openapi", "to": "gen", "label": "read", "kind": "data" },
+    { "from": "gen", "to": "ops", "label": "write", "kind": "data" },
+    { "from": "index", "to": "build", "label": "bundle", "kind": "data" },
+    { "from": "build", "to": "esm", "label": "", "kind": "data" },
+    { "from": "build", "to": "iife", "label": "", "kind": "data" },
+    { "from": "build", "to": "types", "label": "", "kind": "data" }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "id": "seq-console-sso-issue",
+  "type": "sequence",
+  "title": "Console sign-in by portal token, then a staff issuance",
+  "caption": "console.auth.signIn (grantType portal_token) and console.bookings.issue as the OTA admin's server calls them (ota/docs/flows/console-operations.md §1, src/identity/staff, src/console/console-booking-actions.service.ts). No staff password exists on the OTA side.",
+  "actors": [
+    { "id": "u", "label": "OTA staff browser", "kind": "user" },
+    { "id": "portal", "label": "Portal + platform API", "kind": "api" },
+    { "id": "redis", "label": "Redis", "kind": "cache" },
+    { "id": "adm", "label": "OTA admin server (:3002)", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "pg", "label": "platform (read) + tenant_<key>", "kind": "db" },
+    { "id": "stripe", "label": "Stripe", "kind": "external" },
+    { "id": "ama", "label": "Amadeus", "kind": "external" }
+  ],
+  "steps": [
+    { "from": "u", "to": "portal", "label": "Open console (portal OTA page)", "kind": "call" },
+    {
+      "from": "portal",
+      "to": "redis",
+      "label": "SET ptk:<sha256> {accountId, tenantId, membershipId, mfa} EX 60 NX",
+      "kind": "call"
+    },
+    { "from": "portal", "to": "u", "label": "auto-submitting form to the OTA admin /sso", "kind": "return" },
+    { "from": "u", "to": "adm", "label": "POST /sso {portalToken}", "kind": "call" },
+    {
+      "from": "adm",
+      "to": "api",
+      "label": "POST /v1/console/auth/sign-in {grantType: portal_token} (X-Api-Key = service key, end-user IP/agent)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "GETDEL ptk:<sha256> (single use); staffdeny:acct:<accountId> cut-off",
+      "kind": "call",
+      "note": "Unknown/used/expired: 401 PORTAL_TOKEN_INVALID. Live tenant without MFA flag: 403 MFA_REQUIRED."
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "membership + account + tenant active (past the 60 s cache); staff_actions staff.sign_in",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "staffsess:<familyId> (12 h family, rotating refresh hashes)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "adm",
+      "label": "200 ConsoleStaffSession (EdDSA access JWT typ staff 15 min, refresh, permissions, environments)",
+      "kind": "return"
+    },
+    { "from": "adm", "to": "u", "label": "HttpOnly __Host- cookies, redirect /bookings", "kind": "return" },
+    { "from": "u", "to": "adm", "label": "Issue tickets on bkg_… (reason)", "kind": "call" },
+    {
+      "from": "adm",
+      "to": "api",
+      "label": "POST /v1/console/bookings/{id}/issuance (Bearer staff token, X-Velexis-Environment, If-Match, Idempotency-Key)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "PermissionGuard: bookings:issue for the role; live needs live tenant + non-viewer; else 403 + staff_actions denied",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "ticketing claim: ticketing_status in_progress (409 BOOKING_NOT_MODIFIABLE while a cancellation holds it)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "capture the authorised payment (capturePayment default true; allowUnpaid owner/admin only)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Order Management GET (resync), then Flight Order Issue",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "booking_tickets, booking ticketed, booking_events, staff_actions booking.issue (redacted before/after)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "adm", "label": "200 booking (new ETag)", "kind": "return" }
+  ]
+}

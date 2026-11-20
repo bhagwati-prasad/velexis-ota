@@ -1,0 +1,139 @@
+{
+  "id": "pay-card-states",
+  "type": "state",
+  "title": "Pay by card page (Stripe Payment Element)",
+  "caption": "`src/pages/checkout-pay-card.js` (docs/pages.md §8). Pay always confirms the card that was reviewed; a change in the card form drops the review.",
+  "states": [
+    {
+      "id": "loading",
+      "label": "Loading checkout and payment",
+      "kind": "initial"
+    },
+    {
+      "id": "redirect",
+      "label": "Payment belongs elsewhere",
+      "kind": "final",
+      "detail": "processing/authorized/captured → complete page; airline_card → airline page; completed checkout → confirmation."
+    },
+    {
+      "id": "nostripe",
+      "label": "Card payment is unavailable",
+      "kind": "error",
+      "detail": "Stripe.js failed or `loaderror`: Retry, or \"Pay with the airline card instead\"."
+    },
+    {
+      "id": "entry",
+      "label": "Card entry",
+      "kind": "normal"
+    },
+    {
+      "id": "reviewed",
+      "label": "Reviewed: final total, merchant, descriptor",
+      "kind": "normal"
+    },
+    {
+      "id": "refused",
+      "label": "We cannot take this card",
+      "kind": "error",
+      "detail": "Brand outside `pspCardBrands`, or `422`."
+    },
+    {
+      "id": "confirming",
+      "label": "Confirming",
+      "kind": "normal"
+    },
+    {
+      "id": "threeds",
+      "label": "3-D Secure challenge",
+      "kind": "normal"
+    },
+    {
+      "id": "declined",
+      "label": "Stripe's message under the element",
+      "kind": "error"
+    },
+    {
+      "id": "newpayment",
+      "label": "New payment created",
+      "kind": "normal",
+      "detail": "`409 PAYMENT_NOT_UPDATABLE` / `PRICE_CHANGED`: the address takes the new `payment=`; review again."
+    },
+    {
+      "id": "complete",
+      "label": "Complete page",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "loading",
+      "to": "entry",
+      "label": "Payment Element mounted"
+    },
+    {
+      "from": "loading",
+      "to": "redirect",
+      "label": "payment status / method"
+    },
+    {
+      "from": "loading",
+      "to": "nostripe",
+      "label": "no Stripe.js"
+    },
+    {
+      "from": "entry",
+      "to": "reviewed",
+      "label": "Review total (updatePayment, fetchUpdates)"
+    },
+    {
+      "from": "entry",
+      "to": "refused",
+      "label": "brand not accepted"
+    },
+    {
+      "from": "entry",
+      "to": "newpayment",
+      "label": "409 on updatePayment"
+    },
+    {
+      "from": "newpayment",
+      "to": "entry",
+      "label": "remounted"
+    },
+    {
+      "from": "reviewed",
+      "to": "entry",
+      "label": "card form changed"
+    },
+    {
+      "from": "reviewed",
+      "to": "confirming",
+      "label": "Pay"
+    },
+    {
+      "from": "confirming",
+      "to": "threeds",
+      "label": "bank asks"
+    },
+    {
+      "from": "confirming",
+      "to": "complete",
+      "label": "no redirect needed"
+    },
+    {
+      "from": "threeds",
+      "to": "complete",
+      "label": "return_url"
+    },
+    {
+      "from": "confirming",
+      "to": "declined",
+      "label": "card declined / 3DS failed"
+    },
+    {
+      "from": "declined",
+      "to": "entry",
+      "label": "another card"
+    }
+  ]
+}

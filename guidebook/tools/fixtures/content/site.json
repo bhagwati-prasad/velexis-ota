@@ -1,0 +1,16 @@
+{
+  "title": "Velexis Guidebook",
+  "tagline": "Fixture content: a small but complete sample used by the tests and the QA run.",
+  "repoBase": "https://github.com/bhagwati-prasad/velexis-ota/blob/HEAD/",
+  "commit": "4dd73898",
+  "date": "2026-11-20",
+  "version": "fixture",
+  "apps": ["portal", "platform-api"],
+  "appAliases": { "backend": "platform-api" },
+  "appGroups": [
+    {
+      "label": "Platform",
+      "apps": ["portal", "platform-api"]
+    }
+  ]
+}

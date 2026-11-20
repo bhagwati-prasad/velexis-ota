@@ -1,0 +1,86 @@
+{
+  "id": "seq-kek-rotation",
+  "type": "sequence",
+  "title": "KEK rotation with rewrapBatch (secrets:rewrap)",
+  "caption": "packages/crypto/src/rewrap-batch.ts, called by platform/backend/src/secrets/rewrap.command.ts and ota/backend/src/secrets/rewrap.command.ts. Only data keys move; data is never re-encrypted.",
+  "actors": [
+    {
+      "id": "op",
+      "label": "Operator",
+      "kind": "user"
+    },
+    {
+      "id": "cmd",
+      "label": "secrets:rewrap (each backend)",
+      "kind": "worker"
+    },
+    {
+      "id": "rb",
+      "label": "rewrapBatch",
+      "kind": "lib"
+    },
+    {
+      "id": "db",
+      "label": "PostgreSQL",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "op",
+      "to": "op",
+      "label": "install master-v2.key (both zones), MASTER_KEY_CURRENT=local:v2, restart backends",
+      "kind": "self"
+    },
+    {
+      "from": "op",
+      "to": "cmd",
+      "label": "run secrets:rewrap",
+      "kind": "call"
+    },
+    {
+      "from": "cmd",
+      "to": "rb",
+      "label": "{ keys, fetch, update, aadFor, batchSize: 500, logger }",
+      "kind": "call"
+    },
+    {
+      "from": "rb",
+      "to": "db",
+      "label": "fetch: WHERE encryption_key_id <> 'local:v2' AND id > $after ORDER BY id LIMIT 500",
+      "kind": "call"
+    },
+    {
+      "from": "rb",
+      "to": "rb",
+      "label": "rewrapValue per column (must authenticate at its own AAD)",
+      "kind": "self",
+      "note": "DecryptionError → row counted in failed, unchanged."
+    },
+    {
+      "from": "rb",
+      "to": "db",
+      "label": "update … WHERE id = $id AND every old value IS NOT DISTINCT FROM previous",
+      "kind": "call",
+      "note": "No match → skipped (another writer won)."
+    },
+    {
+      "from": "rb",
+      "to": "db",
+      "label": "repeat until an empty page; then count what is left per kekId",
+      "kind": "call"
+    },
+    {
+      "from": "rb",
+      "to": "cmd",
+      "label": "{ rewrapped, skipped, failed, remainingByKekId }",
+      "kind": "return"
+    },
+    {
+      "from": "op",
+      "to": "op",
+      "label": "remove master-v1.key only when both commands report {} (Redis amadeus:token:* flushed instead)",
+      "kind": "self"
+    }
+  ]
+}

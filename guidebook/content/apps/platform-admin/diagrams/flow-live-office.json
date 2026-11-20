@@ -1,0 +1,33 @@
+{
+  "id": "flow-live-office",
+  "type": "flow",
+  "title": "Serve a live office request, later release the office",
+  "caption": "Mirrors admin-live-office.e2e.ts. Needs a Velexis live account with an available live office and an OTA on a plan with live mode.",
+  "steps": [
+    {
+      "title": "Owner requests live access",
+      "actor": "OTA owner",
+      "body": "Portal → the OTA's Amadeus page → **Request live access**.",
+      "expect": "The live `velexis` connection is `pending_verification` without an office; audit `amadeus.live_requested`; ops alert e-mail."
+    },
+    {
+      "title": "See it on the dashboard",
+      "screen": "/",
+      "body": "Region **Live office requests**.",
+      "expect": "Row with the OTA name/key and 'Requested' time; **Assign office** links `/tenants/<id>?tab=connections#connection-<id>`."
+    },
+    {
+      "title": "Assign a live office",
+      "screen": "/tenants/[tenantId]",
+      "body": "On the 'Amadeus, Live' card pick an available office → **Assign office**.",
+      "expect": "Connection Active with the office; the request leaves the dashboard; owners get 'Live Amadeus access is ready for <OTA>'."
+    },
+    {
+      "title": "Release after own credentials",
+      "screen": "/amadeus/offices",
+      "url": "http://localhost:3001/amadeus/offices?environment=live&status=releasing",
+      "body": "**Release** → tick '<key> confirmed that no booking with future travel remains on office <id>' → reason → **Release office**.",
+      "expect": "Without the box: 'Confirm that no booking with future travel remains on the office.'; without a reason: 'Enter a reason of at least 5 characters.'; then the office is Available."
+    }
+  ]
+}

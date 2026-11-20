@@ -1,0 +1,34 @@
+{
+  "id": "flow-amadeus",
+  "type": "flow",
+  "title": "Amadeus connection: settings, live access, own credentials",
+  "caption": "PF-50 to PF-53. Owners and admins change; finance reads.",
+  "steps": [
+    {
+      "title": "Read the cards",
+      "actor": "Owner",
+      "screen": "Amadeus",
+      "url": "http://localhost:3000/otas/<tenantId>/amadeus",
+      "body": "One card per environment, test first.",
+      "expect": "\"Velexis test account, office DEV1A00xx, active\" (locally the dev offices). An empty pool shows `pending_verification` with the explanation."
+    },
+    {
+      "title": "Settings",
+      "actor": "Owner",
+      "body": "Change the default/queuing/owner office, the ticketing agreement and delay, automated processes (≤31) and monitored queues (≤20), **Save**.",
+      "expect": "\"saved\" with the new version; `supplier_connections.ticketing_defaults`/`monitored_queues` and `version` change. A stale tab gets PRECONDITION_FAILED with \"Reload the page\"."
+    },
+    {
+      "title": "Request live access",
+      "actor": "Owner",
+      "body": "With `FEATURE_LIVE_SWITCH` on and a plan with `liveMode`: optional note, **Request live access**.",
+      "expect": "\"Velexis has your request for live access\"; a live card \"Velexis live account, no office yet, pending\"; ops e-mailed."
+    },
+    {
+      "title": "Own credentials",
+      "actor": "Owner",
+      "body": "With `FEATURE_OWN_AMADEUS` on: **Use my own Amadeus credentials**, client id, secret, office ids; step-up.",
+      "expect": "202 then \"being verified\"; `credential_submissions` row; final applied/failed in words; secret field emptied."
+    }
+  ]
+}

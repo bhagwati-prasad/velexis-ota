@@ -1,0 +1,41 @@
+{
+  "id": "payout-account-states",
+  "type": "state",
+  "title": "OTA payout account review",
+  "caption": "platform.tenant_payout_accounts.status, shown masked in the connections tab of /tenants/[tenantId]. Review sends If-Match; Reveal (reason + step-up) is audited every time and hides after 60 s.",
+  "states": [
+    {
+      "id": "none",
+      "label": "not entered yet",
+      "kind": "initial",
+      "detail": "`adminGetPayoutAccount` answers 404."
+    },
+    {
+      "id": "pending",
+      "label": "pending_review",
+      "kind": "normal",
+      "detail": "**Verify** and **Reject** offered."
+    },
+    {
+      "id": "verified",
+      "label": "verified",
+      "kind": "normal",
+      "detail": "Approving a positive statement is allowed. **Reject** offered."
+    },
+    {
+      "id": "rejected",
+      "label": "rejected",
+      "kind": "error",
+      "detail": "`review_note` (1-1000 chars) shown to the owner. **Verify** offered."
+    }
+  ],
+  "transitions": [
+    { "from": "none", "to": "pending", "label": "owner saves bank details (portal, step-up)" },
+    { "from": "pending", "to": "verified", "label": "Verify (If-Match)" },
+    { "from": "pending", "to": "rejected", "label": "Reject with a note" },
+    { "from": "verified", "to": "rejected", "label": "Reject with a note" },
+    { "from": "rejected", "to": "verified", "label": "Verify" },
+    { "from": "verified", "to": "pending", "label": "owner changes the account" },
+    { "from": "rejected", "to": "pending", "label": "owner changes the account" }
+  ]
+}

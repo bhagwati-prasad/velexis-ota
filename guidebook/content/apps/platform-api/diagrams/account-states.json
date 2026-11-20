@@ -1,0 +1,96 @@
+{
+  "id": "account-states",
+  "type": "state",
+  "title": "Account status and lockout",
+  "caption": "`platform.accounts.status`. The sign-in lockout is `locked_until` (5 failures → 15 min), not the `locked` status, which no code writes.",
+  "states": [
+    {
+      "id": "start",
+      "label": "sign-up",
+      "kind": "initial"
+    },
+    {
+      "id": "pending_verification",
+      "label": "pending_verification",
+      "kind": "normal",
+      "detail": "Can sign in; access token `ev=false` reaches only `portal_unverified` operations."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Verified e-mail; full portal access (subject to roles)."
+    },
+    {
+      "id": "lockedout",
+      "label": "locked out (locked_until ahead)",
+      "kind": "error",
+      "detail": "`423 ACCOUNT_LOCKED` with Retry-After; `status` stays as it was. The failure count is cleared only by a successful sign-in or adminUnlockAccount, so after 15 min each further wrong password locks again."
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "error",
+      "detail": "adminDisableAccount: every session family revoked, `staffdeny:acct:<id>` written; tokens answer `401 UNAUTHENTICATED` at once; a correct password at sign-in answers `403 ACCOUNT_DISABLED`."
+    },
+    {
+      "id": "locked",
+      "label": "locked (reserved)",
+      "kind": "normal",
+      "detail": "In the CHECK and types; never written. Bug: the admin Accounts filter \"Locked\" therefore always lists nothing."
+    },
+    {
+      "id": "deleted",
+      "label": "deleted (erased, reserved)",
+      "kind": "final",
+      "detail": "Treated as unknown at sign-in; no API sets it."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending_verification",
+      "label": "signUp"
+    },
+    {
+      "from": "pending_verification",
+      "to": "active",
+      "label": "verifyEmail"
+    },
+    {
+      "from": "active",
+      "to": "lockedout",
+      "label": "5th consecutive wrong password"
+    },
+    {
+      "from": "lockedout",
+      "to": "active",
+      "label": "15 min passed + correct password / adminUnlockAccount (status unchanged throughout)"
+    },
+    {
+      "from": "active",
+      "to": "disabled",
+      "label": "adminDisableAccount"
+    },
+    {
+      "from": "pending_verification",
+      "to": "disabled",
+      "label": "adminDisableAccount"
+    },
+    {
+      "from": "disabled",
+      "to": "active",
+      "label": "adminEnableAccount (verified address)"
+    },
+    {
+      "from": "disabled",
+      "to": "pending_verification",
+      "label": "adminEnableAccount (never verified)"
+    },
+    {
+      "from": "pending_verification",
+      "to": "lockedout",
+      "label": "5th consecutive wrong password"
+    }
+  ]
+}

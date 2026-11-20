@@ -1,0 +1,44 @@
+{
+  "id": "flow-offline-checks",
+  "type": "flow",
+  "title": "Check the SDK offline: types, route table, unit and contract tests, bundles",
+  "caption": "Nothing to start: these commands use a fake fetch and never touch the network. Run them from the repository root. They are what CI runs for the SDK (plus the sdk-node22 job on Node.js 22.12.0).",
+  "steps": [
+    {
+      "title": "Build the generated API types once",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/api-types build` (typecheck, build and the contract/bundle tests read the built `@velexis/api-types`; Turborepo does this for you when you use `pnpm exec turbo run …`).",
+      "expect": "`packages/api-types/dist/` exists."
+    },
+    {
+      "title": "Regenerate the route table and compare",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/ota-sdk generate` then `git status ota/sdk` (look only).",
+      "expect": "No change to `src/internal/operations.js` or `test/contract/methods.generated.ts`. A diff means the OpenAPI document changed without regenerating: CI fails on it."
+    },
+    {
+      "title": "Type-check the JSDoc",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/ota-sdk typecheck` (`tsc -p tsconfig.json`: `checkJs`, `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `types: []`).",
+      "expect": "Exit 0, no output."
+    },
+    {
+      "title": "Unit and contract tests",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/ota-sdk test` (Vitest: `test/unit/**` and `test/contract/**`). One file: `pnpm --filter @velexis/ota-sdk exec vitest run test/unit/session-cookie.test.js`.",
+      "expect": "All green. The contract tests also prove: 129 methods equal the document's `x-sdk-method` set (parity), every `@throws` matches the operation's `x-error-codes`, `VERSION` equals `package.json`."
+    },
+    {
+      "title": "Build the bundles and check the size",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/ota-sdk build` (`scripts/build.mjs`, then `scripts/check-size.mjs`).",
+      "expect": "`dist/velexis-sdk.mjs`, `dist/velexis-sdk.iife.js`, `dist/types/*.d.ts` and the printed size, about 15.8 KB min+gzip of the 25 KB budget. Above 25 KB the build fails."
+    },
+    {
+      "title": "Lint",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/ota-sdk lint`.",
+      "expect": "No ESLint errors (the SDK never calls `console.*`)."
+    }
+  ]
+}

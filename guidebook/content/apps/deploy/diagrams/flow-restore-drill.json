@@ -1,0 +1,44 @@
+{
+  "id": "flow-restore-drill",
+  "type": "flow",
+  "title": "Restore drill on a scratch VM (RTO ≤ 4 h)",
+  "caption": "docs/mvp/runbooks/restore-drill.md and deploy/scripts/restore.sh. A scratch VM must never act as production.",
+  "steps": [
+    {
+      "title": "Provision a scratch VM without DNS",
+      "actor": "Developer",
+      "body": "As §3 of the deployment guide, never the production VM.",
+      "expect": "check-vm.sh PASS except SMTP/bucket lines."
+    },
+    {
+      "title": "Isolate before restoring",
+      "actor": "Developer",
+      "body": "`ufw default deny outgoing` + allow DNS, DHCP, mirrors, bucket; turn off every `velexis-*.timer` but egress-refresh; mask both workers via `/etc/systemd/system.control` links to /dev/null.",
+      "expect": "`systemctl is-enabled velexis-ota-worker` → `masked`."
+    },
+    {
+      "title": "Fetch and restore config",
+      "actor": "Developer",
+      "body": "`velexis-restore fetch daily/<date> /root/restore/set`; `velexis-restore config /root/restore/set --identity /root/restore/velexis-config.key`; point Amadeus URLs at `http://127.0.0.1:9`, SMTP at `smtp://127.0.0.1:2525`, empty Stripe keys, feature switches false.",
+      "expect": "MANIFEST check passes; `aide-baseline/` unpacked beside `velexis/`."
+    },
+    {
+      "title": "Restore data",
+      "actor": "Developer",
+      "body": "`velexis-restore db <set> --identity <data key> --replace-live` (type the hostname), then `storage … --replace-live`.",
+      "expect": "Old database kept as `velexis_before_restore_<stamp>`; apps not started."
+    },
+    {
+      "title": "Deploy and check",
+      "actor": "Developer",
+      "body": "Deploy the same sha; `velexis-restore drill <set> --identity <key>`.",
+      "expect": "Figures (tenants, schemas, airports, last audit) match the MANIFEST; `/var/log/velexis/restore-drill-<date>.log` appended."
+    },
+    {
+      "title": "Outbound evidence and cleanup",
+      "actor": "Developer",
+      "body": "Journal shows only `[UFW BLOCK]` for Amadeus/Stripe; `supplier_requests` counts unchanged. `shred -u` keys, destroy VM and disks, fill the drill log.",
+      "expect": "Drill row recorded with date, duration, result."
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "id": "fanout-states",
+  "type": "state",
+  "title": "One tenant schema in the deploy's migration fan-out",
+  "caption": "packages/db migrate.js tenants (run by velexis-deploy as velexis_migrator with SET LOCAL ROLE velexis_provisioner); MIGRATE_TENANT_CONCURRENCY (4) and MIGRATE_TENANT_MAX_FAILURE_RATIO (0.1) from migrator.env.",
+  "states": [
+    {
+      "id": "pending",
+      "label": "Pending files",
+      "kind": "initial"
+    },
+    {
+      "id": "locked",
+      "label": "Locked (pg_advisory_xact_lock(hashtext(schema)))",
+      "kind": "normal"
+    },
+    {
+      "id": "applied",
+      "label": "Applied (ledger rows applied)",
+      "kind": "final",
+      "detail": "Reported as tenant.migrated → platform.tenant_schema_migrations, platform.tenants.schema_version."
+    },
+    {
+      "id": "failed",
+      "label": "Failed (SQLSTATE in the report)",
+      "kind": "error",
+      "detail": "Fan-out continues. More than 10 % failed → exit 3, deploy aborted, old release keeps running. 10 % or fewer → exit 0 and the deploy switches anyway; each failed tenant gets an ops alert e-mail (tenant.migration_failed event)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "pending",
+      "to": "locked",
+      "label": "picked (4 at a time)"
+    },
+    {
+      "from": "locked",
+      "to": "applied",
+      "label": "each file in its own transaction, lock_timeout 5s"
+    },
+    {
+      "from": "locked",
+      "to": "failed",
+      "label": "error, lock timeout, edited applied file"
+    },
+    {
+      "from": "failed",
+      "to": "pending",
+      "label": "fix and deploy again (nothing applied twice)"
+    }
+  ]
+}

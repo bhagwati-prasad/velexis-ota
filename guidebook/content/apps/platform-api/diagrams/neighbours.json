@@ -1,0 +1,268 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Platform API and its neighbours",
+  "caption": "Who calls the platform API, what it calls, and the two queues that connect it to the OTA side. There is no synchronous HTTP between the two backends.",
+  "groups": [
+    {
+      "id": "people",
+      "label": "People"
+    },
+    {
+      "id": "edge",
+      "label": "Edge"
+    },
+    {
+      "id": "callers",
+      "label": "First-party callers"
+    },
+    {
+      "id": "platform",
+      "label": "Platform API (this app)"
+    },
+    {
+      "id": "data",
+      "label": "Data"
+    },
+    {
+      "id": "ota",
+      "label": "OTA side"
+    },
+    {
+      "id": "ext",
+      "label": "External services"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "owner",
+      "label": "OTA owner / member",
+      "group": "people",
+      "kind": "user",
+      "detail": "Uses the portal; never calls the API directly."
+    },
+    {
+      "id": "staff",
+      "label": "Velexis staff",
+      "group": "people",
+      "kind": "user",
+      "detail": "Uses the platform admin (MFA mandatory)."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "group": "edge",
+      "kind": "edge",
+      "term": "caddy",
+      "detail": "Public entry `api.platform.example.com`; blocks `/internal/*`; asks `GET /internal/tls/ask` before issuing a certificate on demand."
+    },
+    {
+      "id": "portal",
+      "label": "Portal server (BFF)",
+      "group": "callers",
+      "kind": "ui",
+      "app": "portal",
+      "term": "bff",
+      "detail": "Next.js server; calls the API on loopback with the end user's IP, user agent and `X-Velexis-Bff-Key`."
+    },
+    {
+      "id": "padmin",
+      "label": "Platform admin server",
+      "group": "callers",
+      "kind": "ui",
+      "app": "platform-admin",
+      "detail": "Next.js server; admin tokens with audience `platform_admin`."
+    },
+    {
+      "id": "api",
+      "label": "Platform API dist/main.js :3100",
+      "group": "platform",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "HTTP API, Stripe webhook receivers, TLS ask, health."
+    },
+    {
+      "id": "worker",
+      "label": "Platform worker dist/worker.js :3101",
+      "group": "platform",
+      "kind": "worker",
+      "app": "platform-api",
+      "detail": "BullMQ processors and schedules; health only on HTTP."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL schema platform",
+      "group": "data",
+      "kind": "db",
+      "detail": "Owned and migrated by this app; the OTA role reads selected tables."
+    },
+    {
+      "id": "redis",
+      "label": "Redis (BullMQ prefix vx, caches, tokens)",
+      "group": "data",
+      "kind": "cache",
+      "detail": "Queues, `ptk:`, `vx:idem:`, `mfach:`, `tlsask:`, `rl:`, channel `vx:invalidate`."
+    },
+    {
+      "id": "otaworker",
+      "label": "OTA worker",
+      "group": "ota",
+      "kind": "worker",
+      "app": "ota-api",
+      "detail": "Consumes `ota-tenant-ops`, answers on `platform-tenant-events`."
+    },
+    {
+      "id": "otaapi",
+      "label": "OTA API",
+      "group": "ota",
+      "kind": "api",
+      "app": "ota-api",
+      "detail": "Reads platform tables (cached 60 s), redeems portal tokens with `GETDEL ptk:…`, subscribes to `vx:invalidate`."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "ext",
+      "kind": "external",
+      "term": "stripe-billing",
+      "detail": "Billing, Checkout, Customer Portal, Connect, balance transactions; webhooks to `/webhooks/stripe/*`."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus OAuth",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Token request only, to verify credentials (stub on 127.0.0.1:4900 locally)."
+    },
+    {
+      "id": "smtp",
+      "label": "SMTP (Mailpit locally)",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Platform e-mails from the outbox; Mailpit UI on http://127.0.0.1:8025."
+    },
+    {
+      "id": "dns",
+      "label": "Public DNS resolvers",
+      "group": "ext",
+      "kind": "external",
+      "detail": "`DNS_RESOLVERS` (default 1.1.1.1, 8.8.8.8) for custom-domain verification."
+    }
+  ],
+  "edges": [
+    {
+      "from": "owner",
+      "to": "portal",
+      "label": "HTTPS",
+      "kind": "sync"
+    },
+    {
+      "from": "staff",
+      "to": "padmin",
+      "label": "HTTPS",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "api",
+      "label": "REST on loopback (Bearer portal token)",
+      "kind": "sync"
+    },
+    {
+      "from": "padmin",
+      "to": "api",
+      "label": "REST on loopback (Bearer admin token)",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "webhooks, TLS ask",
+      "kind": "sync"
+    },
+    {
+      "from": "stripe",
+      "to": "caddy",
+      "label": "webhook POST",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "read/write platform.*",
+      "kind": "data"
+    },
+    {
+      "from": "worker",
+      "to": "pg",
+      "label": "read/write platform.*",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "enqueue, tokens, caches",
+      "kind": "data"
+    },
+    {
+      "from": "worker",
+      "to": "redis",
+      "label": "consume, schedules",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "otaworker",
+      "label": "ota-tenant-ops (tenant.provision …)",
+      "kind": "async"
+    },
+    {
+      "from": "otaworker",
+      "to": "worker",
+      "label": "platform-tenant-events (tenant.provisioned …)",
+      "kind": "async"
+    },
+    {
+      "from": "otaapi",
+      "to": "pg",
+      "label": "SELECT selected platform tables",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "otaapi",
+      "label": "vx:invalidate pub/sub",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "Checkout, Portal, Connect OAuth",
+      "kind": "sync"
+    },
+    {
+      "from": "worker",
+      "to": "stripe",
+      "label": "re-fetch objects, balance transactions",
+      "kind": "sync"
+    },
+    {
+      "from": "worker",
+      "to": "amadeus",
+      "label": "verify credentials",
+      "kind": "sync"
+    },
+    {
+      "from": "worker",
+      "to": "smtp",
+      "label": "send e-mails",
+      "kind": "sync"
+    },
+    {
+      "from": "worker",
+      "to": "dns",
+      "label": "TXT, CNAME, A/AAAA",
+      "kind": "sync"
+    }
+  ]
+}

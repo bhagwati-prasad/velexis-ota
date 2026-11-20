@@ -1,0 +1,48 @@
+{
+  "id": "reconciliation-review-states",
+  "type": "state",
+  "title": "A booking whose create-order answer was lost",
+  "caption": "bookings.status and bookings.reconcile_outcome. The OTA worker reconciles until reconcile_until; what it cannot settle waits for staff in the Reconciliation review view, where the console's \"Close the review\" settles it (OBE-099).",
+  "states": [
+    {
+      "id": "pending",
+      "label": "pending (reconciling)",
+      "kind": "initial",
+      "detail": "Banner \"Outcome unknown, reconciling until <time>\"; Issue and Cancel hidden; in the **Reconciling** list."
+    },
+    {
+      "id": "review",
+      "label": "pending + manual_review",
+      "kind": "normal",
+      "detail": "Banner \"Reconciliation needs staff review\"; **Close the review** for `bookings:cancel`; payment held, checkout locked; in the **Reconciliation review** view."
+    },
+    {
+      "id": "confirmed",
+      "label": "confirmed (found)",
+      "kind": "final",
+      "detail": "`reconcile_outcome = found`, order recorded; Stripe authorisation captured then tickets per policy."
+    },
+    {
+      "id": "failed",
+      "label": "failed (not_found)",
+      "kind": "final",
+      "detail": "`failure_code = SUPPLIER_TIMEOUT`; Stripe authorisation voided + `booking.not_confirmed`; airline card: payment `failed`, no e-mail."
+    }
+  ],
+  "transitions": [
+    { "from": "pending", "to": "confirmed", "label": "worker finds the order" },
+    { "from": "pending", "to": "failed", "label": "worker decides not found" },
+    {
+      "from": "pending",
+      "to": "review",
+      "label": "reconcile_until passed, undecided (e.g. no booking queue)"
+    },
+    {
+      "from": "review",
+      "to": "confirmed",
+      "label": "Close the review: Order found + record locator with VELEXIS <reference>"
+    },
+    { "from": "review", "to": "failed", "label": "Close the review: Not booked + note" },
+    { "from": "review", "to": "review", "label": "refused: remark_mismatch, 412, card number in the note" }
+  ]
+}

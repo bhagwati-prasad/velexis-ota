@@ -1,0 +1,54 @@
+{
+  "id": "search-states",
+  "type": "state",
+  "title": "Flight search and offers (flight_searches.status, expiry)",
+  "caption": "src/shopping/searches.service.ts and offers-purge.processor.ts (offers.purge every 15 min, ≤ 500 searches per job). A search is kept while a checkout's priced offer references it (RESTRICT).",
+  "states": [
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "initial",
+      "detail": "Row written before Flight Offers Search."
+    },
+    {
+      "id": "completed",
+      "label": "completed",
+      "kind": "normal",
+      "detail": "Offers stored (`result_count`, facets); listResults filters in SQL. After `expires_at`: getSearch answers `status: expired` (no 410), listResults `410 SEARCH_EXPIRED`, getOffer and price `410 OFFER_EXPIRED`. A pending or failed search: listResults `409 SEARCH_NOT_COMPLETED`."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Amadeus timeout / 5xx / refusal (`error_code`)."
+    },
+    {
+      "id": "purged",
+      "label": "purged (row deleted)",
+      "kind": "final",
+      "detail": "Deleted with its offers, upsells and priced offers once expired and unreferenced."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "pending",
+      "to": "completed",
+      "label": "Amadeus answered"
+    },
+    {
+      "from": "pending",
+      "to": "failed",
+      "label": "supplier error"
+    },
+    {
+      "from": "completed",
+      "to": "purged",
+      "label": "offers.purge after expires_at"
+    },
+    {
+      "from": "failed",
+      "to": "purged",
+      "label": "offers.purge"
+    }
+  ]
+}

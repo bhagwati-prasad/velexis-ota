@@ -1,0 +1,149 @@
+{
+  "layers": [
+    { "id": "people", "label": "People" },
+    { "id": "edge", "label": "Edge" },
+    { "id": "frontends", "label": "Frontends" },
+    { "id": "apis-workers", "label": "APIs and workers" },
+    { "id": "data", "label": "Data" },
+    { "id": "external", "label": "External services" }
+  ],
+  "nodes": [
+    {
+      "id": "owner",
+      "label": "OTA owner",
+      "layer": "people",
+      "kind": "user",
+      "detail": "Uses the [[app:portal]]."
+    },
+    {
+      "id": "customer",
+      "label": "Traveller",
+      "layer": "people",
+      "kind": "user",
+      "detail": "Books flights on a storefront."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "layer": "edge",
+      "kind": "edge",
+      "detail": "TLS, reverse proxy and WAF."
+    },
+    {
+      "id": "portal",
+      "label": "Portal",
+      "layer": "frontends",
+      "kind": "ui",
+      "app": "portal",
+      "detail": "Next.js [[bff]] on port 3000."
+    },
+    {
+      "id": "storefront",
+      "label": "Storefront",
+      "layer": "frontends",
+      "kind": "ui",
+      "detail": "Hosted storefront (not in the fixture)."
+    },
+    {
+      "id": "platform-api",
+      "label": "Platform API",
+      "layer": "apis-workers",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "NestJS on port 3100."
+    },
+    {
+      "id": "platform-worker",
+      "label": "Platform worker",
+      "layer": "apis-workers",
+      "kind": "worker",
+      "app": "platform-api",
+      "detail": "[[bullmq]] consumer."
+    },
+    {
+      "id": "postgres",
+      "label": "PostgreSQL",
+      "layer": "data",
+      "kind": "db",
+      "detail": "`platform`, `reference` and `tenant_<key>` schemas."
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "layer": "data",
+      "kind": "cache",
+      "detail": "Rate limits and sessions."
+    },
+    {
+      "id": "queue",
+      "label": "Queues",
+      "layer": "data",
+      "kind": "queue",
+      "detail": "BullMQ queues in Redis."
+    },
+    {
+      "id": "files",
+      "label": "Files",
+      "layer": "data",
+      "kind": "storage",
+      "detail": "Invoices and tickets on disk."
+    },
+    { "id": "stripe", "label": "Stripe", "layer": "external", "kind": "external", "detail": "[[stripe]]." },
+    {
+      "id": "smtp",
+      "label": "SMTP / Mailpit",
+      "layer": "external",
+      "kind": "external",
+      "detail": "[[mailpit]] in development."
+    }
+  ],
+  "links": [
+    { "from": "owner", "to": "caddy", "label": "HTTPS", "kind": "sync" },
+    { "from": "customer", "to": "caddy", "label": "HTTPS", "kind": "sync" },
+    { "from": "caddy", "to": "portal", "label": "proxy", "kind": "sync" },
+    { "from": "caddy", "to": "storefront", "label": "proxy", "kind": "sync" },
+    { "from": "portal", "to": "platform-api", "label": "REST", "kind": "sync" },
+    { "from": "platform-api", "to": "postgres", "label": "SQL", "kind": "data" },
+    { "from": "platform-api", "to": "queue", "label": "enqueue", "kind": "async" },
+    { "from": "platform-worker", "to": "queue", "label": "consume", "kind": "async" },
+    { "from": "platform-worker", "to": "postgres", "label": "create schema", "kind": "data" },
+    { "from": "platform-worker", "to": "smtp", "label": "send e-mail", "kind": "async" },
+    { "from": "platform-api", "to": "redis", "label": "rate limits", "kind": "data" },
+    { "from": "platform-api", "to": "stripe", "label": "billing", "kind": "sync" },
+    { "from": "platform-worker", "to": "files", "label": "write PDFs", "kind": "data" }
+  ],
+  "flows": [
+    {
+      "id": "sign-up",
+      "title": "Sign up",
+      "summary": "An owner creates an account and receives the verification e-mail.",
+      "path": [
+        { "from": "owner", "to": "caddy", "label": "POST /sign-up over HTTPS" },
+        { "from": "caddy", "to": "portal", "label": "proxied to the portal" },
+        { "from": "portal", "to": "platform-api", "label": "POST /v1/auth/sign-up (server side)" },
+        { "from": "platform-api", "to": "postgres", "label": "INSERT platform.accounts" },
+        { "from": "platform-api", "to": "queue", "label": "enqueue verification e-mail" },
+        { "from": "queue", "to": "platform-worker", "label": "worker picks up the job" },
+        { "from": "platform-worker", "to": "smtp", "label": "send e-mail (Mailpit)" }
+      ]
+    },
+    {
+      "id": "create-ota",
+      "title": "Create an OTA",
+      "summary": "The owner creates a tenant; the worker provisions its schema.",
+      "path": [
+        { "from": "owner", "to": "caddy", "label": "submit New OTA" },
+        { "from": "caddy", "to": "portal", "label": "proxy" },
+        { "from": "portal", "to": "platform-api", "label": "POST /v1/tenants" },
+        { "from": "platform-api", "to": "postgres", "label": "INSERT platform.tenants (provisioning)" },
+        { "from": "platform-api", "to": "queue", "label": "enqueue provisioning job" },
+        { "from": "queue", "to": "platform-worker", "label": "dequeue" },
+        {
+          "from": "platform-worker",
+          "to": "postgres",
+          "label": "CREATE SCHEMA tenant_<key>, migrate, mark active"
+        }
+      ]
+    }
+  ]
+}

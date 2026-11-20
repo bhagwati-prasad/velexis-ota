@@ -1,0 +1,47 @@
+{
+  "id": "sign-in",
+  "type": "sequence",
+  "title": "Sign in",
+  "caption": "E-mail and password sign-in through the portal's server action.",
+  "actors": [
+    { "id": "user", "label": "Browser", "kind": "user" },
+    { "id": "portal", "label": "Portal (server)", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "db", "label": "PostgreSQL", "kind": "db" }
+  ],
+  "steps": [
+    {
+      "from": "user",
+      "to": "portal",
+      "label": "POST /sign-in (form)",
+      "kind": "call",
+      "note": "The form posts to a server action; no token reaches the browser."
+    },
+    {
+      "from": "portal",
+      "to": "api",
+      "label": "POST /v1/auth/sign-in",
+      "kind": "call",
+      "note": "Operation `signIn`."
+    },
+    { "from": "api", "to": "db", "label": "SELECT account by lower(email)", "kind": "call" },
+    { "from": "db", "to": "api", "label": "account row", "kind": "return" },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "verify Argon2id hash",
+      "kind": "self",
+      "note": "Failed attempts increase `failed_login_count`."
+    },
+    { "from": "api", "to": "db", "label": "INSERT account_sessions", "kind": "call" },
+    { "from": "api", "to": "portal", "label": "200 tokens", "kind": "return" },
+    {
+      "from": "portal",
+      "to": "user",
+      "label": "Set-Cookie (HttpOnly) + redirect",
+      "kind": "return",
+      "note": "See [[session-cookie]]."
+    },
+    { "from": "api", "to": "db", "label": "UPDATE last_login_at", "kind": "async" }
+  ]
+}

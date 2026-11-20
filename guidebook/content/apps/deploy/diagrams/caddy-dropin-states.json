@@ -1,0 +1,33 @@
+{
+  "id": "caddy-dropin-states",
+  "type": "state",
+  "title": "The record of Caddy's drop-in (/var/lib/velexis/caddy-dropin.sha256)",
+  "caption": "deploy.sh activate_caddyfile and provision-vm.sh restart_caddy (lead decision (22b)). A deploy restarts Caddy when the installed drop-in differs from this record and the service runs the Velexis build.",
+  "states": [
+    {
+      "id": "absent",
+      "label": "no record (VM provisioned before 22b)",
+      "kind": "initial",
+      "detail": "The deploy compares with the drop-in installed when it began, then writes the record."
+    },
+    {
+      "id": "sha",
+      "label": "<SHA-256> (or none)",
+      "kind": "normal",
+      "detail": "The drop-in Caddy was last (re)started with."
+    },
+    {
+      "id": "restarting",
+      "label": "restarting",
+      "kind": "error",
+      "detail": "Written before `systemctl restart caddy`; stays if the restart fails or the run is cut off, so the next deploy restarts again."
+    }
+  ],
+  "transitions": [
+    { "from": "absent", "to": "sha", "label": "first deploy writes it" },
+    { "from": "sha", "to": "restarting", "label": "build or drop-in changed → restart begins" },
+    { "from": "restarting", "to": "sha", "label": "Caddy started" },
+    { "from": "restarting", "to": "restarting", "label": "restart failed → deploy dies; run --rollback" },
+    { "from": "sha", "to": "sha", "label": "Caddyfile or waf only → reload, record unchanged" }
+  ]
+}

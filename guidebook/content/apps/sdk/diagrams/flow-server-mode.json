@@ -1,0 +1,44 @@
+{
+  "id": "flow-server-mode",
+  "type": "flow",
+  "title": "Use server mode from a Node.js script (secret key, endUser, per-visitor clients)",
+  "caption": "How a third-party server uses the SDK (build-your-own-frontend guide §2.1, §8.2). Node.js 24 imports ota/sdk/src/index.js directly: the source has no runtime dependency. Development keys only.",
+  "steps": [
+    {
+      "title": "Make one root client per process",
+      "actor": "Owner",
+      "body": "In a file `try-sdk.mjs` at the repository root: `import { createVelexisClient, isVelexisError } from \"./ota/sdk/src/index.js\"; const root = createVelexisClient({ secretKey: process.env.SK, baseUrl: \"http://127.0.0.1:4000\" });` Run with `SK=sk_test_… node try-sdk.mjs` (the seeded **Secret test key**).",
+      "expect": "No request at creation. A typo such as `secretkey` throws `TypeError: Velexis SDK: unknown option \"secretkey\"`; a `pk_…` value as `secretKey` throws a `TypeError` that names the option, never the value."
+    },
+    {
+      "title": "Derive a client per visitor request",
+      "actor": "Owner",
+      "body": "`const visitor = root.withOptions({ endUser: { ip: \"2001:db8::10\", userAgent: \"guide\" } }); console.log((await visitor.storefront.get()).name);`",
+      "expect": "`Demo Travel`. The request carries `X-Api-Key`, `X-Velexis-End-User-IP` and `X-Velexis-End-User-Agent`; rate limits count against that IP, not 127.0.0.1."
+    },
+    {
+      "title": "Sign a customer in and keep the tokens server-side",
+      "actor": "Owner",
+      "body": "Sign up first (or use a customer you created on the storefront), then `const r = await visitor.auth.signIn({ email, password });` and `const me = root.withOptions({ endUser: …, accessToken: r.session.accessToken, refreshToken: r.session.refreshToken, onSessionRefreshed: (s) => store(s), onSessionExpired: () => clear() });`",
+      "expect": "`AuthSessionResult` with tokens (an OTA that requires verification answers `403 EMAIL_NOT_VERIFIED` and sends a fresh link to Mailpit). `visitor` holds no session (it was made without tokens): nothing is kept. `tenant_demo.customer_sessions` has a new row for the customer."
+    },
+    {
+      "title": "Call as the customer; watch the refresh",
+      "actor": "Owner",
+      "body": "`await me.account.get(); await me.bookings.list();` Customer access tokens live 15 minutes: wait for the expiry and call again.",
+      "expect": "On `401 TOKEN_EXPIRED` one `POST /v1/auth/refresh` with `{ refreshToken }` and the key only; `onSessionRefreshed` gets the new pair; the call is sent again and succeeds. The old refresh row has `rotated_at` and `replaced_by_id`."
+    },
+    {
+      "title": "Read an error safely",
+      "actor": "Owner",
+      "body": "`try { await me.bookings.get({ bookingId: \"bkg_00000000000000000000000000\" }); } catch (e) { console.log(isVelexisError(e, \"NOT_FOUND\"), JSON.stringify(e)); }`",
+      "expect": "`true` and a JSON with `name`, `code`, `message`, `status`, `requestId`, `fieldErrors`, `retryable`; never a key, a bearer token or a JWT. (An id that breaks the pattern `^bkg_[0-9A-Za-z]{16,40}$`, such as `bkg_x`, answers `400 VALIDATION_FAILED` instead.)"
+    },
+    {
+      "title": "Sign out",
+      "actor": "Owner",
+      "body": "`await me.auth.signOut({ scope: \"current\" });` then `await me.account.get();`",
+      "expect": "`204` (resolves `undefined`). The SDK still holds the tokens in `me`, and access tokens are stateless for their 15 minutes (ADR-0008), so `account.get` keeps answering until the token expires; then the automatic refresh is refused (`401`, the session is revoked) and `onSessionExpired` runs. Drop the client after signing out."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "flow-open-console",
+  "type": "flow",
+  "title": "Open the console from the portal (and what must not work)",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/sso-bookings.e2e.ts (first and last steps).",
+  "steps": [
+    {
+      "title": "Open the OTA in the portal",
+      "actor": "Owner",
+      "screen": "/otas/<tenantId>",
+      "url": "http://localhost:3000/otas/<tenantId>",
+      "body": "Signed in to the portal, open your OTA's page.",
+      "expect": "**Open console** is shown for staff of an active OTA."
+    },
+    {
+      "title": "Open console",
+      "actor": "Owner",
+      "body": "Press **Open console**. The hand-off page posts the one-time token to `/sso` by itself.",
+      "expect": "`/bookings` of this OTA; four `__Host-vx_*` cookies, HttpOnly, Secure, SameSite=Lax; `document.cookie` is empty; a `staff.sign_in` row in `tenant_<key>.staff_actions`."
+    },
+    {
+      "title": "Replay the hand-off",
+      "actor": "Tester",
+      "body": "Go back to the hand-off page and resubmit it (or replay the captured POST).",
+      "expect": "`401` page \"This console link expired or was already used\" with **Back to the portal**; no staff cookie set."
+    },
+    {
+      "title": "Sign out",
+      "actor": "Owner",
+      "screen": "/signed-out",
+      "body": "Press **Sign out** in the header.",
+      "expect": "`/signed-out`; access, refresh and environment cookies gone; opening `/bookings` now goes to the portal's console page."
+    }
+  ]
+}

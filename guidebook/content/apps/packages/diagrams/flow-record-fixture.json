@@ -1,0 +1,32 @@
+{
+  "id": "flow-record-fixture",
+  "type": "flow",
+  "title": "Record a stub fixture from the Amadeus test environment",
+  "caption": "Manual developer step (OBE-027, X-034); never in CI (refuses when CI is set) and never in production.",
+  "steps": [
+    {
+      "title": "Credentials",
+      "actor": "Developer",
+      "body": "`AMADEUS_RECORD_CLIENT_ID` and `AMADEUS_RECORD_CLIENT_SECRET` in the git-ignored `.env.local` (root or `tools/amadeus-stub`). Never on the command line.",
+      "expect": ""
+    },
+    {
+      "title": "Request file",
+      "actor": "Developer",
+      "body": "Outside the repository, synthetic travellers only (`ALEX TESTER`, `person1@example.com`): `{ \"query\": {…}, \"pathParams\": {…}, \"body\": {…} }`.",
+      "expect": ""
+    },
+    {
+      "title": "Record",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/amadeus-stub record quoteAirOffers --request ~/amadeus/price.json [--scenario <name>]`.",
+      "expect": "Validated request, token, call, scrub, scan; writes `fixtures/<folder>/<scenario>.json`; prints counts, never values. Any scan finding stops it."
+    },
+    {
+      "title": "Review",
+      "actor": "Developer",
+      "body": "Read the file, list it in `fixtures/README.md`, run `pnpm --filter @velexis/amadeus-stub test`.",
+      "expect": "The fixture scan covers the new file."
+    }
+  ]
+}

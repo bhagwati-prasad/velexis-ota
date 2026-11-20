@@ -1,0 +1,132 @@
+{
+  "id": "seq-checkout-airline-card",
+  "type": "sequence",
+  "title": "Pay with the airline card (the page's own card form)",
+  "caption": "`src/pages/checkout-pay-airline.js` + `lib/card-brand.js` (OADR-0017, ota/docs/flows/checkout-airline-card.md). The card lives only in the inputs and in one request body; the API wraps it in a SensitiveCard and forgets it at the end of the request.",
+  "actors": [
+    {
+      "id": "t",
+      "label": "Traveller",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "pay-airline page",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET /v1/storefront (no-store), GET checkout, GET payment",
+      "kind": "call",
+      "note": "Ids from the address only; nothing from sessionStorage/localStorage. The form shows only when supportedMethods lists airline_card and airlineCard.enabled."
+    },
+    {
+      "from": "t",
+      "to": "b",
+      "label": "types holder, number, expiry, security code",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "6 digits: brand from the BIN (local)",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "PATCH /v1/payments/{id} {card: {brand, bin}}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Offers Price include=credit-card-fees",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "fee + total the airline charges → button \"Pay €…\"",
+      "kind": "return"
+    },
+    {
+      "from": "t",
+      "to": "b",
+      "label": "Pay",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "local checks: holder, Luhn, expiry, CVC length, accepted brand",
+      "kind": "self",
+      "note": "A typing mistake is never sent, so it never costs one of the three attempts."
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/checkouts/{id}/airline-card-completion (new Idempotency-Key per submit, 90 s, never retried)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "rl:ota_airline_card_ip / _tenant, t:…:ac:chk:<checkoutId> (max 3), t:…:ac:suspended",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "idempotency (hash without card), lock checkout, booking pending",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Create Orders issue=true, formOfPayments creditCard",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "booking ticketed, payments captured (card_brand, card_bin, card_last4 only)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "201 → inputs emptied → location.replace(/confirmation.html?booking=…)",
+      "kind": "return"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "or 402 PAYMENT_DECLINED / 403 PAYMENT_ATTEMPTS_EXCEEDED / 504 SUPPLIER_TIMEOUT (→ pending=1)",
+      "kind": "return"
+    }
+  ]
+}

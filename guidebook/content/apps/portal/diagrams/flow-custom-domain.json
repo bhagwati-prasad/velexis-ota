@@ -1,0 +1,40 @@
+{
+  "id": "flow-custom-domain",
+  "type": "flow",
+  "title": "Add and verify a custom domain",
+  "caption": "PF-40, PF-41. Needs FEATURE_CUSTOM_DOMAINS on and a plan with limits.customDomains ≥ 1.",
+  "steps": [
+    {
+      "title": "Open Domains",
+      "actor": "Owner",
+      "screen": "Domains",
+      "url": "http://localhost:3000/otas/<tenantId>/domains",
+      "body": "\"Velexis address\" shows `<key>.ota.example.com`, Primary, Verified.",
+      "expect": "Without the switch or the plan: no add form, or \"Custom domains are not in your plan\"."
+    },
+    {
+      "title": "Add",
+      "actor": "Owner",
+      "body": "Domain name `travel.acme.example`, **Add domain**.",
+      "expect": "\"travel.acme.example was added\" with the TXT `_velexis.<host>` record and CNAME (or A/AAAA) options, \"Not checked yet\", the 72-hour deadline. `tenant_domains` row `pending` with `verification_token`."
+    },
+    {
+      "title": "Copy a record",
+      "actor": "Owner",
+      "body": "Use the copy button of the TXT value.",
+      "expect": "Clipboard holds exactly the value; a polite live region announces it."
+    },
+    {
+      "title": "Check now",
+      "actor": "Owner",
+      "body": "**Check now** (1 per minute).",
+      "expect": "\"Velexis is checking the DNS records … now\"; after a reload the last check shows (`txt_missing`, `dns_timeout`…) in words, never the code."
+    },
+    {
+      "title": "Make primary / remove",
+      "actor": "Owner",
+      "body": "On a verified domain **Make primary**; on any custom domain **Remove**.",
+      "expect": "One primary per tenant (`is_primary`); removing the primary moves it back to the sub-domain."
+    }
+  ]
+}

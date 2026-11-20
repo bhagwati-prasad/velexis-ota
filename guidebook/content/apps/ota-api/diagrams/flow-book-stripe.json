@@ -1,0 +1,47 @@
+{
+  "id": "flow-book-stripe",
+  "type": "flow",
+  "title": "Book as a guest with a Stripe card",
+  "caption": "Mirrors tools/e2e/specs/storefront/checkout-stripe.e2e.ts (nightly, needs Stripe test keys and stripe listen). Without STRIPE_SECRET_KEY_TEST / STRIPE_PUBLISHABLE_KEY_TEST the card method is not offered. The dummy values of .env.example (sk_test_replace_me, pk_test_replace_me) count as set: the card method is offered and creating the payment fails with 502 PAYMENT_PROVIDER_ERROR.",
+  "steps": [
+    {
+      "title": "Forward Stripe events",
+      "actor": "Developer",
+      "body": "Put your own Stripe **test** keys in `ota/backend/.env.local`, run `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test` and set the printed `whsec_…` as `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`; restart.",
+      "expect": "`GET /v1/storefront` lists the card method with a `pk_test_…` publishable key."
+    },
+    {
+      "title": "Search, price, checkout",
+      "actor": "Traveller",
+      "url": "http://localhost:5173/",
+      "body": "As in the airline-card flow; add one extra bag on the checkout page.",
+      "expect": "`PUT …/ancillaries` re-prices: `checkout_ancillaries`, a child `priced_offers` row, new totals."
+    },
+    {
+      "title": "Card page",
+      "actor": "Traveller",
+      "screen": "/checkout/pay-card.html",
+      "body": "The Payment Element loads. Use a 3-D Secure test card (e.g. 4000 0027 6000 3184).",
+      "expect": "`POST …/payments {method: card}` → PaymentIntent (manual capture); `payments` `requires_payment_method`."
+    },
+    {
+      "title": "Pay and pass 3-D Secure",
+      "actor": "Traveller",
+      "body": "Complete the challenge.",
+      "expect": "`POST …/complete` → `201`; booking `ticketed` (policy issue_after_payment); payment `captured`; webhooks add `payment_events` rows (`source = webhook`)."
+    },
+    {
+      "title": "Sold out at completion",
+      "actor": "Tester",
+      "body": "Repeat with header `X-Stub-Scenario: sold-out` on `checkout.complete` (outside production the API forwards it to the stub).",
+      "expect": "`409 SOLD_OUT`, booking `failed` (console only), payment `canceled`, PaymentIntent canceled at Stripe; the page says nothing was charged."
+    },
+    {
+      "title": "Guest access",
+      "actor": "Traveller",
+      "screen": "/booking.html?id=bkg_…",
+      "body": "Open the booking page in the same browser.",
+      "expect": "Works through the `__Host-vx_bt` cookie; documents downloadable through `/v1/files/…?exp=&sig=` links valid 5 minutes."
+    }
+  ]
+}

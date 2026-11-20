@@ -1,0 +1,97 @@
+{
+  "id": "setup-page-states",
+  "type": "state",
+  "title": "What the set-up page shows",
+  "caption": "The set-up page (/otas/[id]/setup) mirrors the tenant, its provision job and, for owners and finance, its subscription. Polling (every 2 s) stops at a final state.",
+  "states": [
+    {
+      "id": "start",
+      "label": "Created",
+      "kind": "initial",
+      "detail": "`createTenant` answered 202."
+    },
+    {
+      "id": "payment",
+      "label": "Payment needed",
+      "kind": "normal",
+      "detail": "M5: job queued at attempt 0 and subscription `incomplete`. Owners: Continue to payment."
+    },
+    {
+      "id": "confirming",
+      "label": "Confirming payment",
+      "kind": "normal",
+      "detail": "`?checkout=success`: progress polled while Stripe's webhook arrives."
+    },
+    {
+      "id": "running",
+      "label": "Setting up (polling)",
+      "kind": "normal",
+      "detail": "\"4 of 9 steps done\"; `RATE_LIMITED`/503 keep polling with a note."
+    },
+    {
+      "id": "ready",
+      "label": "Your OTA is ready",
+      "kind": "final",
+      "detail": "Owners: Reveal the test keys (once, within 24 h)."
+    },
+    {
+      "id": "failed",
+      "label": "Set-up failed",
+      "kind": "error",
+      "detail": "Step it stopped at, attempts, job id. Owners: Retry the set-up."
+    },
+    {
+      "id": "abandoned",
+      "label": "Payment not completed",
+      "kind": "error",
+      "detail": "Job `canceled`, subscription `incomplete_expired` (48 h). Owners: Retry (new Checkout)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "running",
+      "label": "pre-M5 / gate open"
+    },
+    {
+      "from": "start",
+      "to": "payment",
+      "label": "M5, Checkout not paid"
+    },
+    {
+      "from": "payment",
+      "to": "confirming",
+      "label": "back from Stripe"
+    },
+    {
+      "from": "confirming",
+      "to": "running",
+      "label": "webhook dispatched the job"
+    },
+    {
+      "from": "running",
+      "to": "ready",
+      "label": "tenant active"
+    },
+    {
+      "from": "running",
+      "to": "failed",
+      "label": "job failed (non-retryable or 5 attempts)"
+    },
+    {
+      "from": "failed",
+      "to": "running",
+      "label": "owner retries (retryProvisioning)"
+    },
+    {
+      "from": "payment",
+      "to": "abandoned",
+      "label": "48 h without payment"
+    },
+    {
+      "from": "abandoned",
+      "to": "payment",
+      "label": "owner retries → new Checkout"
+    }
+  ]
+}

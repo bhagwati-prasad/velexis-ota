@@ -1,0 +1,38 @@
+{
+  "id": "notification-states",
+  "type": "state",
+  "title": "Outbox e-mail status (notifications.status), as the code uses it",
+  "caption": "src/notifications/outbox.repository.ts: a claim is a lease on next_attempt_at, not a status, so 'sending' is never written; 'delivered' and 'bounced' exist in the CHECK list but no code sets them (no bounce webhooks in the MVP). secret_payload_ciphertext is purged when a row leaves pending.",
+  "states": [
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "initial",
+      "detail": "Inserted in the business transaction (`dedupe_key` unique); due when `next_attempt_at` ≤ now. A worker's lease moves `next_attempt_at` 5 minutes ahead."
+    },
+    {
+      "id": "sent",
+      "label": "sent",
+      "kind": "final",
+      "detail": "Handed to SMTP (`sent_at`, `provider_message_id`, Message-ID `<ntf_…@domain>`); secrets purged."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Retries exhausted or permanent error (`last_error`); secrets purged."
+    },
+    {
+      "id": "cancelled",
+      "label": "cancelled",
+      "kind": "final",
+      "detail": "Customer erased before sending (recipient becomes erased@erased.invalid)."
+    }
+  ],
+  "transitions": [
+    { "from": "pending", "to": "pending", "label": "claimDue lease / markRetry / release" },
+    { "from": "pending", "to": "sent", "label": "markSent" },
+    { "from": "pending", "to": "failed", "label": "markFailed" },
+    { "from": "pending", "to": "cancelled", "label": "customers.erase" }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "id": "amadeus-account-states",
+  "type": "state",
+  "title": "Velexis Amadeus account",
+  "caption": "`platform.amadeus_accounts.status`: the shared credentials per environment, entered by a platform admin (step-up).",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending_verification",
+      "label": "pending_verification",
+      "kind": "normal"
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal"
+    },
+    {
+      "id": "invalid_credentials",
+      "label": "invalid_credentials",
+      "kind": "error",
+      "detail": "`last_error` set."
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending_verification",
+      "label": "adminCreateAmadeusAccount / dev:seed"
+    },
+    {
+      "from": "pending_verification",
+      "to": "active",
+      "label": "amadeus_account.verify: token received"
+    },
+    {
+      "from": "pending_verification",
+      "to": "invalid_credentials",
+      "label": "token refused"
+    },
+    {
+      "from": "invalid_credentials",
+      "to": "pending_verification",
+      "label": "adminUpdateAmadeusAccount (rotate) / adminVerifyAmadeusAccount"
+    },
+    {
+      "from": "active",
+      "to": "pending_verification",
+      "label": "rotate credentials"
+    },
+    {
+      "from": "active",
+      "to": "disabled",
+      "label": "adminUpdateAmadeusAccount disable"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "id": "seq-backup",
+  "type": "sequence",
+  "title": "Nightly backup and the off-site copy",
+  "caption": "deploy/scripts/backup.sh run by velexis-backup.timer at 02:30 UTC (RandomizedDelaySec 10 min). Settings in /etc/velexis/backup.env. The bucket, not the VM, enforces retention.",
+  "actors": [
+    { "id": "t", "label": "velexis-backup.timer", "kind": "worker" },
+    { "id": "b", "label": "velexis-backup (root)", "kind": "worker" },
+    { "id": "pg", "label": "PostgreSQL (runuser postgres)", "kind": "db" },
+    { "id": "fs", "label": "/var/backups/velexis/<UTC stamp>/", "kind": "db" },
+    { "id": "bk", "label": "Bucket <remote>/daily/<date>/", "kind": "external" },
+    { "id": "hc", "label": "velexis-healthcheck backup-age", "kind": "worker" },
+    { "id": "al", "label": "velexis-alert@ (OnFailure)", "kind": "worker" }
+  ],
+  "steps": [
+    { "from": "t", "to": "b", "label": "start velexis-backup.service", "kind": "call" },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "refuse: shared data/config key, non-age1 lines, AGE-SECRET-KEY anywhere in /etc/velexis",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "pg",
+      "label": "pg_dump --format=custom --compress=zstd:3 velexis; pg_dumpall --globals-only --no-role-passwords",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "fs",
+      "label": "age-encrypt velexis-db.dump, globals.sql, storage.tar.zst, redis-aof.tar.zst (data key); config.tar.zst + aide-baseline/ (config key); MANIFEST.txt",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "bk",
+      "label": "rclone copy --immutable (monthly/<yyyy-mm>/ on the 1st); rclone check",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "fs",
+      "label": "write /var/lib/velexis/backup-last-success; prune local sets older than 2 days",
+      "kind": "call"
+    },
+    { "from": "b", "to": "al", "label": "any failure → unit failed → one e-mail", "kind": "async" },
+    {
+      "from": "hc",
+      "to": "fs",
+      "label": "every 5 min: marker older than 26 h → 'health check failed: backup-age'",
+      "kind": "call"
+    }
+  ]
+}

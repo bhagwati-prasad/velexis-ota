@@ -1,0 +1,36 @@
+{
+  "id": "flow-payout-settlements",
+  "type": "flow",
+  "title": "Payout account and settlements",
+  "caption": "PF-63, PF-64. Owners edit, finance reads; needs FEATURE_SETTLEMENTS.",
+  "steps": [
+    {
+      "title": "Add a payout account",
+      "actor": "Owner",
+      "screen": "Payout account",
+      "url": "http://localhost:3000/otas/<tenantId>/payments/payout-account",
+      "body": "Holder, bank country, currency, IBAN `NO9386011117947` with BIC `DNBANOKK` (the IBAN registry's example), **Save the payout account**.",
+      "expect": "Step-up dialog \"Confirm it is you\", then the masked view \"•••• 7947\" and \"Pending review\"."
+    },
+    {
+      "title": "Check storage",
+      "actor": "Tester",
+      "body": "`select status, last4, scheme from platform.tenant_payout_accounts where tenant_id='<id>';`",
+      "expect": "`pending_review`, `7947`; the number exists only in `bank_details_ciphertext`."
+    },
+    {
+      "title": "Wrong IBAN",
+      "actor": "Tester",
+      "body": "Change one digit of the IBAN.",
+      "expect": "Checksum error at the field, no call; the number is never echoed back."
+    },
+    {
+      "title": "Settlements",
+      "actor": "Finance member",
+      "screen": "Settlements",
+      "url": "http://localhost:3000/otas/<tenantId>/payments/settlements",
+      "body": "Open the list and a statement; **Download the lines as CSV**.",
+      "expect": "Only approved, paid and carried-forward statements; file `velexis-statement-<yyyy-mm>-<CUR>.csv`; drafts answer 404."
+    }
+  ]
+}

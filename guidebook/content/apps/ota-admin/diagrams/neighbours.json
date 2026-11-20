@@ -1,0 +1,136 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "The OTA admin and its neighbours",
+  "caption": "Staff reach the admin only by SSO from the portal. The admin is a BFF: its server calls the OTA API's console operations on loopback with the service key and the staff token; it never talks to Amadeus, Stripe, PostgreSQL or Redis itself.",
+  "groups": [
+    { "id": "people", "label": "People" },
+    { "id": "edge", "label": "Edge" },
+    { "id": "frontends", "label": "Frontends" },
+    { "id": "apis", "label": "APIs and workers" },
+    { "id": "data", "label": "Data" },
+    { "id": "external", "label": "External" }
+  ],
+  "nodes": [
+    {
+      "id": "staff",
+      "label": "OTA staff",
+      "group": "people",
+      "kind": "user",
+      "detail": "Owner, admin, agent, finance or viewer of one OTA (a portal membership).",
+      "term": "staff-role"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "group": "edge",
+      "kind": "edge",
+      "detail": "`admin.ota.example.com` → `127.0.0.1:3002`; `/health/*` answers 404 from outside.",
+      "app": "deploy"
+    },
+    {
+      "id": "portal",
+      "label": "Portal",
+      "group": "frontends",
+      "kind": "ui",
+      "detail": "\"Open console\" mints the portal token and posts it to `/sso`; owns team, API keys, domains, billing.",
+      "app": "portal"
+    },
+    {
+      "id": "admin",
+      "label": "OTA admin (Next.js, :3002)",
+      "group": "frontends",
+      "kind": "ui",
+      "detail": "Server components and server actions; cookies `__Host-vx_staff_at`, `__Host-vx_staff_rt`, `__Host-vx_env`, `__Host-vx_tenant`.",
+      "app": "ota-admin",
+      "term": "ota-admin"
+    },
+    {
+      "id": "storefront",
+      "label": "Storefront",
+      "group": "frontends",
+      "kind": "ui",
+      "detail": "Shows what the admin's settings, rules, pages and templates change (5-minute browser copy).",
+      "app": "storefront"
+    },
+    {
+      "id": "platformApi",
+      "label": "Platform API",
+      "group": "apis",
+      "kind": "api",
+      "detail": "Writes `ptk:<sha256>` (60 s) for the SSO; owns memberships, the live flag and the billing notice.",
+      "app": "platform-api"
+    },
+    {
+      "id": "otaApi",
+      "label": "OTA API (:4000)",
+      "group": "apis",
+      "kind": "api",
+      "detail": "`/v1/console/**`: checks the service key (loopback only), the staff token, the permission and the environment; writes `staff_actions`.",
+      "app": "ota-api",
+      "term": "console-namespace"
+    },
+    {
+      "id": "otaWorker",
+      "label": "OTA worker",
+      "group": "apis",
+      "kind": "worker",
+      "detail": "Refunds (`refund.submit`), voids, capture retries, e-mails, reconciliation, queue poller.",
+      "app": "ota-api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL tenant_<key>",
+      "group": "data",
+      "kind": "db",
+      "detail": "Bookings, payments, settings, `staff_actions`, `idempotency_keys`, `queue_snapshots`, `supplier_requests`.",
+      "term": "tenant-schema"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "data",
+      "kind": "cache",
+      "detail": "`ptk:*`, `staffsess:*`, `staffdeny:*`, `t:<tenantId>:<env>:sf:*` caches, BullMQ `ota-*`."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus (stub locally)",
+      "group": "external",
+      "kind": "external",
+      "detail": "Order reads, issue, cancel, queues, raw shopping reads."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "external",
+      "kind": "external",
+      "detail": "Capture and refund of the OTA's customer payments."
+    },
+    {
+      "id": "mail",
+      "label": "SMTP / Mailpit",
+      "group": "external",
+      "kind": "external",
+      "detail": "`booking.ticketed`, `booking.cancelled`, `booking.confirmed`… sent by the OTA worker."
+    }
+  ],
+  "edges": [
+    { "from": "staff", "to": "portal", "label": "Open console", "kind": "sync" },
+    { "from": "portal", "to": "platformApi", "label": "launch: mint portal token", "kind": "sync" },
+    { "from": "portal", "to": "caddy", "label": "auto-submit POST /sso", "kind": "sync" },
+    { "from": "staff", "to": "caddy", "label": "HTTPS pages, server actions", "kind": "sync" },
+    { "from": "caddy", "to": "admin", "label": "127.0.0.1:3002", "kind": "sync" },
+    { "from": "admin", "to": "otaApi", "label": "SDK console.* on loopback", "kind": "sync" },
+    { "from": "admin", "to": "portal", "label": "redirects and links", "kind": "sync" },
+    { "from": "otaApi", "to": "pg", "label": "tenantTx", "kind": "data" },
+    { "from": "otaApi", "to": "redis", "label": "sessions, caches, jobs", "kind": "data" },
+    { "from": "platformApi", "to": "redis", "label": "ptk:<sha256>", "kind": "data" },
+    { "from": "otaApi", "to": "amadeus", "label": "Amadeus calls", "kind": "sync" },
+    { "from": "otaApi", "to": "stripe", "label": "capture, refund", "kind": "sync" },
+    { "from": "otaWorker", "to": "redis", "label": "BullMQ ota-*", "kind": "async" },
+    { "from": "otaWorker", "to": "mail", "label": "notifications outbox", "kind": "async" },
+    { "from": "otaWorker", "to": "stripe", "label": "refund.submit, payment.void", "kind": "async" },
+    { "from": "storefront", "to": "otaApi", "label": "storefront.get, search", "kind": "sync" }
+  ]
+}

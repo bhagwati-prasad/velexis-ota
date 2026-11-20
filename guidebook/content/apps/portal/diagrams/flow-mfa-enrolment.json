@@ -1,0 +1,33 @@
+{
+  "id": "flow-mfa-enrolment",
+  "type": "flow",
+  "title": "The MFA enrolment gate",
+  "caption": "PF-04 AC4. An owner or admin of a live OTA without MFA sees only this page.",
+  "steps": [
+    {
+      "title": "Sign in without MFA",
+      "actor": "Admin of a live OTA",
+      "url": "http://localhost:3000/sign-in",
+      "body": "Sign in with password only.",
+      "expect": "Redirect to `/mfa-enrolment?next=/dashboard` (\"Set up two-factor authentication\"); no navigation shell."
+    },
+    {
+      "title": "Try another page",
+      "actor": "Admin",
+      "body": "Type `/otas/<tenantId>/team` into the address bar.",
+      "expect": "Back to `/mfa-enrolment?next=%2Fotas%2F<id>%2Fteam`."
+    },
+    {
+      "title": "Enrol",
+      "actor": "Admin",
+      "body": "Scan the QR code, type a code, store the ten recovery codes, **Continue**.",
+      "expect": "The asked-for page renders; opening `/mfa-enrolment` again leads straight on."
+    },
+    {
+      "title": "Agents are never asked",
+      "actor": "Agent of the same OTA",
+      "body": "Sign in without MFA.",
+      "expect": "Normal dashboard; the gate is only for owners and admins."
+    }
+  ]
+}

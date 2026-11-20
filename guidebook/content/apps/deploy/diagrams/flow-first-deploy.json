@@ -1,0 +1,40 @@
+{
+  "id": "flow-first-deploy",
+  "type": "flow",
+  "title": "First deploy: GitHub production environment and the M0 checks",
+  "caption": "deploy/README.md 'First deploy (human steps of X-023)'.",
+  "steps": [
+    {
+      "title": "Create the production environment",
+      "actor": "Developer",
+      "screen": "GitHub Settings > Environments",
+      "body": "Required reviewer: yourself; deployment branches and tags: `main` and `v*`; secrets `DEPLOY_HOST`, `DEPLOY_USER` (`deploy`), `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` (`ssh-keyscan -t ed25519 <host>` compared with `/etc/ssh/ssh_host_ed25519_key.pub`).",
+      "expect": "Environment listed with 4 secrets."
+    },
+    {
+      "title": "Run Deploy from main",
+      "actor": "Developer",
+      "screen": "Actions > Deploy > Run workflow",
+      "body": "Choose `main`; wait for build and e2e; approve the deploy job.",
+      "expect": "Smoke check step green: `current: /srv/velexis/releases/<sha>`."
+    },
+    {
+      "title": "Check the release folder",
+      "actor": "Developer",
+      "body": "`sudo velexis-deploy --status`; `stat -c '%U:%G %A' /srv/velexis/releases/<sha>`; `sudo find /srv/velexis/releases/<sha> ! -type l -perm /222 | head -n 1`.",
+      "expect": "`root:velexis dr-xr-x--x`; the find prints nothing."
+    },
+    {
+      "title": "Check the ledgers",
+      "actor": "Developer",
+      "body": "`sudo -u postgres psql -d velexis -c \"SELECT 'platform', id FROM platform.schema_migrations UNION ALL SELECT 'reference', id FROM reference.schema_migrations\"`",
+      "expect": "`0001_baseline` in both, `R__ota_read_access` in platform; table owner `velexis_migrator`."
+    },
+    {
+      "title": "Deploy the same commit again",
+      "actor": "Developer",
+      "body": "Fingerprint `/srv/velexis`, `/var/lib/velexis/system`, `/etc/systemd/system`, `/etc/caddy`, `/usr/local/sbin` before and after (deploy/README.md `fp()`).",
+      "expect": "`diff` prints nothing; log says `release <sha> is already on the VM` without `systemd units updated` or `Caddyfile reloaded`."
+    }
+  ]
+}

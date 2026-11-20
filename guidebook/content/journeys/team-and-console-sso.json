@@ -1,0 +1,117 @@
+{
+  "id": "team-and-console-sso",
+  "title": "Team, roles and single sign-on into the OTA admin",
+  "summary": "The owner invites a member with a role, the member signs up with the invited address and opens the console by SSO; roles change what the console allows; removal and 'sign out everywhere' end console sessions within a minute.",
+  "apps": ["portal", "platform-api", "ota-admin", "ota-api"],
+  "roles": ["OTA owner", "OTA staff (agent, viewer)"],
+  "duration": "30 min",
+  "prerequisites": [
+    "An active OTA of yours ([[journey:signup-and-provision]]) and the console reachable ([[journey:storefront-settings-and-markups]]).",
+    "Two browsers or profiles: one for the owner, one for the member. A second invented address such as `member1@example.com`."
+  ],
+  "steps": [
+    {
+      "id": "invite",
+      "app": "portal",
+      "title": "Invite a member as agent",
+      "url": "http://localhost:3000/otas/ten_…/team",
+      "actions": "On **Team** type **E-mail address** `member1@example.com`, choose **Role** *agent*, press **Send the invitation**.",
+      "expect": "*The invitation is on its way.* The **Pending invitations** table lists the address, *Agent* and you as inviter. Mailpit: \"`<owner name>` invited you to `<OTA>` on Velexis\".",
+      "data": "`SELECT email, role, status, expires_at FROM platform.tenant_invitations WHERE tenant_id = 'ten_…';` → `pending`, 7 days; `email_outbox` row; audit row.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/team/page.tsx",
+        "platform/backend/src/memberships/invitations.service.ts"
+      ]
+    },
+    {
+      "id": "mismatch",
+      "app": "portal",
+      "title": "Another account cannot accept",
+      "actions": "In the owner's browser (signed in as the owner) open the invitation link from Mailpit.",
+      "expect": "The page explains the invitation is for another address (`INVITATION_EMAIL_MISMATCH`) and offers to sign out and continue with the invited address. Nothing changes.",
+      "code": ["platform/frontend/src/app/(auth)/invitations/accept/page.tsx"]
+    },
+    {
+      "id": "accept",
+      "app": "portal",
+      "title": "The invited person signs up and accepts",
+      "url": "http://localhost:3000/invitations/accept",
+      "actions": "In the member's browser open the link and press **Create an account** (the invited address is prefilled). Verify through Mailpit, sign in on `/sign-in?verified=1`, then open the invitation link from Mailpit again (the first visit's 15-minute cookie may have expired) and press **Accept the invitation**.",
+      "expect": "The page \"Join `<OTA>`\" shows the OTA, the role, the inviter, the invited address and the link's expiry (the token is moved into a 15-minute httpOnly cookie and removed from the URL). After verifying, the browser lands on `/sign-in?verified=1` with no way back to the invitation (the page's hint says to open the link again). After **Accept the invitation** the member lands on the OTA's overview `/otas/ten_…` with the role *Agent*, and `/dashboard` lists the OTA.",
+      "data": "`tenant_memberships` row (`agent`, `active`); invitation `accepted`; audit `membership.created`; `vx:invalidate {type: \"membership\"}` published.",
+      "code": [
+        "platform/backend/src/memberships/invitations.service.ts",
+        "platform/backend/src/memberships/memberships.repository.ts"
+      ]
+    },
+    {
+      "id": "member-console",
+      "app": "ota-admin",
+      "title": "The member opens the console",
+      "url": "http://localhost:3000/otas/ten_…",
+      "actions": "As the member press **Open console**. Open a booking if the OTA has one (a new OTA has none: book one first, for example with [[journey:book-with-stripe]]), then **Settings → Markup rules**.",
+      "expect": "`/bookings` of this OTA. An agent sees **Issue tickets** and **Cancel the booking** but not settings writes: *New markup rule* is disabled with *Needs the permission settings:write*; `/settings/markups/new` is refused naming the permission.",
+      "data": "Redis `staffsess:<familyId>`; `staff_actions` rows with `outcome = denied` for refused calls.",
+      "code": [
+        "ota/admin/src/app/sso/route.ts",
+        "ota/backend/src/identity/staff/staff-auth.service.ts",
+        "ota/admin/src/lib"
+      ]
+    },
+    {
+      "id": "role-change",
+      "app": "portal",
+      "title": "Change the member to viewer",
+      "url": "http://localhost:3000/otas/ten_…/team",
+      "actions": "As the owner change the member's role to *viewer*. As the member reload the booking page.",
+      "expect": "The viewer sees no booking actions (no **Booking actions**, no Issue, no Cancel), the settings read-only, and only the TEST badge (no environment switch).",
+      "data": "`tenant_memberships.role = viewer`, `version` bumped; membership invalidation published.",
+      "code": [
+        "platform/backend/src/memberships/members.service.ts",
+        "platform/backend/src/memberships/tenant-roles.ts"
+      ]
+    },
+    {
+      "id": "replay",
+      "app": "ota-admin",
+      "title": "A console link works once",
+      "actions": "As the member press **Open console** again, then use the browser's Back button to the hand-off page and submit it again (or wait more than 60 seconds on it before it submits).",
+      "expect": "`/sso` answers 401 with *This console link expired or was already used*; no new staff cookie is set; a fresh **Open console** works.",
+      "code": ["ota/admin/src/app/sso/route.ts", "platform/backend/src/memberships/console-token.service.ts"]
+    },
+    {
+      "id": "remove",
+      "app": "portal",
+      "title": "Removing the member ends their console session",
+      "url": "http://localhost:3000/otas/ten_…/team",
+      "actions": "As the owner remove the member (confirm). As the member keep navigating in the console for up to a minute.",
+      "expect": "Within 60 seconds (usually at once) the member's next page sends them to the portal's console page; the console session cannot be renewed. The member's portal dashboard no longer lists the OTA.",
+      "data": "`tenant_memberships.status = removed` (the row stays: `stf_` ids are referenced by `staff_actions`); `member:<accountId>:<tenantId>` cache entry gone.",
+      "code": [
+        "platform/backend/src/memberships/members.service.ts",
+        "ota/backend/src/tenancy/invalidation.subscriber.ts"
+      ]
+    },
+    {
+      "id": "last-owner",
+      "app": "portal",
+      "title": "The last owner is protected",
+      "actions": "As the owner try to change your own role or remove yourself.",
+      "expect": "Refused: the last active owner cannot be demoted or removed (`LAST_OWNER`).",
+      "code": ["platform/backend/src/memberships/members.service.ts"]
+    },
+    {
+      "id": "sign-out-everywhere",
+      "app": "portal",
+      "title": "Sign out everywhere reaches the console",
+      "url": "http://localhost:3000/account/security",
+      "actions": "As the owner open the console in two browsers, then use sign out everywhere on the portal's security page. Navigate in both consoles.",
+      "expect": "Both consoles send you to the portal at the next page and cannot refresh.",
+      "data": "Redis `staffdeny:acct:<accountId>` holds the cut-off (30-day TTL); portal refresh families revoked in `platform.account_sessions`.",
+      "code": [
+        "platform/backend/src/auth/sessions.service.ts",
+        "ota/backend/src/identity/staff/staff-sessions.ts"
+      ]
+    }
+  ]
+}

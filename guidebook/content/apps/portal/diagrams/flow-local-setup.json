@@ -1,0 +1,39 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Run the portal locally",
+  "caption": "From a set-up machine (docs/mvp/local-development.md §2) to the portal on :3000.",
+  "steps": [
+    {
+      "title": "Back-end prerequisites",
+      "actor": "Developer",
+      "body": "PostgreSQL 16 and Redis 7 running, `pnpm db:migrate && pnpm db:seed:reference` done, `.env.local` copied from `.env.example` (it already holds `PLATFORM_API_URL`, `PLATFORM_BFF_KEY`, `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL`, `STOREFRONT_BASE_DOMAIN`).",
+      "expect": "`psql postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis -c 'select count(*) from platform.plans'` answers at least 1 (`early_access`)."
+    },
+    {
+      "title": "Mail and Amadeus stand-ins",
+      "actor": "Developer",
+      "body": "`mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &` and `pnpm stub:amadeus &`.",
+      "expect": "http://localhost:8025 shows an empty inbox; the stub listens on 4900."
+    },
+    {
+      "title": "Seed the platform once",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/platform-backend dev:seed` (platform admin, test Amadeus account, 40 test offices).",
+      "expect": "The test Amadeus account is active and offices DEV1A0001… are `available`, so a new OTA gets a test office."
+    },
+    {
+      "title": "Start the API, workers and the portal",
+      "actor": "Developer",
+      "body": "`pnpm dev` (everything) or, per app: `pnpm --filter @velexis/platform-backend dev`, `pnpm --filter @velexis/ota-backend dev` (the OTA worker builds tenant schemas), `pnpm --filter @velexis/platform-frontend dev`.",
+      "expect": "`curl -s http://127.0.0.1:3000/health/ready` → `{\"status\":\"ok\",\"checks\":{\"platformApi\":\"ok\"}}`."
+    },
+    {
+      "title": "Open the portal",
+      "actor": "Tester",
+      "url": "http://localhost:3000/",
+      "body": "Open the landing page, then **Get started**.",
+      "expect": "The marketing page with one `h1`; no console errors; the CSP header carries a nonce (`'unsafe-eval'` only in development)."
+    }
+  ]
+}

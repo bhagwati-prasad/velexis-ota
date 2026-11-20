@@ -1,0 +1,53 @@
+{
+  "id": "seq-security-logs",
+  "type": "sequence",
+  "title": "Security logs: hourly shipment and review",
+  "caption": "deploy/scripts/ship-logs.sh (:05) and log-review.sh (:20). Each keeps its own journald cursor; the WAF's query values are blanked before anything leaves the VM.",
+  "actors": [
+    { "id": "j", "label": "journald", "kind": "db" },
+    { "id": "sh", "label": "velexis-shiplogs", "kind": "worker" },
+    { "id": "day", "label": "/var/log/velexis/security/security-<day>.jsonl.zst", "kind": "db" },
+    { "id": "bk", "label": "Bucket logs/<yyyy>/<mm>/<dd>/", "kind": "external" },
+    { "id": "rv", "label": "velexis-logreview", "kind": "worker" },
+    { "id": "al", "label": "velexis-alert (e-mail)", "kind": "external" }
+  ],
+  "steps": [
+    {
+      "from": "sh",
+      "to": "j",
+      "label": "entries after cursor: sshd, sudo, auditd, caddy access + WAF, egress denies, fail2ban, AIDE, velexis-* ≥ warning, security events",
+      "kind": "call"
+    },
+    {
+      "from": "sh",
+      "to": "sh",
+      "label": "one JSON line each {ts,rt,host,cat,unit,ident,pid,uid,prio,msg}; blank [uri] query values",
+      "kind": "self"
+    },
+    {
+      "from": "sh",
+      "to": "bk",
+      "label": "zstd + age (data key) + rclone copy --immutable; rclone check",
+      "kind": "call"
+    },
+    {
+      "from": "sh",
+      "to": "day",
+      "label": "only after the check: move cursor, append to the UTC day's file (kept 90 days)",
+      "kind": "call"
+    },
+    { "from": "rv", "to": "sh", "label": "velexis-shiplogs export (own cursor)", "kind": "call" },
+    {
+      "from": "rv",
+      "to": "al",
+      "label": "immediately: root login, new SSH key, change under /etc/velexis/keys, AIDE change outside a deploy, aide-error, aide-stale, shipment failing, egress burst ≥ 30, folder > 5 GB",
+      "kind": "async"
+    },
+    {
+      "from": "rv",
+      "to": "al",
+      "label": "first run at or after 06:00 UTC: 'security log review <date>: …' summary",
+      "kind": "async"
+    }
+  ]
+}

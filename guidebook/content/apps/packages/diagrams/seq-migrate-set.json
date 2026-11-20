@@ -1,0 +1,87 @@
+{
+  "id": "seq-migrate-set",
+  "type": "sequence",
+  "title": "pnpm db:migrate: the platform and reference sets",
+  "caption": "packages/db/src/migrate/run-set.ts and cli/migrate.ts. DSN only from DATABASE_MIGRATOR_URL (never a flag, never printed). Exit 0 ok, 1 error, 2 checksum mismatch.",
+  "actors": [
+    {
+      "id": "dev",
+      "label": "Developer / velexis-deploy",
+      "kind": "user"
+    },
+    {
+      "id": "cli",
+      "label": "migrate.js platform --dir …",
+      "kind": "lib"
+    },
+    {
+      "id": "fs",
+      "label": "migrations folder",
+      "kind": "external"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL (velexis_migrator)",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "dev",
+      "to": "cli",
+      "label": "pnpm db:migrate (premigrate builds the package)",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "fs",
+      "label": "read and validate every file (names, headers, UTF-8, R__ rules)",
+      "kind": "call",
+      "note": "Folder missing → notice on stderr, nothing applied, exit 0."
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "connect (application_name velexis-migrate-platform), statement_timeout 10min",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "pg_advisory_lock(hashtext('velexis:migrate:platform'))",
+      "kind": "call",
+      "note": "A second run waits up to 10 minutes, then finds nothing pending."
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "CREATE platform.schema_migrations if missing",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "verify checksums of applied files",
+      "kind": "call",
+      "note": "Mismatch → one checksum_mismatch line per file, exit 2, nothing applied."
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "per pending NNNN file: BEGIN; SET LOCAL lock_timeout 5s, statement_timeout 10min; file; ledger row; COMMIT",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "per changed R__ file: same, ledger row updated (phase repeatable)",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "dev",
+      "label": "stdout: one JSON line per file applied/failed/changed",
+      "kind": "return"
+    }
+  ]
+}

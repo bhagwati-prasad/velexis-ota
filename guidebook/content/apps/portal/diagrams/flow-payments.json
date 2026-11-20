@@ -1,0 +1,34 @@
+{
+  "id": "flow-payments",
+  "type": "flow",
+  "title": "Payments: suffix, Stripe Connect, own keys, back to Velexis",
+  "caption": "PF-60 to PF-62. M5 parts need FEATURE_OWN_STRIPE (and Stripe test values).",
+  "steps": [
+    {
+      "title": "Card statement suffix",
+      "actor": "Owner",
+      "screen": "Payments",
+      "url": "http://localhost:3000/otas/<tenantId>/payments",
+      "body": "Type a suffix such as `ACME TRAVEL`, watch the preview, **Save**.",
+      "expect": "Preview `VELEXIS* ACME TRAVEL` (≤22); `ACME*TRAVEL`, accents, `&`, `.` or `-` refused in the browser; `payment_provider_connections.statement_descriptor_suffix` updated."
+    },
+    {
+      "title": "Connect with Stripe",
+      "actor": "Owner",
+      "body": "**Connect with Stripe** (step-up), authorise in Stripe test mode.",
+      "expect": "Back on payments with `?stripeConnect=connected` (or `pending`); test row `account_mode = 'connect_standard'`, `account_reference = acct_…`."
+    },
+    {
+      "title": "Own Stripe keys",
+      "actor": "Owner",
+      "body": "**Use my own Stripe keys**: `pk_test_…`, `sk_test_…`/`rk_test_…`, `whsec_…`; step-up.",
+      "expect": "Webhook URL to create in Stripe and the events list; verification status every 2 s until applied or failed."
+    },
+    {
+      "title": "Use Velexis payments",
+      "actor": "Owner",
+      "body": "On an own-account card: **Use Velexis payments**, confirm, step-up.",
+      "expect": "`account_mode = 'velexis'`; for live, PAYOUT_ACCOUNT_REQUIRED without a verified payout account."
+    }
+  ]
+}

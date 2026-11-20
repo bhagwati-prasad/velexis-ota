@@ -1,0 +1,48 @@
+{
+  "id": "admin-session-states",
+  "type": "state",
+  "title": "The admin's own session",
+  "caption": "Cookies of admin.platform.example.com (all HttpOnly, Secure, SameSite=Strict, Path=/). The access token lives 15 minutes, the refresh token 2 idle hours inside a 12-hour family (platform/backend/src/admin/admin-auth.service.ts); the step-up window is 15 minutes.",
+  "states": [
+    {
+      "id": "out",
+      "label": "signed out",
+      "kind": "initial",
+      "detail": "No `__Host-vxa_*` cookie; every page but `/sign-in`, `/sign-in/mfa`, `/sign-out` answers 303 to `/sign-in?next=…`."
+    },
+    {
+      "id": "challenge",
+      "label": "challenge pending",
+      "kind": "normal",
+      "detail": "`__Host-vxa_mfa` (≤ 5 min) and Redis `mfach:<sha256>`; 5 code tries."
+    },
+    {
+      "id": "fresh",
+      "label": "signed in, step-up fresh",
+      "kind": "normal",
+      "detail": "Token `mfa_at` within 15 min: step-up operations pass without a dialog."
+    },
+    {
+      "id": "stale",
+      "label": "signed in, step-up stale",
+      "kind": "normal",
+      "detail": "Step-up operations answer `401 REAUTH_REQUIRED`; StepUpDialog asks for a code."
+    },
+    {
+      "id": "expired",
+      "label": "ended",
+      "kind": "final",
+      "detail": "Family revoked (sign-out, rights revoked, account disabled, refresh reuse) or 12 h / 2 h idle passed: cookies deleted, back to sign-in."
+    }
+  ],
+  "transitions": [
+    { "from": "out", "to": "challenge", "label": "correct password (adminSignIn)" },
+    { "from": "challenge", "to": "out", "label": "MFA_CHALLENGE_INVALID / 5 min → /sign-in?mfa=expired" },
+    { "from": "challenge", "to": "fresh", "label": "TOTP or recovery code (adminVerifyMfa)" },
+    { "from": "fresh", "to": "stale", "label": "15 minutes pass" },
+    { "from": "stale", "to": "fresh", "label": "Confirm code (adminStepUp)" },
+    { "from": "fresh", "to": "fresh", "label": "middleware refresh (keeps mfa_at)" },
+    { "from": "stale", "to": "expired", "label": "Sign out / refresh fails finally" },
+    { "from": "fresh", "to": "expired", "label": "Sign out / rights revoked / disabled" }
+  ]
+}

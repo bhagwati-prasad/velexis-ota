@@ -1,0 +1,59 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Run the OTA API and worker locally with the demo OTA",
+  "caption": "From docs/mvp/local-development.md §2-§3 and ota/backend/README.md §6. Development only: every password and key here is a committed development value or generated locally.",
+  "steps": [
+    {
+      "title": "Machine prerequisites",
+      "actor": "Developer",
+      "body": "PostgreSQL 16 and Redis 7 (native, no Docker), Node 24, pnpm, Mailpit. Run `bash deploy/scripts/dev-setup.sh` once (roles `velexis_ota_app`/`dev_ota`, `velexis_provisioner`/`dev_provisioner`, Redis password `dev_redis`; development only), then `pnpm install`.",
+      "expect": "The script ends with its summary; every role logs in."
+    },
+    {
+      "title": "Keys and env file",
+      "actor": "Developer",
+      "body": "`pnpm dev:keys` (creates `.local/keys/` with `master-v1.key`, `api-key-pepper`, `document-url.key`, `ota-jwt-ed25519.pem`, mode 0600, and `.local/storage/`), then `cp ota/backend/.env.example ota/backend/.env.local`.",
+      "expect": "`ota/backend/.env.local` exists; key paths point at `.local/keys/…`."
+    },
+    {
+      "title": "Migrate platform and reference",
+      "actor": "Developer",
+      "body": "`pnpm db:migrate && pnpm db:seed:reference`.",
+      "expect": "Schemas `platform` and `reference` filled (airports, airlines, countries, currencies)."
+    },
+    {
+      "title": "Start Mailpit and the Amadeus stub",
+      "actor": "Developer",
+      "body": "`mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &` and `pnpm stub:amadeus &` (port 4900).",
+      "url": "http://127.0.0.1:8025",
+      "expect": "Mailpit UI opens; the stub answers 404 on unknown paths (it has no health route)."
+    },
+    {
+      "title": "Seed the platform, then the demo OTA",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/platform-backend dev:seed` then `pnpm --filter @velexis/ota-backend dev:seed`. **Copy the three keys printed once**: `Publishable test key`, `Secret test key`, `Console automation test key`.",
+      "expect": "Tenant `demo` (`tenant_demo`, \"Demo Travel\") active on `demo.ota.example.com`, with an Amadeus test connection (office DEV1A00xx), a `velexis` Stripe test connection, and the keys. A second run changes nothing and prints no keys."
+    },
+    {
+      "title": "Start API and worker",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/ota-backend dev` (tsc watch + `node --watch dist/main.js` + `node --watch dist/worker.js`).",
+      "url": "http://localhost:4000/health/ready",
+      "expect": "`{\"status\":\"ok\",\"checks\":{\"postgres\":\"ok\",\"redis\":\"ok\"}}`; http://127.0.0.1:4001/health/ready adds `queues` with waiting counts per OTA queue."
+    },
+    {
+      "title": "First call",
+      "actor": "Developer",
+      "body": "`curl -s -H 'X-Api-Key: pk_test_…' http://localhost:4000/v1/storefront | jq .brand`",
+      "expect": "The demo OTA's brand (\"Demo Travel\"), currencies, payment methods: `card` whenever both Stripe test variables are set, also to the `replace_me` dummies copied from `.env.example` (remove them to hide the method); `airline_card` only for the storefront edge, with `AIRLINE_CARD_ENABLED=true` and the storefront switch on (never through a `pk_` key)."
+    },
+    {
+      "title": "Optional: the storefront in a browser",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/ota-frontend dev`: Vite on 5173 proxies `/api` to 4000 with `X-Velexis-Edge` and `X-Velexis-Host: demo.ota.example.com`.",
+      "url": "http://localhost:5173",
+      "expect": "The demo storefront with a permanent \"Test mode\" banner."
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "id": "run-the-stack",
+  "title": "Run the stack and sign in everywhere",
+  "summary": "From prepared services to every app answering locally: seeds, health checks, the platform admin sign-in with TOTP, the demo storefront's first search and the OTA admin's redirect to the portal.",
+  "apps": [
+    "tools",
+    "packages",
+    "platform-api",
+    "ota-api",
+    "platform-admin",
+    "portal",
+    "ota-admin",
+    "storefront"
+  ],
+  "roles": ["Developer", "Velexis staff", "Traveller"],
+  "duration": "30 min",
+  "prerequisites": [
+    "Node 24, pnpm 9, PostgreSQL 16, Redis 7.4 and Mailpit installed ([[page:getting-started]] → Prerequisites).",
+    "`pnpm install` done; `.env.local` copied from `.env.example` and `ota/backend/.env.local` from `ota/backend/.env.example`.",
+    "An authenticator app (or any TOTP tool) for the platform admin's code (development only)."
+  ],
+  "steps": [
+    {
+      "id": "services",
+      "app": "tools",
+      "title": "Prepare PostgreSQL, Redis, keys and reference data",
+      "actions": "Run `bash deploy/scripts/dev-setup.sh`, then `pnpm dev:keys`, `pnpm build`, `pnpm db:migrate` and `pnpm db:seed:reference` from the repository root.",
+      "expect": "`dev-setup.sh` ends with the summary \"Velexis local services\": every role row says `ok`, the row `password required` says `ok` for Redis (`dev_redis`, development only), then \"Next steps\". `pnpm dev:keys` prints `created` for five files in `.local/keys/` (mode 0600; `kept` on a second run). `pnpm db:migrate` prints one JSON line per applied file and nothing on a second run; `pnpm db:seed:reference` prints one `reference.loaded` JSON line (all counts zero on a second run).",
+      "data": "`psql postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis -c '\\dn'` lists `platform` and `reference`. `SELECT count(*) FROM reference.airports;` is well above 0. `SELECT id FROM platform.schema_migrations ORDER BY 1;` lists the platform migrations.",
+      "code": [
+        "deploy/scripts/dev-setup.sh",
+        "deploy/postgres/bootstrap.sql",
+        "tools/dev/dev-keys.mjs",
+        "packages/db/src/migrate",
+        "tools/reference-data"
+      ]
+    },
+    {
+      "id": "mailpit-stub",
+      "app": "tools",
+      "title": "Start Mailpit and the Amadeus stub",
+      "url": "http://localhost:8025",
+      "actions": "Run `mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025` and `pnpm stub:amadeus` in two terminals. Open Mailpit's UI.",
+      "expect": "Mailpit's inbox loads (empty on a fresh machine). The stub logs that it listens on 127.0.0.1:4900; `curl -s http://127.0.0.1:4900/health/ready` answers an Amadeus-style 404 JSON (the stub has no health route).",
+      "code": ["tools/amadeus-stub/src", "tools/amadeus-stub/README.md"]
+    },
+    {
+      "id": "platform-seed",
+      "app": "platform-api",
+      "title": "Seed the platform: admin, test Amadeus account, 40 offices",
+      "actions": "Run `pnpm --filter @velexis/platform-backend dev:seed`. Copy the printed password and TOTP set-up URI into your password manager and authenticator (development only). Run it a second time.",
+      "expect": "First run (exit 0): `Platform admin admin@example.com (acc_…): created, with MFA. Shown once, never again:`, then `Password:` and `TOTP set-up URI:` lines, `Velexis test Amadeus account (ama_…) at http://127.0.0.1:4900: created, verified, active.` and `Test offices DEV1A0001 to DEV1A0040: 40 added, 0 in the pool already.` Second run: `… exists already; nothing changed (its password and TOTP set-up URI were shown when dev:seed created it; …)`, `…: exists, active.` and `… 0 added, 40 in the pool already.`, no password. Without the stub the account is not active and the run exits 1 with `… start the Amadeus stub (pnpm stub:amadeus) at http://127.0.0.1:4900 and run dev:seed again.`",
+      "data": "`SELECT email, status, is_platform_admin FROM platform.accounts;` → `admin@example.com`, `active`, `true`. `SELECT environment, status FROM platform.amadeus_accounts;` → `test`, `active`. `SELECT status, count(*) FROM platform.amadeus_offices GROUP BY 1;` → `available` 40. Audit rows `admin.granted`, `amadeus_account.created`, `amadeus_account.verified`, `amadeus_office.added` in `platform.platform_audit_log`.",
+      "code": [
+        "platform/backend/src/dev/dev-seed.command.ts",
+        "platform/backend/src/supplier-connections/amadeus-oauth.gateway.ts"
+      ]
+    },
+    {
+      "id": "ota-seed",
+      "app": "ota-api",
+      "title": "Seed the demo OTA and copy its three keys",
+      "actions": "Run `pnpm --filter @velexis/ota-backend dev:seed`. Copy the `Publishable test key`, `Secret test key` and `Console automation test key` lines. Run it again.",
+      "expect": "First run (exit 0): `Tenant demo (ten_…), schema tenant_demo: created.`, `Storefront host demo.ota.example.com: created.`, the Amadeus test connection and Stripe test payment connection lines, then `Test API keys created. Shown once, never again:` and one line each for `Publishable test key (…): pk_test_…`, `Secret test key (…): sk_test_…` and `Console automation test key (…): sk_test_…`. Second run: every line says `exists already`, and each key line reads `<label>: exists already (its key was shown when dev:seed created it).`; no key is printed.",
+      "data": "`SELECT key, status, storefront_environment, plan_code FROM platform.tenants WHERE key = 'demo';` → `active`, `test`, `early_access`. `SELECT hostname, is_primary, verification_status FROM platform.tenant_domains;` → `demo.ota.example.com`. `SELECT kind, environment, scopes FROM platform.api_keys;` → one publishable, two secret (`storefront`, `console:automation` + `amadeus:read`). `SELECT count(*) FROM information_schema.tables WHERE table_schema = 'tenant_demo';` → 45 (44 tables of the tenant migrations plus `schema_migrations`). One office now `assigned`.",
+      "code": [
+        "ota/backend/src/dev/dev-seed.command.ts",
+        "ota/backend/src/provisioning/provisioning.service.ts",
+        "ota/backend/migrations/tenant"
+      ]
+    },
+    {
+      "id": "backends",
+      "app": "platform-api",
+      "title": "Start both backends and check their health",
+      "actions": "Run `pnpm --filter @velexis/platform-backend dev` and `pnpm --filter @velexis/ota-backend dev`. When they settle, run `curl -s 127.0.0.1:3100/health/ready`, `curl -s 127.0.0.1:3101/health/ready`, `curl -s 127.0.0.1:4000/health/ready` and `curl -s 127.0.0.1:4001/health/ready`.",
+      "expect": "All four answer 200 with `{\"status\":\"ok\",\"checks\":{\"postgres\":\"ok\",\"redis\":\"ok\"}}`; the two workers (3101, 4001) also list `queues`. The terminals show JSON log lines with `app` = `platform-api`, `platform-worker`, `ota-api`, `ota-worker` and no `error` level lines.",
+      "data": "Redis: `REDISCLI_AUTH=dev_redis redis-cli -n 0 --scan --pattern 'vx:*' | head` shows BullMQ keys of the queues the workers registered.",
+      "code": [
+        "platform/backend/src/main.ts",
+        "platform/backend/src/worker.ts",
+        "ota/backend/src/main.ts",
+        "ota/backend/src/worker.ts",
+        "ota/backend/src/health/health.controller.ts"
+      ]
+    },
+    {
+      "id": "admin-sign-in",
+      "app": "platform-admin",
+      "title": "Sign in to the platform admin with password and TOTP",
+      "url": "http://localhost:3001/sign-in",
+      "actions": "Start `pnpm --filter @velexis/platform-admin dev`. Sign in with `admin@example.com` and the seeded password; on `/sign-in/mfa` type a wrong 6-digit code first, then the current code from your authenticator. Use `http://localhost:…` in the browser for every app, never `127.0.0.1`: the apps' public URLs (`PUBLIC_PORTAL_URL`, `PUBLIC_PLATFORM_ADMIN_URL`) name `localhost`, so on `127.0.0.1` cookies go missing and Sign out or Open console answers 403.",
+      "expect": "The wrong code is refused with a message at the field and you stay on `/sign-in/mfa`. The right code lands on the dashboard `/` with counters (tenants, provisioning jobs, pool levels). The page title ends with `· Velexis admin`.",
+      "data": "A new refresh family in `platform.account_sessions` for the admin account. Cookies `__Host-vxa_at` and `__Host-vxa_rt` are httpOnly (DevTools → Application → Cookies); `document.cookie` in the console shows neither.",
+      "code": [
+        "platform/admin/src/app/(auth)/sign-in/page.tsx",
+        "platform/admin/src/app/(auth)/sign-in/mfa/page.tsx",
+        "platform/backend/src/admin/admin-auth.service.ts"
+      ]
+    },
+    {
+      "id": "admin-tour",
+      "app": "platform-admin",
+      "title": "See the demo OTA and the office pool",
+      "url": "http://localhost:3001/tenants",
+      "actions": "Open **Tenants**, then Demo Travel. Open **Amadeus → Offices** (`/amadeus/offices`) and **Queues** (`/queues`).",
+      "expect": "Demo Travel is listed `active` with plan early access and environment test; its page shows the test Amadeus connection `active` on one office. The office list shows forty `DEV1A…` offices, one assigned to `demo`. Queues lists the platform and OTA queues with counts; OTA queues have no retry button.",
+      "code": [
+        "platform/admin/src/app/(app)/tenants/page.tsx",
+        "platform/admin/src/app/(app)/amadeus/offices/page.tsx",
+        "platform/admin/src/app/(app)/queues/page.tsx",
+        "platform/backend/src/admin/queue-inspector.ts"
+      ]
+    },
+    {
+      "id": "storefront-search",
+      "app": "storefront",
+      "title": "Open the demo storefront and run a first search",
+      "url": "http://localhost:5173",
+      "actions": "Start `pnpm --filter @velexis/ota-frontend dev`. On the home page search a one-way trip From `Madrid` (pick MAD) To `Paris` (pick PAR), a date about 40 days ahead, 1 adult, economy.",
+      "expect": "The header shows \"Demo Travel\" and a \"Test mode\" note. The search moves to `/search.html?…&search=srch_…` and lists 5 flights (the stub's fixture) with prices in EUR. Searching destination `ZZZ` shows the empty state, not an error.",
+      "data": "`SELECT id, status FROM tenant_demo.flight_searches ORDER BY created_at DESC LIMIT 1;` → `completed`. `SELECT operation, http_status FROM tenant_demo.supplier_requests ORDER BY created_at DESC LIMIT 3;` shows the Flight Offers Search call. Network tab: `/api/v1/storefront`, `POST /api/v1/flight-searches` and `/api/v1/flight-searches/srch_…/offers` answer 2xx with an `X-Request-Id` header.",
+      "code": [
+        "ota/frontend/src/pages/index.js",
+        "ota/frontend/src/pages/search.js",
+        "ota/frontend/scripts/vite-plugins.js",
+        "ota/backend/src/shopping/searches.service.ts"
+      ]
+    },
+    {
+      "id": "portal-home",
+      "app": "portal",
+      "title": "Open the portal",
+      "url": "http://localhost:3000",
+      "actions": "Start `pnpm --filter @velexis/platform-frontend dev`. Open the home page, then **Pricing**, then **Sign in** and **Create account**.",
+      "expect": "The marketing page, the pricing page (the early access plan), the sign-in form and the sign-up form render without console errors. Keep this tab: [[journey:signup-and-provision]] continues here.",
+      "code": [
+        "platform/frontend/src/app/(marketing)/page.tsx",
+        "platform/frontend/src/app/(marketing)/pricing/page.tsx",
+        "platform/frontend/src/app/(auth)/sign-in/page.tsx"
+      ]
+    },
+    {
+      "id": "ota-admin-redirect",
+      "app": "ota-admin",
+      "title": "Check that the OTA admin has no sign-in of its own",
+      "url": "http://localhost:3002/bookings",
+      "actions": "Start `pnpm --filter @velexis/ota-admin dev` and open `/bookings` in a browser that has no console session.",
+      "expect": "You are sent to the portal (its sign-in page, then its console page `/console`), never to a login form of the OTA admin. `http://localhost:3002/health/ready` answers 200 while the OTA API runs.",
+      "code": [
+        "ota/admin/src/middleware.ts",
+        "ota/admin/src/app/sso/route.ts",
+        "platform/frontend/src/app/(app)/console/page.tsx"
+      ]
+    }
+  ]
+}

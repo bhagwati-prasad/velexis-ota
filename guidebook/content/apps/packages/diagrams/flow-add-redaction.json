@@ -1,0 +1,32 @@
+{
+  "id": "flow-add-redaction",
+  "type": "flow",
+  "title": "Add a sensitive field to the redaction rules",
+  "caption": "packages/logger/README.md 'The rule': a new sensitive field = a new path here plus a test.",
+  "steps": [
+    {
+      "title": "Log path",
+      "actor": "Developer",
+      "body": "Add the field to `REDACT_PATHS` in `packages/logger/src/redact-paths.ts` at top level and `*.` at least, keeping shallow-to-deep order.",
+      "expect": ""
+    },
+    {
+      "title": "Log test",
+      "actor": "Developer",
+      "body": "Add a case to `packages/logger/src/redaction.test.ts`.",
+      "expect": "The line shows `[REDACTED]`."
+    },
+    {
+      "title": "Persisted copies",
+      "actor": "Developer",
+      "body": "If the field can reach `supplier_requests`, `order_snapshot`, `staff_actions`, `idempotency_keys`, `payment_events` or `notifications`, teach `redactPayload` (`src/redact-payload.ts`) and add a case to `redact-payload.test.ts`.",
+      "expect": ""
+    },
+    {
+      "title": "Run",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/logger test`, then rebuild (`pnpm build`) so the apps pick it up.",
+      "expect": "Green; about 0.1 ms per line with the whole list."
+    }
+  ]
+}

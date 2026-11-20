@@ -1,0 +1,61 @@
+{
+  "id": "invitation-states",
+  "type": "state",
+  "title": "Invitation status",
+  "caption": "`platform.tenant_invitations.status`. 7-day token, only its SHA-256 stored; link `/invitations/accept?token=…` in the team.invitation e-mail.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal",
+      "detail": "Holds a seat (`limits.staffSeats`). Past `expires_at` it cannot be accepted but is still listed until the hourly job runs."
+    },
+    {
+      "id": "accepted",
+      "label": "accepted",
+      "kind": "final"
+    },
+    {
+      "id": "revoked",
+      "label": "revoked",
+      "kind": "final"
+    },
+    {
+      "id": "expired",
+      "label": "expired",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending",
+      "label": "createInvitation"
+    },
+    {
+      "from": "pending",
+      "to": "pending",
+      "label": "resendInvitation (new token, +7 days)"
+    },
+    {
+      "from": "pending",
+      "to": "accepted",
+      "label": "acceptInvitation (verified address equals invited one)"
+    },
+    {
+      "from": "pending",
+      "to": "revoked",
+      "label": "revokeInvitation"
+    },
+    {
+      "from": "pending",
+      "to": "expired",
+      "label": "invitations.expire (hourly)"
+    }
+  ]
+}

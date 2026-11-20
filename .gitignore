@@ -18,6 +18,8 @@ ota/sdk/dist/
 release/
 # ... except the SDK's draft publish workflow and its record (SDK-015, lead decision (32j)), which are sources.
 !/ota/sdk/release/
+# The guidebook's content bundle is a source, not build output: the site opens from file:// and its test compares it.
+!/guidebook/dist/
 *.tar.zst
 *.tar.gz
 

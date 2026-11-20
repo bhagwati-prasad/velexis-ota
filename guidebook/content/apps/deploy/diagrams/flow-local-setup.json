@@ -1,0 +1,38 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Set up the local databases with dev-setup.sh",
+  "caption": "deploy/scripts/dev-setup.sh and docs/mvp/local-development.md §2. Passwords are development only (.env.example).",
+  "steps": [
+    {
+      "title": "Install PostgreSQL 16 and Redis 7.4",
+      "actor": "Developer",
+      "body": "Ubuntu 24.04 (apt) or macOS (Homebrew). The script starts them if installed but stopped.",
+      "expect": "`psql --version` 16.x, `redis-server --version` 7.4.x."
+    },
+    {
+      "title": "Run the setup",
+      "actor": "Developer",
+      "body": "`bash deploy/scripts/dev-setup.sh` from anywhere in the repository (it calls sudo for the postgres superuser on Linux).",
+      "expect": "A summary \"Velexis local services\": status `ok` over TCP for every login of `.env.example` (`velexis_migrator`/`dev_migrator`, `velexis_provisioner`/`dev_provisioner`, `velexis_platform_app`/`dev_platform`, `velexis_ota_app`/`dev_ota`, `velexis_test_admin`/`dev_test_admin`; development only), the row `password required` `ok` for Redis (`dev_redis`), then \"Next steps\"."
+    },
+    {
+      "title": "Run it again",
+      "actor": "Developer",
+      "body": "`bash deploy/scripts/dev-setup.sh`",
+      "expect": "Same summary, Redis now `password already set (unchanged)`; nothing changed. A failed login shows `FAILED` and the run ends `ERROR: a check failed (see FAILED above)`, exit 1."
+    },
+    {
+      "title": "Next steps it prints",
+      "actor": "Developer",
+      "body": "`cp .env.example .env.local` (only while `.env.local` is missing), `pnpm dev:keys`, `pnpm build && pnpm db:migrate && pnpm db:seed:reference`.",
+      "expect": "`psql postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis -c '\\dn'` lists `platform`, `reference`."
+    },
+    {
+      "title": "Guard",
+      "actor": "Developer",
+      "body": "On a machine with `/etc/velexis` the script refuses to run.",
+      "expect": "`ERROR: /etc/velexis exists, so this looks like a Velexis production host. …` and exit 1, before PostgreSQL or Redis is touched."
+    }
+  ]
+}

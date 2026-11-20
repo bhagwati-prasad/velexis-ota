@@ -1,0 +1,155 @@
+{
+  "id": "seq-search-price",
+  "type": "sequence",
+  "title": "Search, results, offer and price",
+  "caption": "`src/pages/search.js`, `offer.js`, `price.js` (ota/docs/flows/search-and-price.md). Every write carries `X-CSRF-Token`. Prices are always the API's selling amounts; the page never adds or multiplies money.",
+  "actors": [
+    {
+      "id": "t",
+      "label": "Traveller",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "Page module + SDK",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus / stub",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "t",
+      "to": "b",
+      "label": "submit the GET form → /search.html?trip=…&from=MAD&to=PAR&depart=…",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/flight-searches {mode: simple, resultOptions.limit: 0} (60 s)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "rl:ota_shopping, Amadeus token buckets, search single flight",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Offers Search",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "flight_searches + flight_offers (net + markup + fees = selling), supplier_requests",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "201 srch_… (resultCount, facets)",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "history.replaceState adds search=srch_… (reload never searches again)",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET /v1/flight-searches/{id}/offers?limit=20&stops=…&sort=…",
+      "kind": "call",
+      "note": "Filters and sort run in SQL on the stored offers; no Amadeus call. Load more = page.next()."
+    },
+    {
+      "from": "t",
+      "to": "b",
+      "label": "Select → /offer.html?offer=off_…",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET /v1/flight-offers/{offerId}",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/flight-offers/{offerId}/upsells (features.brandedFareUpsell)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Branded Fares Upsell → offer_upsells, flight_offers origin=upsell",
+      "kind": "call"
+    },
+    {
+      "from": "t",
+      "to": "b",
+      "label": "choose a fare, Continue with this fare",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/priced-offers {offerIds, include: [bags, other-services, detailed-fare-rules]}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Offers Price",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "priced_offers (booking_requirements, price_changed, expires_at)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "201 prc_… → /price.html?priced=prc_…",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET priced offer, ancillaries (features.ancillaries), fare rules",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "countdown from expiresAt: \"Price held for 19:59\"",
+      "kind": "self"
+    }
+  ]
+}

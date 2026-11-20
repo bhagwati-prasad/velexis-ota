@@ -1,0 +1,52 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Open the demo OTA's storefront locally",
+  "caption": "docs/mvp/local-development.md §2-§3 and ota/frontend/README.md §11. Every password and key here is a development value from `.env.example`.",
+  "steps": [
+    {
+      "title": "One-time setup",
+      "actor": "Developer",
+      "body": "`cp .env.example .env.local`, `bash deploy/scripts/dev-setup.sh`, `pnpm install`, `pnpm dev:keys`, `pnpm build`, `pnpm db:migrate`, `pnpm db:seed:reference`.",
+      "expect": "Database `velexis` with the roles of `.env.example`; Redis answers with password `dev_redis`; `.local/keys/` exists."
+    },
+    {
+      "title": "Seed the platform and the demo OTA",
+      "actor": "Developer",
+      "body": "`pnpm stub:amadeus &`, then `pnpm --filter @velexis/platform-backend dev:seed` and `pnpm --filter @velexis/ota-backend dev:seed`.",
+      "expect": "The demo OTA \"Demo Travel\" (`tenant_demo`, EUR, `en`) is active on `demo.ota.example.com` with a test Amadeus office and a `velexis` Stripe test connection; three test keys printed once."
+    },
+    {
+      "title": "Start the stack",
+      "actor": "Developer",
+      "body": "`mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &`, then `pnpm dev` (or only `pnpm --filter @velexis/ota-backend dev` and `pnpm --filter @velexis/ota-frontend dev`).",
+      "expect": "OTA API on 4000, OTA worker health on 4001, Vite on 5173. The dev server refuses to start without `OTA_API_URL`, `VELEXIS_EDGE_SECRET` and a host."
+    },
+    {
+      "title": "Open the storefront",
+      "actor": "You (visitor)",
+      "screen": "/",
+      "url": "http://localhost:5173/",
+      "body": "Use Chromium or Firefox (Safari refuses `__Host-` cookies on http://localhost).",
+      "expect": "\"Search flights\" with the OTA name **Demo Travel** in the header and the fixed **Test mode: no real bookings or payments** banner at the bottom. DevTools → Application → Cookies shows `__Host-vx_csrf` only."
+    },
+    {
+      "title": "Optional: switch on what a new OTA has off",
+      "actor": "Developer",
+      "body": "The demo OTA has no owner, so its OTA admin cannot be opened. Development only: `UPDATE tenant_demo.storefront_settings SET airline_card_enabled_test = true, features = features || '{\"selfServiceCancellation\": true}'::jsonb, version = version + 1, updated_at = now();` then drop the cached configuration: `redis-cli -a dev_redis --scan --pattern 't:*:test:sf:*' | xargs -r redis-cli -a dev_redis del`.",
+      "expect": "Within seconds `GET /api/v1/storefront` lists `airline_card` in `payment.supportedMethods`; the booking page offers **Cancel booking** for cancellable bookings. Clear the tab's sessionStorage (or wait 5 minutes) to see it in an open tab."
+    },
+    {
+      "title": "Optional: Stripe test mode",
+      "actor": "Developer",
+      "body": "Put your Stripe test keys in `ota/backend/.env.local` (`STRIPE_SECRET_KEY_TEST`, `STRIPE_PUBLISHABLE_KEY_TEST`), run `bash tools/dev/stripe-listen.sh` and copy the printed `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST` into `.env.local`; restart the OTA API.",
+      "expect": "The card page mounts Stripe's Payment Element; without keys it shows \"Card payment is unavailable\" and offers the airline card."
+    },
+    {
+      "title": "Optional: another OTA or the production build",
+      "actor": "Developer",
+      "body": "Another seeded OTA: `STOREFRONT_DEV_HOST=<key>.ota.example.com` in `ota/frontend/.env.local`, restart Vite. Production-like: `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend preview` → http://localhost:4173 with the Caddyfile's CSP.",
+      "expect": "The header shows the other OTA's name and branding; the preview sends the production headers (CSP, COOP on the airline-card page)."
+    }
+  ]
+}

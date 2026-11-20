@@ -1,0 +1,126 @@
+{
+  "id": "airline-card-states",
+  "type": "state",
+  "title": "Airline-card form",
+  "caption": "`src/pages/checkout-pay-airline.js` (docs/pages.md §9). The inputs are emptied after every answer of the completion, on `pagehide` and on a back-forward cache restore.",
+  "states": [
+    {
+      "id": "loading",
+      "label": "Loading (fresh storefront.get)",
+      "kind": "initial"
+    },
+    {
+      "id": "notoffered",
+      "label": "This payment method is not available",
+      "kind": "error",
+      "detail": "`AIRLINE_CARD_ENABLED` false, `airline_card_enabled_<env>` off, or suspended after 20 declines in an hour."
+    },
+    {
+      "id": "form",
+      "label": "Card form",
+      "kind": "normal"
+    },
+    {
+      "id": "quoted",
+      "label": "Reviewed: Pay €…",
+      "kind": "normal",
+      "detail": "Airline's card fee for brand + BIN."
+    },
+    {
+      "id": "local",
+      "label": "Field errors (nothing sent)",
+      "kind": "error",
+      "detail": "Holder, Luhn, expiry, security code length, accepted brand."
+    },
+    {
+      "id": "paying",
+      "label": "Do not close this page",
+      "kind": "normal"
+    },
+    {
+      "id": "declined",
+      "label": "The airline declined the card",
+      "kind": "error",
+      "detail": "Inputs emptied; a booking takes at most three cards."
+    },
+    {
+      "id": "exceeded",
+      "label": "Too many attempts",
+      "kind": "error",
+      "detail": "`403 PAYMENT_ATTEMPTS_EXCEEDED`: new booking or pay by card."
+    },
+    {
+      "id": "pending",
+      "label": "Confirmation in pending mode",
+      "kind": "final",
+      "detail": "`504 SUPPLIER_TIMEOUT`, or a lost connection after which the checkout has a booking: the card is never sent again."
+    },
+    {
+      "id": "done",
+      "label": "Confirmation",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "loading",
+      "to": "form",
+      "label": "method offered"
+    },
+    {
+      "from": "loading",
+      "to": "notoffered",
+      "label": "method not offered / payment cancelled"
+    },
+    {
+      "from": "form",
+      "to": "quoted",
+      "label": "6 digits → updatePayment quote"
+    },
+    {
+      "from": "quoted",
+      "to": "local",
+      "label": "Pay with a typing mistake"
+    },
+    {
+      "from": "local",
+      "to": "quoted",
+      "label": "corrected"
+    },
+    {
+      "from": "quoted",
+      "to": "paying",
+      "label": "Pay (new Idempotency-Key)"
+    },
+    {
+      "from": "paying",
+      "to": "done",
+      "label": "201"
+    },
+    {
+      "from": "paying",
+      "to": "declined",
+      "label": "402 PAYMENT_DECLINED"
+    },
+    {
+      "from": "declined",
+      "to": "form",
+      "label": "next card"
+    },
+    {
+      "from": "paying",
+      "to": "exceeded",
+      "label": "third decline"
+    },
+    {
+      "from": "paying",
+      "to": "pending",
+      "label": "504 / lost answer with a booking"
+    },
+    {
+      "from": "paying",
+      "to": "form",
+      "label": "409 PRICE_CHANGED / PAYMENT_AMOUNT_MISMATCH: type again"
+    }
+  ]
+}

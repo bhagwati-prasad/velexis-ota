@@ -1,0 +1,140 @@
+{
+  "id": "my-bookings-change-and-cancel",
+  "title": "Customer account, my bookings, change, cancel and guest lookup",
+  "summary": "A traveller creates a storefront account, books while signed in, finds the trip in My bookings, changes the contact details at the airline, cancels with the refund preview, sees the e-mails, keeps the session alive silently, and a guest finds a booking by reference.",
+  "apps": ["storefront", "sdk", "ota-api"],
+  "roles": ["Traveller (customer)", "Traveller (guest)"],
+  "duration": "30 min",
+  "prerequisites": [
+    "Your OTA's storefront on the dev server with the airline card and *Self-service cancellation* on ([[journey:storefront-settings-and-markups]], step \"switches\").",
+    "Mailpit open. Use Chromium or Firefox (`__Host-` cookies on `http://localhost`)."
+  ],
+  "steps": [
+    {
+      "id": "sign-up",
+      "app": "storefront",
+      "title": "Create an account",
+      "url": "http://localhost:5173/account/sign-up.html",
+      "actions": "Fill *First name*, *Last name*, *E-mail address*, *Password* and tick *I accept the terms and conditions…*, then press **Create account**. Try a 9-character password first, then the common `qwertyuiop`, then a good one of at least 10 characters.",
+      "expect": "The 9-character password is stopped by the browser itself (`minlength`, no request). `qwertyuiop` is refused at the field (`422 PASSWORD_TOO_WEAK`): \"This password is too common or has appeared in a data breach. Choose another one.\" Then you land on `/account/` signed in, \"Hi, <first name>\" in the header (also when the OTA requires e-mail verification: that only blocks checkout). DevTools: the session lives in httpOnly cookies `__Host-vx_at` and `__Host-vx_rt`; the only cookie a script can read is `__Host-vx_csrf`. No token in localStorage or sessionStorage.",
+      "data": "`SELECT email, status, email_verified_at FROM tenant_<key>.customers ORDER BY created_at DESC LIMIT 1;` → the customer of **this** OTA only; a `customer_sessions` row.",
+      "code": [
+        "ota/frontend/src/pages/account-sign-up.js",
+        "ota/backend/src/identity/sign-up.service.ts",
+        "ota/backend/src/identity/sessions.service.ts",
+        "ota/backend/src/identity/password-policy.ts"
+      ]
+    },
+    {
+      "id": "verify",
+      "app": "storefront",
+      "title": "Verify the e-mail address",
+      "url": "http://localhost:8025",
+      "actions": "Open the storefront's verification e-mail and follow its link (`/account/verify.html?token=…`).",
+      "expect": "*Confirm your e-mail address* with *`<address>` is confirmed*.",
+      "data": "`customers.email_verified_at` set.",
+      "code": ["ota/frontend/src/pages/account-verify.js", "ota/backend/src/identity/verification.service.ts"]
+    },
+    {
+      "id": "sign-in-next",
+      "app": "storefront",
+      "title": "Sign out, then sign in from My bookings",
+      "url": "http://localhost:5173/bookings.html",
+      "actions": "Press **Sign out** in the header. Open `/bookings.html`.",
+      "expect": "Sign out returns to the home page. `/bookings.html` sends you to `/account/sign-in.html?next=%2Fbookings.html`; after signing in you are back on **My bookings**.",
+      "code": [
+        "ota/frontend/src/lib/session.js",
+        "ota/frontend/src/pages/account-sign-in.js",
+        "ota/frontend/src/pages/bookings.js"
+      ]
+    },
+    {
+      "id": "book-signed-in",
+      "app": "storefront",
+      "title": "Book a trip while signed in",
+      "actions": "Search and book with the airline card (`4111 1111 1111 1111`) as in [[journey:book-with-airline-card]]; the contact form is prefilled from the account.",
+      "expect": "The confirmation shows the reference. The trip appears under **Upcoming** in My bookings.",
+      "data": "`bookings.customer_id` is the new customer's id.",
+      "code": ["ota/backend/src/bookings/customer-bookings.service.ts"]
+    },
+    {
+      "id": "tabs",
+      "app": "storefront",
+      "title": "Upcoming, past and cancelled tabs",
+      "url": "http://localhost:5173/bookings.html?tab=upcoming",
+      "actions": "Switch between the tabs.",
+      "expect": "Each tab changes the address (`?tab=upcoming|past|cancelled`) and lists the right trips with reference, route, dates and status. Empty tabs show an empty state.",
+      "code": [
+        "ota/frontend/src/pages/bookings.js",
+        "ota/backend/src/bookings/customer-bookings.controller.ts"
+      ]
+    },
+    {
+      "id": "change-contacts",
+      "app": "storefront",
+      "title": "Change the contact details",
+      "url": "http://localhost:5173/booking.html?id=bkg_…",
+      "actions": "Open the upcoming booking → **Change contact details**; in the dialog change *E-mail address*, *Country calling code* and *Mobile phone number*; **Save**.",
+      "expect": "The dialog closes and the page says \"Your contact details are updated. We have sent a confirmation to <new address>.\"; **Contact details** shows the new address. Mailpit: \"Your booking `VX…` with `<OTA>` has been updated\" to the new address (with the itinerary) and \"The contact details of booking `VX…` with `<OTA>` were changed\" to the previous address (no booking data, no attachment).",
+      "data": "`bookings.contact_email` updated; a `booking_events` row; the PATCH to Amadeus in `supplier_requests`.",
+      "code": [
+        "ota/backend/src/bookings/booking-changes.service.ts",
+        "ota/backend/src/bookings/booking-updated-emails.ts"
+      ]
+    },
+    {
+      "id": "cancel",
+      "app": "storefront",
+      "title": "Cancel with the refund preview",
+      "url": "http://localhost:5173/booking.html?id=bkg_…",
+      "actions": "Press **Cancel booking**; read the preview in the dialog *Cancel your booking*; choose a reason in *Why do you cancel?*; press the button that names the amount (*Cancel and get … back*); **Close**.",
+      "expect": "The preview says \"Your tickets can still be voided until …\" and \"If you cancel now, you get back … of the … you paid.\" After confirming the dialog says *Your booking is cancelled*; after **Close** the page heading is *This booking is cancelled* and **Cancel booking** is gone; the trip moves to the **Cancelled** tab. Mailpit: \"Your booking `VX…` is cancelled\".",
+      "data": "`bookings.status = cancelled`, `cancelled_by = customer`; for an airline card the expectation is recorded in `payment_events` and no Stripe refund is made; a new itinerary marked cancelled in `booking_documents`.",
+      "code": [
+        "ota/backend/src/bookings/cancellation.service.ts",
+        "ota/backend/src/bookings/allowed-actions.ts"
+      ]
+    },
+    {
+      "id": "silent-refresh",
+      "app": "storefront",
+      "title": "The session refreshes silently",
+      "actions": "In DevTools → Application → Cookies delete `__Host-vx_at` (as the browser does after its 15 minutes). Open **My bookings** again.",
+      "expect": "The page loads without asking you to sign in; a new `__Host-vx_at` cookie appears (the refresh used `__Host-vx_rt`).",
+      "data": "`customer_sessions` shows the rotated refresh token (hash only).",
+      "code": ["ota/sdk/src/internal", "ota/backend/src/identity/sessions.service.ts"]
+    },
+    {
+      "id": "account",
+      "app": "storefront",
+      "title": "Account page",
+      "url": "http://localhost:5173/account/",
+      "actions": "Look at the profile, change the password, and use *sign out everywhere*.",
+      "expect": "Password change requires the current password and the rule; sign out everywhere ends the session in other browsers too.",
+      "code": ["ota/frontend/src/pages/account-index.js", "ota/backend/src/identity/password.service.ts"]
+    },
+    {
+      "id": "guest-lookup",
+      "app": "storefront",
+      "title": "A guest finds a booking by reference",
+      "url": "http://localhost:5173/lookup.html",
+      "actions": "In a private window: enter a real reference with a wrong last name, then a made-up reference (`VX2Z2Z2Z`) with the right last name, then the real reference in lower case with the right last name; press **Find my booking** each time.",
+      "expect": "The two wrong attempts show the same message, *We could not find a booking with these details*, without marking either field (the answers are identical but for the request id). The right pair opens `/booking.html?id=bkg_…`; access lives in the httpOnly `__Host-vx_bt` cookie.",
+      "data": "`booking_access_tokens` row for the guest access.",
+      "code": [
+        "ota/frontend/src/pages/lookup.js",
+        "ota/backend/src/bookings/lookup.controller.ts",
+        "ota/backend/src/bookings/guest-access.service.ts"
+      ]
+    },
+    {
+      "id": "lookup-limit",
+      "app": "storefront",
+      "title": "Failed lookups are limited",
+      "url": "http://localhost:5173/lookup.html",
+      "actions": "In another private window make six lookups with references that do not exist.",
+      "expect": "Five answers `404`, the sixth `429`: *Too many attempts, try again in N minutes* (the five failures are counted per IP for 15 minutes) and the button disabled until the wait ends.",
+      "code": ["ota/backend/src/bookings/lookup.controller.ts"]
+    }
+  ]
+}

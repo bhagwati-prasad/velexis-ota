@@ -1,0 +1,999 @@
+{
+  "id": "ota-api",
+  "name": "OTA API and worker",
+  "kind": "backend",
+  "product": "ota",
+  "summary": "The NestJS 11 data plane of every OTA: the booking API on 127.0.0.1:4000 (storefront, third-party keys and the OTA admin's console calls), Stripe webhooks, and a BullMQ worker (health on 4001) for provisioning, ticketing, sync, reconciliation, e-mails, PDFs and purges; one PostgreSQL schema per OTA reached only through tenantTx.",
+  "audience": [
+    "Travellers (through the storefront or a third-party frontend)",
+    "OTA staff (through the OTA admin)",
+    "Third-party developers (pk_/sk_ keys, the JS SDK)",
+    "Velexis operators (worker, CLI, runbooks)"
+  ],
+  "repoPath": "ota/backend",
+  "package": "@velexis/ota-backend",
+  "stack": [
+    "Node.js 24, TypeScript 5.6 strict, CommonJS",
+    "NestJS 11 on Express 5 (helmet, cookie-parser, nestjs-cls, nestjs-pino)",
+    "@nestjs/bullmq + BullMQ 5 (prefix vx) on Redis 7",
+    "@nestjs/throttler with Redis storage (rl:ota_*)",
+    "PostgreSQL 16 through @velexis/db (Kysely), schema per tenant",
+    "Ajv 8 OpenAPI validation of every request",
+    "jose (EdDSA JWTs), argon2 (customer passwords)",
+    "stripe 18 (PaymentIntents, manual capture, webhooks)",
+    "Amadeus Enterprise over fetch (12 operations)",
+    "nodemailer + Handlebars (safe subset) e-mail, pdfmake PDFs",
+    "decimal.js money",
+    "Vitest 4 (unit, contract, integration, cross-backend)"
+  ],
+  "local": {
+    "url": "http://localhost:4000",
+    "port": 4000,
+    "command": "pnpm --filter @velexis/ota-backend dev",
+    "notes": "Builds once, then runs tsc --watch, the API (dist/main.js, 127.0.0.1:4000) and the worker (dist/worker.js, health 127.0.0.1:4001). Needs PostgreSQL, Redis, Mailpit, the Amadeus stub (pnpm stub:amadeus, :4900), the key files of pnpm dev:keys, ota/backend/.env.local from .env.example, and the platform dev:seed followed by this package's dev:seed (demo OTA tenant_demo, three test keys printed once). Try: curl -H 'X-Api-Key: pk_test_…' http://localhost:4000/v1/storefront."
+  },
+  "production": {
+    "host": "api.ota.example.com (and /api/* on every storefront host, e.g. demo.ota.example.com)"
+  },
+  "dependsOn": ["packages", "platform-api", "deploy"],
+  "talksTo": [
+    {
+      "app": "storefront",
+      "how": "Serves it: Caddy proxies /api/* of every storefront host to 127.0.0.1:4000 with X-Velexis-Edge and X-Velexis-Host (edge caller, cookie sessions, CSRF)"
+    },
+    {
+      "app": "ota-admin",
+      "how": "Serves it: server-side calls on loopback with OTA_ADMIN_SERVICE_KEY, the staff bearer token, X-Velexis-Environment and the end-user IP/agent headers (console scope)"
+    },
+    {
+      "app": "sdk",
+      "how": "Serves it: @velexis/ota-sdk wraps the operations (x-sdk-method), with pk_/sk_ keys or cookies"
+    },
+    {
+      "app": "platform-api",
+      "how": "No HTTP: reads platform tables read-only (cached 60 s, vx:invalidate), consumes ota-tenant-ops, produces platform-tenant-events, redeems ptk:* portal tokens, reads staffdeny:acct:*, writes apikey:used:*"
+    },
+    {
+      "app": "deploy",
+      "how": "systemd units velexis-ota-api and velexis-ota-worker; Caddy edge; env files /etc/velexis/ota-backend.env and ota-worker.env; deploy runs the tenant migration fan-out and tenants:report-migrations"
+    },
+    {
+      "app": "packages",
+      "how": "@velexis/db, @velexis/api-types, @velexis/errors, @velexis/crypto, @velexis/config, @velexis/logger"
+    },
+    {
+      "app": "tools",
+      "how": "Amadeus stub (tools/amadeus-stub, :4900) in development, CI and e2e; e2e harness starts the built API and worker"
+    }
+  ],
+  "data": [
+    "tenant_<key>.* (42 tables of the tenant baseline + storefront_assets, storefront_pages)",
+    "tenant_<key>.flight_searches, flight_offers, offer_upsells, priced_offers",
+    "tenant_<key>.checkouts, checkout_travelers, checkout_contacts, checkout_ancillaries, checkout_remarks",
+    "tenant_<key>.bookings, booking_associated_records, booking_travelers, booking_contacts, booking_segments, booking_tickets, booking_ancillaries, booking_remarks, booking_documents, booking_access_tokens, booking_events",
+    "tenant_<key>.payments, payment_events, refunds",
+    "tenant_<key>.customers, customer_identities, customer_sessions, customer_password_resets, customer_preferences, customer_consents, customer_data_exports, saved_travelers, saved_traveler_documents",
+    "tenant_<key>.storefront_settings, storefront_assets, storefront_pages, markup_rules, fee_rules, notification_templates",
+    "tenant_<key>.notifications, supplier_requests, queue_snapshots, staff_actions, idempotency_keys, schema_migrations",
+    "reference.* (airports, airlines, countries, currencies; read only)",
+    "platform.tenants, tenant_domains, api_keys, tenant_memberships, accounts, supplier_connections, amadeus_accounts, amadeus_offices, payment_provider_connections, subscriptions, plans (read only)",
+    "Redis: tenant:*, tenantkey:*, host:*, apikey:*, member:*, conn:*, amadeus:token|tokenlock|badcred:*, rl:amadeus:*, rl:ota_*, t:<tenantId>:<env>:(sf|pages|search|cxq|ac|authfail|cust):*, staffsess:*, staffdeny:*, ptk:*, apikey:used:*",
+    "BullMQ (prefix vx): ota-tenant-ops, platform-tenant-events, ota-stripe-events, ota-payments, ota-bookings, ota-ticketing, ota-notifications, ota-documents, ota-maintenance",
+    "Storage: STORAGE_DIR/tenant_<key>/… (PDF documents, storefront images)"
+  ],
+  "docs": [
+    "ota/backend/README.md",
+    "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml",
+    "ota/docs/architecture.md",
+    "ota/docs/architecture-booking.md",
+    "ota/docs/data-model.md",
+    "ota/docs/scope.md",
+    "ota/docs/api-changes.md",
+    "ota/docs/api-changes-console-and-internal.md",
+    "ota/docs/security-review.md",
+    "ota/docs/performance.md",
+    "ota/docs/flows/search-and-price.md",
+    "ota/docs/flows/checkout-stripe.md",
+    "ota/docs/flows/checkout-airline-card.md",
+    "ota/docs/flows/ticketing-and-documents.md",
+    "ota/docs/flows/change-and-cancel.md",
+    "ota/docs/flows/my-bookings-and-guest-lookup.md",
+    "ota/docs/flows/console-operations.md",
+    "ota/docs/flows/amadeus-connection-and-tokens.md",
+    "ota/docs/flows/tenant-provisioning-worker.md",
+    "ota/docs/runbooks/README.md",
+    "ota/backend/migrations/README.md",
+    "docs/velexis-sdk/db/README.md"
+  ],
+  "adrs": [
+    "ota/docs/adr/0001-amadeus-client-design.md",
+    "ota/docs/adr/0002-offer-and-priced-offer-caching.md",
+    "ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md",
+    "ota/docs/adr/0004-airline-card-data-handling.md",
+    "ota/docs/adr/0005-markup-and-fee-engine.md",
+    "ota/docs/adr/0006-storefront-cookie-sessions-and-csrf.md",
+    "ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md",
+    "ota/docs/adr/0008-ticketing-policy.md",
+    "ota/docs/adr/0009-caller-and-tenant-resolution.md",
+    "ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md",
+    "ota/docs/adr/0011-console-access-staff-sessions-and-environments.md",
+    "ota/docs/adr/0012-storefront-settings-assets-and-pages.md",
+    "ota/docs/adr/0013-notifications-and-booking-documents.md",
+    "ota/docs/adr/0014-per-tenant-workers-and-schedulers.md",
+    "docs/mvp/adr/0004-postgresql-schema-per-tenant.md",
+    "docs/mvp/adr/0008-identity-accounts-customers-sessions.md",
+    "docs/mvp/adr/0009-background-jobs-bullmq.md",
+    "docs/mvp/adr/0011-payments-stripe-and-airline-card.md"
+  ],
+  "roles": [
+    {
+      "name": "Visitor (no identity)",
+      "can": "Storefront bootstrap, reference data, search, offers, upsell, price, open a guest checkout, pay and complete"
+    },
+    {
+      "name": "Guest (booking token)",
+      "can": "One booking: read, documents, events, contact changes, cancellation quote and cancel (X-Booking-Token or __Host-vx_bt)"
+    },
+    {
+      "name": "Customer (session)",
+      "can": "Account, My trips (bookings.list), every booking of the account, password change, account deletion"
+    },
+    {
+      "name": "owner / admin (staff)",
+      "can": "Every console permission, including settings:write, payments:refund, amadeus:write and allowUnpaid issuance; live environment of a live OTA"
+    },
+    {
+      "name": "agent (staff)",
+      "can": "Bookings read/write/issue/cancel, customers, queues, supplier log, raw Amadeus reads, payments read/capture, settings read; live allowed"
+    },
+    {
+      "name": "finance (staff)",
+      "can": "Bookings and customers read, supplier log, payments read/capture/refund, settings read; live allowed"
+    },
+    {
+      "name": "viewer (staff)",
+      "can": "Bookings, customers, payments and settings read only; test environment only"
+    },
+    {
+      "name": "Secret key sk_ (storefront / console / console:automation)",
+      "can": "Customer scope server-side; console scope with a staff token; or key-only console calls limited to the key's permissions (X-Velexis-Scope: console)"
+    },
+    {
+      "name": "Stripe",
+      "can": "POST /webhooks/stripe/** with a valid signature only"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/v1/storefront",
+      "operationId": "getStorefront",
+      "purpose": "Storefront: Get the storefront bootstrap configuration"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/storefront/resolve",
+      "operationId": "resolveStorefrontHost",
+      "purpose": "Storefront: Resolve a storefront host name to its OTA (multi-domain hosting) (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/storefront/pages",
+      "operationId": "listStorefrontPages",
+      "purpose": "Storefront: List the published content pages"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/storefront/pages/{slug}",
+      "operationId": "getStorefrontPage",
+      "purpose": "Storefront: Get a published content page as blocks"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/assets/{tenantKey}/{assetId}.{ext}",
+      "operationId": "getPublicAsset",
+      "purpose": "Storefront: Get an uploaded storefront image (plain image URL)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-up",
+      "operationId": "signUp",
+      "purpose": "Customer auth: Create a customer account"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/email-verification/confirm",
+      "operationId": "verifyEmail",
+      "purpose": "Customer auth: Confirm an email address with the emailed token"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/email-verification/resend",
+      "operationId": "resendEmailVerification",
+      "purpose": "Customer auth: Send a new verification email"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-in",
+      "operationId": "signIn",
+      "purpose": "Customer auth: Sign in with email and password"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/refresh",
+      "operationId": "refreshSession",
+      "purpose": "Customer auth: Exchange a refresh token for new tokens (rotating)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-out",
+      "operationId": "signOut",
+      "purpose": "Customer auth: Sign out of the current session or of all sessions"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/password-resets",
+      "operationId": "requestPasswordReset",
+      "purpose": "Customer auth: Request a password-reset email"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/password-resets/confirm",
+      "operationId": "resetPassword",
+      "purpose": "Customer auth: Set a new password with the emailed reset token"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/password/change",
+      "operationId": "changePassword",
+      "purpose": "Customer auth: Change the password of the signed-in customer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/auth/session",
+      "operationId": "getSession",
+      "purpose": "Customer auth: Get the current customer and session"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/account",
+      "operationId": "getAccount",
+      "purpose": "Customer account: Get the signed-in customer's profile"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/account",
+      "operationId": "updateAccount",
+      "purpose": "Customer account: Update the signed-in customer's profile"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/account/preferences",
+      "operationId": "getAccountPreferences",
+      "purpose": "Customer account: Get travel and notification preferences (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/account/preferences",
+      "operationId": "updateAccountPreferences",
+      "purpose": "Customer account: Update travel and notification preferences (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/account/deletion",
+      "operationId": "deleteAccount",
+      "purpose": "Customer account: Delete the customer account (optionally with a data export)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/account/data-exports",
+      "operationId": "createAccountDataExport",
+      "purpose": "Customer account: Request an export of the customer's personal data (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/account/data-exports/{dataExportId}",
+      "operationId": "getAccountDataExport",
+      "purpose": "Customer account: Get the status and download link of a data export (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/account/saved-travelers",
+      "operationId": "listSavedTravelers",
+      "purpose": "Saved travelers: List the customer's saved travellers (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/account/saved-travelers",
+      "operationId": "createSavedTraveler",
+      "purpose": "Saved travelers: Save a traveller (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/account/saved-travelers/{savedTravelerId}",
+      "operationId": "getSavedTraveler",
+      "purpose": "Saved travelers: Get a saved traveller (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/account/saved-travelers/{savedTravelerId}",
+      "operationId": "updateSavedTraveler",
+      "purpose": "Saved travelers: Update a saved traveller (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/account/saved-travelers/{savedTravelerId}",
+      "operationId": "deleteSavedTraveler",
+      "purpose": "Saved travelers: Delete a saved traveller (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/reference/locations",
+      "operationId": "searchLocations",
+      "purpose": "Reference data: Autocomplete airports and cities by keyword"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/reference/airports/{iataCode}",
+      "operationId": "getAirport",
+      "purpose": "Reference data: Get an airport by IATA code"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/reference/airlines",
+      "operationId": "listAirlines",
+      "purpose": "Reference data: List airlines (optionally by IATA codes)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/reference/airlines/{iataCode}",
+      "operationId": "getAirline",
+      "purpose": "Reference data: Get an airline by IATA code"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/reference/countries",
+      "operationId": "listCountries",
+      "purpose": "Reference data: List countries"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/reference/currencies",
+      "operationId": "listCurrencies",
+      "purpose": "Reference data: List currencies"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/flight-searches",
+      "operationId": "createFlightSearch",
+      "purpose": "Flight search: Search flights (create a flight search)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/flight-searches/{searchId}",
+      "operationId": "getFlightSearch",
+      "purpose": "Flight search: Get a flight search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/flight-searches/{searchId}/offers",
+      "operationId": "listFlightSearchResults",
+      "purpose": "Flight search: List, filter and sort the offers of a search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/flight-offers/{offerId}",
+      "operationId": "getFlightOffer",
+      "purpose": "Flight offers: Get flight offer details"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/flight-offers/{offerId}/upsells",
+      "operationId": "upsellFlightOffer",
+      "purpose": "Flight offers: Get branded-fare upsell offers for an offer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/flight-availabilities",
+      "operationId": "searchFlightAvailabilities",
+      "purpose": "Flight availability: Search flight availabilities (console seat-availability view) (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/priced-offers",
+      "operationId": "priceFlightOffers",
+      "purpose": "Flight pricing: Price offers (confirm price, requirements, fees, ancillaries, fare rules)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/priced-offers/{pricedOfferId}",
+      "operationId": "getPricedOffer",
+      "purpose": "Flight pricing: Get a priced offer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/priced-offers/{pricedOfferId}/ancillaries",
+      "operationId": "getPricedOfferAncillaries",
+      "purpose": "Flight pricing: Get the ancillary catalogue of a priced offer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/priced-offers/{pricedOfferId}/fare-rules",
+      "operationId": "getPricedOfferFareRules",
+      "purpose": "Flight pricing: Get the fare rules of a priced offer"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/checkouts",
+      "operationId": "createCheckout",
+      "purpose": "Checkout: Open a checkout from a priced offer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/checkouts/{checkoutId}",
+      "operationId": "getCheckout",
+      "purpose": "Checkout: Get a checkout"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/checkouts/{checkoutId}/travelers",
+      "operationId": "setCheckoutTravelers",
+      "purpose": "Checkout: Set travellers of a checkout"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/checkouts/{checkoutId}/contacts",
+      "operationId": "setCheckoutContacts",
+      "purpose": "Checkout: Set booking contacts of a checkout"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/checkouts/{checkoutId}/ancillaries",
+      "operationId": "setCheckoutAncillaries",
+      "purpose": "Checkout: Select ancillaries and re-price the checkout"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/checkouts/{checkoutId}/remarks",
+      "operationId": "setCheckoutRemarks",
+      "purpose": "Checkout: Set special requests of a checkout"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/checkouts/{checkoutId}/payments",
+      "operationId": "createCheckoutPayment",
+      "purpose": "Payments: Create the payment session of a checkout"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/payments/{paymentId}",
+      "operationId": "getPayment",
+      "purpose": "Payments: Get a payment"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/payments/{paymentId}",
+      "operationId": "updatePayment",
+      "purpose": "Payments: Set the card hint of a payment and re-quote the card fee"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/checkouts/{checkoutId}/complete",
+      "operationId": "completeCheckout",
+      "purpose": "Checkout: Complete the checkout: book (and ticket) the flights"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/checkouts/{checkoutId}/airline-card-completion",
+      "operationId": "completeCheckoutWithAirlineCard",
+      "purpose": "Checkout: Complete the checkout with the airline card (hosted storefront only)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings",
+      "operationId": "listBookings",
+      "purpose": "Bookings: List the customer's bookings (My trips)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}",
+      "operationId": "getBooking",
+      "purpose": "Bookings: Get a booking"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/bookings/{bookingId}",
+      "operationId": "updateBooking",
+      "purpose": "Bookings: Update contacts, traveller documents, loyalty numbers or special requests"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/bookings/lookup",
+      "operationId": "lookupBooking",
+      "purpose": "Bookings: Find a booking by reference and last name (guest access)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/cancellation-quote",
+      "operationId": "quoteBookingCancellation",
+      "purpose": "Bookings: Preview cancellation and refund"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/bookings/{bookingId}/cancellation",
+      "operationId": "cancelBooking",
+      "purpose": "Bookings: Cancel a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/fare-rules",
+      "operationId": "getBookingFareRules",
+      "purpose": "Bookings: Get rebooking and refund rules of a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/ticketing",
+      "operationId": "getBookingTicketingStatus",
+      "purpose": "Booking documents: Get the ticketing status of a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/documents",
+      "operationId": "listBookingDocuments",
+      "purpose": "Booking documents: List documents of a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/documents/{documentId}/download-url",
+      "operationId": "getBookingDocumentDownloadUrl",
+      "purpose": "Booking documents: Get a download URL for a booking document"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{storageKey}",
+      "operationId": "downloadFile",
+      "purpose": "Booking documents: Download a booking document at its signed URL"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/events",
+      "operationId": "listBookingEvents",
+      "purpose": "Booking documents: List the timeline of a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/bookings/{bookingId}/ancillaries",
+      "operationId": "getBookingAncillaries",
+      "purpose": "Bookings: List extras that can still be bought for a booking (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/bookings/{bookingId}/ancillaries",
+      "operationId": "addBookingAncillaries",
+      "purpose": "Bookings: Add paid extras to a booking (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/bookings/{bookingId}/payments",
+      "operationId": "createBookingPayment",
+      "purpose": "Payments: Create a payment for extras bought after booking (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/auth/sign-in",
+      "operationId": "consoleSignIn",
+      "purpose": "Console auth: Sign in to the console (staff session)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/auth/refresh",
+      "operationId": "consoleRefreshSession",
+      "purpose": "Console auth: Refresh a staff session"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/auth/sign-out",
+      "operationId": "consoleSignOut",
+      "purpose": "Console auth: Sign out of the console"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/auth/me",
+      "operationId": "consoleGetMe",
+      "purpose": "Console auth: Current staff member, tenant and permissions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings",
+      "operationId": "consoleListBookings",
+      "purpose": "Console bookings: List all bookings of the OTA"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings",
+      "operationId": "consoleCreateBooking",
+      "purpose": "Console bookings: Create a booking on behalf of a customer (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings/{bookingId}",
+      "operationId": "consoleGetBooking",
+      "purpose": "Console bookings: Get a booking with full console detail"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/bookings/{bookingId}",
+      "operationId": "consolePatchBooking",
+      "purpose": "Console bookings: Modify the Amadeus order of a booking"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/issuance",
+      "operationId": "consoleIssueBooking",
+      "purpose": "Console bookings: Issue the tickets of a booking"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/cancellation",
+      "operationId": "consoleCancelBooking",
+      "purpose": "Console bookings: Cancel a booking (Flight Order Management DELETE)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/review-closure",
+      "operationId": "consoleCloseBookingReview",
+      "purpose": "Console bookings: Close a booking in Reconciliation review"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/resync",
+      "operationId": "consoleResyncBooking",
+      "purpose": "Console bookings: Re-synchronise a booking with Amadeus"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/notes",
+      "operationId": "consoleAddBookingNote",
+      "purpose": "Console bookings: Add an internal note to a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings/by-record-locator",
+      "operationId": "consoleFindBookingByRecordLocator",
+      "purpose": "Console bookings: Look up a PNR by record locator"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/imports",
+      "operationId": "consoleImportBooking",
+      "purpose": "Console bookings: Import an existing Amadeus order as a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings/{bookingId}/amadeus-order",
+      "operationId": "consoleRetrieveFlightOrder",
+      "purpose": "Console bookings: Retrieve the verbatim Amadeus order of a booking"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/queues/{queueId}",
+      "operationId": "consoleListQueue",
+      "purpose": "Console queues: List the PNRs on an office queue"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/queue-snapshots",
+      "operationId": "consoleListQueueSnapshots",
+      "purpose": "Console queues: List stored queue snapshots"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/customers",
+      "operationId": "consoleListCustomers",
+      "purpose": "Console customers: List the OTA's customers"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/customers/{customerId}",
+      "operationId": "consoleGetCustomer",
+      "purpose": "Console customers: Get a customer with statistics and bookings"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/supplier-requests",
+      "operationId": "consoleListSupplierRequests",
+      "purpose": "Console supplier log: List the Amadeus call log"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v2/shopping/flight-offers",
+      "operationId": "consoleAmadeusSearchFlightOffers",
+      "purpose": "Console Amadeus: Raw Flight Offers Search (POST)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/amadeus/v2/shopping/flight-offers",
+      "operationId": "consoleAmadeusGetFlightOffers",
+      "purpose": "Console Amadeus: Raw Flight Offers Search (GET)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/shopping/availability/flight-availabilities",
+      "operationId": "consoleAmadeusSearchFlightAvailabilities",
+      "purpose": "Console Amadeus: Raw Flight Availabilities Search"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/shopping/flight-offers/upselling",
+      "operationId": "consoleAmadeusUpsellAirOffers",
+      "purpose": "Console Amadeus: Raw Branded Fares Upsell"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/shopping/flight-offers/pricing",
+      "operationId": "consoleAmadeusQuoteAirOffers",
+      "purpose": "Console Amadeus: Raw Flight Offers Price"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders",
+      "operationId": "consoleAmadeusCreateFlightOrders",
+      "purpose": "Console Amadeus: Raw Flight Create Orders (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/{flightOrderId}/issuance",
+      "operationId": "consoleAmadeusIssueFlightOrder",
+      "purpose": "Console Amadeus: Raw Flight Order Issue (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/{flightOrderId}",
+      "operationId": "consoleAmadeusGetFlightOrder",
+      "purpose": "Console Amadeus: Raw Flight Order Management GET"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/{flightOrderId}",
+      "operationId": "consoleAmadeusPatchFlightOrder",
+      "purpose": "Console Amadeus: Raw Flight Order Management PATCH (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/{flightOrderId}",
+      "operationId": "consoleAmadeusCancelFlightOrder",
+      "purpose": "Console Amadeus: Raw Flight Order Management DELETE (deferred: answers 501 NOT_IMPLEMENTED)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/by-reference",
+      "operationId": "consoleAmadeusGetFlightOrderByReference",
+      "purpose": "Console Amadeus: Raw Get Flight Order By Record Locator"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/amadeus/office/queues/{queueId}",
+      "operationId": "consoleAmadeusGetQueue",
+      "purpose": "Console Amadeus: Raw Queue List"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/markup-rules",
+      "operationId": "consoleListMarkupRules",
+      "purpose": "Console settings: List the markup rules"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/markup-rules",
+      "operationId": "consoleCreateMarkupRule",
+      "purpose": "Console settings: Create a markup rule"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/markup-rules/{markupRuleId}",
+      "operationId": "consoleGetMarkupRule",
+      "purpose": "Console settings: Get a markup rule"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/settings/markup-rules/{markupRuleId}",
+      "operationId": "consoleUpdateMarkupRule",
+      "purpose": "Console settings: Update a markup rule"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/settings/markup-rules/{markupRuleId}",
+      "operationId": "consoleDeleteMarkupRule",
+      "purpose": "Console settings: Delete a markup rule"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/fee-rules",
+      "operationId": "consoleListFeeRules",
+      "purpose": "Console settings: List the fee rules"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/fee-rules",
+      "operationId": "consoleCreateFeeRule",
+      "purpose": "Console settings: Create a fee rule"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/fee-rules/{feeRuleId}",
+      "operationId": "consoleGetFeeRule",
+      "purpose": "Console settings: Get a fee rule"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/settings/fee-rules/{feeRuleId}",
+      "operationId": "consoleUpdateFeeRule",
+      "purpose": "Console settings: Update a fee rule"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/settings/fee-rules/{feeRuleId}",
+      "operationId": "consoleDeleteFeeRule",
+      "purpose": "Console settings: Delete a fee rule"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/storefront",
+      "operationId": "consoleGetStorefrontSettings",
+      "purpose": "Console settings: Get the storefront settings"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/settings/storefront",
+      "operationId": "consoleUpdateStorefrontSettings",
+      "purpose": "Console settings: Update the storefront settings"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/pages",
+      "operationId": "consoleListStorefrontPages",
+      "purpose": "Console settings: List the content pages"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/pages",
+      "operationId": "consoleCreateStorefrontPage",
+      "purpose": "Console settings: Create a content page"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/pages/{pageId}",
+      "operationId": "consoleGetStorefrontPage",
+      "purpose": "Console settings: Get a content page"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/settings/pages/{pageId}",
+      "operationId": "consoleUpdateStorefrontPage",
+      "purpose": "Console settings: Update a content page"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/settings/pages/{pageId}",
+      "operationId": "consoleDeleteStorefrontPage",
+      "purpose": "Console settings: Delete a content page"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/assets",
+      "operationId": "consoleListStorefrontAssets",
+      "purpose": "Console settings: List the uploaded storefront images"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/assets",
+      "operationId": "consoleUploadStorefrontAsset",
+      "purpose": "Console settings: Upload a storefront image"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/settings/assets/{assetId}",
+      "operationId": "consoleDeleteStorefrontAsset",
+      "purpose": "Console settings: Delete a storefront image"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/notification-templates",
+      "operationId": "consoleListNotificationTemplates",
+      "purpose": "Console settings: List the notification templates"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}",
+      "operationId": "consoleGetNotificationTemplate",
+      "purpose": "Console settings: Get a notification template"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}",
+      "operationId": "consolePutNotificationTemplate",
+      "purpose": "Console settings: Create or replace a notification template"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/preview",
+      "operationId": "consolePreviewNotificationTemplate",
+      "purpose": "Console settings: Preview a notification template"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset",
+      "operationId": "consoleResetNotificationTemplate",
+      "purpose": "Console settings: Reset a notification template to the default"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/payments",
+      "operationId": "consoleListPayments",
+      "purpose": "Console payments: List the payments of the OTA"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/payments/{paymentId}",
+      "operationId": "consoleGetPayment",
+      "purpose": "Console payments: Get a payment with its events and refunds"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/payments/{paymentId}/capture",
+      "operationId": "consoleCapturePayment",
+      "purpose": "Console payments: Capture an authorised Stripe payment"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/payments/{paymentId}/refunds",
+      "operationId": "consoleRefundPayment",
+      "purpose": "Console payments: Refund a captured Stripe payment"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/stripe/velexis/{environment}",
+      "operationId": "receiveStripeVelexisWebhook",
+      "purpose": "Internal: Receive a Stripe event of the Velexis account"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/stripe/connect/{environment}",
+      "operationId": "receiveStripeConnectWebhook",
+      "purpose": "Internal: Receive a Stripe event of an OTA's connected account"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/stripe/c/{connectionId}",
+      "operationId": "receiveStripeConnectionWebhook",
+      "purpose": "Internal: Receive a Stripe event of an OTA's own Stripe account"
+    },
+    {
+      "method": "GET",
+      "path": "/health/live",
+      "operationId": "healthLive",
+      "purpose": "Internal: Liveness of the API process"
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "operationId": "healthReady",
+      "purpose": "Internal: Readiness of the API process"
+    }
+  ],
+  "tags": [
+    "nestjs",
+    "bullmq",
+    "amadeus",
+    "stripe",
+    "airline-card",
+    "pci",
+    "tenant-schema",
+    "booking",
+    "ticketing",
+    "reconciliation",
+    "e-mail",
+    "pdf",
+    "openapi"
+  ]
+}

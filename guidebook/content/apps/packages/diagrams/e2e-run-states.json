@@ -1,0 +1,97 @@
+{
+  "id": "e2e-run-states",
+  "type": "state",
+  "title": "An end-to-end run",
+  "caption": "tools/e2e/support/stack.ts and playwright.config.ts. No retries, nothing quarantined: a failure is a finding.",
+  "states": [
+    {
+      "id": "checks",
+      "label": "Pre-checks (built apps, free ports, settings)",
+      "kind": "initial"
+    },
+    {
+      "id": "refused",
+      "label": "Refused at once",
+      "kind": "error",
+      "detail": "Names the missing build or the busy port (`port 3000 (portal) is in use`)."
+    },
+    {
+      "id": "starting",
+      "label": "Database + Redis + processes starting",
+      "kind": "normal"
+    },
+    {
+      "id": "startFailed",
+      "label": "Stack failed to start",
+      "kind": "error",
+      "detail": "Cleaned up; message shows the end of the process log in test-results/stack/<name>.log."
+    },
+    {
+      "id": "ready",
+      "label": "Ready (health 200, seeds done)",
+      "kind": "normal"
+    },
+    {
+      "id": "running",
+      "label": "Journeys running (2 workers in CI)",
+      "kind": "normal"
+    },
+    {
+      "id": "passed",
+      "label": "Passed",
+      "kind": "final"
+    },
+    {
+      "id": "failed",
+      "label": "Failed (trace + screenshot kept)",
+      "kind": "error"
+    },
+    {
+      "id": "teardown",
+      "label": "Teardown (DB dropped, Redis DB flushed)",
+      "kind": "normal"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "checks",
+      "to": "refused",
+      "label": "missing build / port taken"
+    },
+    {
+      "from": "checks",
+      "to": "starting",
+      "label": "ok"
+    },
+    {
+      "from": "starting",
+      "to": "startFailed",
+      "label": "process exits / 60 s timeout"
+    },
+    {
+      "from": "starting",
+      "to": "ready",
+      "label": "all ready"
+    },
+    {
+      "from": "ready",
+      "to": "running",
+      "label": "specs"
+    },
+    {
+      "from": "running",
+      "to": "teardown",
+      "label": "end or Ctrl-C"
+    },
+    {
+      "from": "teardown",
+      "to": "passed",
+      "label": "all green"
+    },
+    {
+      "from": "teardown",
+      "to": "failed",
+      "label": "any test red"
+    }
+  ]
+}

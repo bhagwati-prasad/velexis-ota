@@ -1,0 +1,45 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Run the platform API and worker locally",
+  "caption": "From an empty machine to a healthy API on :3100 and worker on :3101 (development only).",
+  "steps": [
+    {
+      "title": "Install the native services",
+      "actor": "Developer",
+      "body": "Node 24 (`nvm install` reads `.nvmrc`), pnpm, PostgreSQL 16, Redis 7, Mailpit, optionally the Stripe CLI. Then run `deploy/scripts/dev-setup.sh` (roles and the `velexis` database) and `pnpm install` at the repository root.",
+      "expect": "`psql` connects as `velexis_platform_app`; `redis-cli ping` answers PONG; Mailpit UI on http://127.0.0.1:8025."
+    },
+    {
+      "title": "Create keys and the env file",
+      "actor": "Developer",
+      "body": "`pnpm dev:keys` (master key, API key pepper, JWT keys in `.local/keys/`), then `cp platform/backend/.env.example platform/backend/.env.local`.",
+      "expect": "The process refuses to start on a missing or invalid variable and names it (`config.invalid`)."
+    },
+    {
+      "title": "Migrate and load reference data",
+      "actor": "Developer",
+      "body": "`pnpm db:migrate` (platform and reference migrations as `velexis_migrator`), then `pnpm db:seed:reference`.",
+      "expect": "`select id, status from platform.schema_migrations order by id;` lists 0001-0004 applied."
+    },
+    {
+      "title": "Start the Amadeus stub and seed",
+      "actor": "Developer",
+      "body": "In its own terminal `pnpm stub:amadeus`; then `pnpm --filter @velexis/platform-backend dev:seed`.",
+      "expect": "Prints the password and the `otpauth://` URI of `admin@example.com` once (development only; add the URI to an authenticator). Creates the active test Amadeus account and offices DEV1A0001-DEV1A0040. Exit 0."
+    },
+    {
+      "title": "Start API and worker",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/platform-backend dev` (build, `tsc --watch`, `node --watch` on dist/main.js and dist/worker.js). For provisioning also run the OTA worker: `pnpm --filter @velexis/ota-backend dev`.",
+      "expect": "Log lines `api.listening` (127.0.0.1:3100) and `scheduler.registered` (worker)."
+    },
+    {
+      "title": "Check health",
+      "actor": "Developer",
+      "url": "http://127.0.0.1:3100/health/live",
+      "body": "`curl -s http://127.0.0.1:3100/health/live` and `curl -s http://127.0.0.1:3101/health/ready`.",
+      "expect": "`{\"status\":\"ok\"}`; readiness lists `postgres` and `redis` as `ok` (worker also reports its queues). `503` with `unavailable` names the dependency that is down."
+    }
+  ]
+}

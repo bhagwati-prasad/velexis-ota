@@ -1,0 +1,46 @@
+{
+  "id": "flow-team",
+  "type": "flow",
+  "title": "Invite, change roles, remove",
+  "caption": "PF-20, PF-21. Owners manage every role; admins manage agents, finance and viewers.",
+  "steps": [
+    {
+      "title": "Invite",
+      "actor": "Owner",
+      "screen": "Team",
+      "url": "http://localhost:3000/otas/<tenantId>/team",
+      "body": "E-mail address and role (agent preselected), **Send the invitation**.",
+      "expect": "Listed under \"Pending invitations\"; `tenant_invitations` row `pending`, 7-day `expires_at`; Mailpit: \"<inviter> invited you to <OTA> on Velexis\"."
+    },
+    {
+      "title": "Seat limit",
+      "actor": "Owner",
+      "body": "Invite until the plan's `limits.staffSeats` is reached.",
+      "expect": "\"Your plan includes N team seats, and N are taken by members and pending invitations.\""
+    },
+    {
+      "title": "Change a role",
+      "actor": "Owner",
+      "body": "Pick another role in the member's row, **Change role**. Granting owner asks for a step-up.",
+      "expect": "\"<name> is now Finance.\"; `tenant_memberships.role` and `version` change; `vx:invalidate` membership."
+    },
+    {
+      "title": "Last owner",
+      "actor": "Owner",
+      "body": "As the only owner, try to leave or demote yourself.",
+      "expect": "LAST_OWNER message; nothing changes."
+    },
+    {
+      "title": "Remove",
+      "actor": "Owner",
+      "body": "**Remove member** → confirm.",
+      "expect": "\"The member was removed from the team.\"; `tenant_memberships.status = 'removed'` (row kept); the person loses the OTA admin within 60 s."
+    },
+    {
+      "title": "Resend and revoke",
+      "actor": "Owner",
+      "body": "**Send again** and **Revoke** on a pending invitation.",
+      "expect": "Resend: new token and 7 more days, the old link stops working. Revoke: `status = 'revoked'`."
+    }
+  ]
+}

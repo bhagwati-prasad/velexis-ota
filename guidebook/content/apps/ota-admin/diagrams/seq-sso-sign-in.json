@@ -1,0 +1,76 @@
+{
+  "id": "seq-sso-sign-in",
+  "type": "sequence",
+  "title": "SSO: from the portal's \"Open console\" to /bookings",
+  "caption": "PADR-0007. Code: platform/frontend/src/app/(app)/otas/[tenantId]/console/launch/route.ts, ota/admin/src/app/sso/route.ts, ota/backend/src/identity/staff/staff-auth.service.ts.",
+  "actors": [
+    { "id": "staff", "label": "Staff browser", "kind": "user" },
+    { "id": "portal", "label": "Portal", "kind": "ui" },
+    { "id": "papi", "label": "Platform API", "kind": "api" },
+    { "id": "redis", "label": "Redis", "kind": "cache" },
+    { "id": "sso", "label": "OTA admin POST /sso", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" }
+  ],
+  "steps": [
+    {
+      "from": "staff",
+      "to": "portal",
+      "label": "Open console (POST /otas/{tenantId}/console/launch)",
+      "kind": "call"
+    },
+    { "from": "portal", "to": "papi", "label": "mint a portal token for the membership", "kind": "call" },
+    {
+      "from": "papi",
+      "to": "redis",
+      "label": "SET ptk:<sha256> {accountId, tenantId, membershipId, mfa} EX 60 NX",
+      "kind": "call"
+    },
+    {
+      "from": "portal",
+      "to": "staff",
+      "label": "hand-off page: auto-submitting form, Referrer-Policy strict-origin",
+      "kind": "return"
+    },
+    {
+      "from": "staff",
+      "to": "sso",
+      "label": "POST /sso portalToken=ptk_… (x-www-form-urlencoded)",
+      "kind": "call",
+      "note": "Origin must be PUBLIC_PORTAL_URL (403), body ≤ 1 KiB (415/400), token ^ptk_[A-Za-z0-9]{24,64}$"
+    },
+    {
+      "from": "sso",
+      "to": "api",
+      "label": "console.auth.signIn {grantType: portal_token} — X-Api-Key only, X-Velexis-Environment: test, End-User-IP/Agent",
+      "kind": "call"
+    },
+    { "from": "api", "to": "redis", "label": "GETDEL ptk:<sha256> (single use)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "platform: membership, account, tenant active (read only); MFA for a live tenant",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "staffsess:<familyId> (12 h); check staffdeny:acct|member|tenant",
+      "kind": "call"
+    },
+    { "from": "api", "to": "pg", "label": "tenant_<key>.staff_actions staff.sign_in", "kind": "call" },
+    {
+      "from": "api",
+      "to": "sso",
+      "label": "ConsoleStaffSession: tokens, staff, tenant, permissions, environments",
+      "kind": "return",
+      "note": "Refusals: 401 PORTAL_TOKEN_INVALID, 403 STAFF_MEMBERSHIP_INACTIVE, 403 TENANT_SUSPENDED, 403 MFA_REQUIRED, 429, 503 → plain HTML error page with \"Back to the portal\""
+    },
+    {
+      "from": "sso",
+      "to": "staff",
+      "label": "303 /bookings, Set-Cookie __Host-vx_staff_at, _rt, __Host-vx_env=test, __Host-vx_tenant; Cache-Control: no-store",
+      "kind": "return"
+    }
+  ]
+}

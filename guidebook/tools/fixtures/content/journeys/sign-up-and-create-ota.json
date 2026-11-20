@@ -1,0 +1,57 @@
+{
+  "id": "sign-up-and-create-ota",
+  "title": "Sign up and create an OTA",
+  "summary": "A new owner signs up on the [[app:portal]], verifies the e-mail and creates an OTA ([[tenant]]).",
+  "apps": ["portal", "platform-api"],
+  "roles": ["OTA owner"],
+  "duration": "15 min",
+  "prerequisites": [
+    "The platform API and the portal run locally ([[page:getting-started]]).",
+    "Mailpit runs on `http://localhost:8025`."
+  ],
+  "steps": [
+    {
+      "id": "open-sign-up",
+      "app": "portal",
+      "title": "Open the sign-up page",
+      "url": "http://localhost:3000/sign-up",
+      "actions": "Open the page. Fill in **Full name**, **E-mail** and a 12-character password.",
+      "expect": "The form validates as you type; a short password shows an inline error.",
+      "code": ["platform/frontend/src/app/(auth)/sign-up/page.tsx"]
+    },
+    {
+      "id": "submit",
+      "app": "portal",
+      "title": "Create the account",
+      "actions": "Press **Create account**.",
+      "expect": "The **Check your e-mail** page opens.",
+      "data": "```sql\nSELECT email, status FROM platform.accounts ORDER BY created_at DESC LIMIT 1;\n```\nExpect `pending_verification`.",
+      "code": ["platform/backend/src/auth/sign-up.service.ts"]
+    },
+    {
+      "id": "verify",
+      "app": "platform-api",
+      "title": "Verify the e-mail",
+      "url": "http://localhost:8025",
+      "actions": "Open the newest e-mail in Mailpit and click the link.",
+      "expect": "The portal shows **E-mail verified**; `email_verified_at` is set."
+    },
+    {
+      "id": "create-ota",
+      "app": "portal",
+      "title": "Create an OTA",
+      "url": "http://localhost:3000/otas/new",
+      "actions": "Sign in, open **New OTA**, enter a name and the key `demo`.",
+      "expect": "The OTA appears with status **provisioning**, then **active** ([[provisioning]]).",
+      "data": "`platform.tenants` has a row with `schema_name = 'tenant_demo'`; `platform.tenant_memberships` has the founder as `owner`.",
+      "code": ["platform/backend/src/tenants/tenants.service.ts", "platform/backend/src/provisioning"]
+    },
+    {
+      "id": "reserved-key",
+      "app": "portal",
+      "title": "Try a reserved key",
+      "actions": "Create another OTA with the key `platform`.",
+      "expect": "The form rejects the key with a clear message; no row is written."
+    }
+  ]
+}

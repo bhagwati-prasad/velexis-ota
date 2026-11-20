@@ -1,0 +1,141 @@
+{
+  "id": "seq-request-pipeline",
+  "type": "sequence",
+  "title": "One request through the pipeline (storefront edge, a state-changing call)",
+  "caption": "The order of ota/docs/architecture.md §3, as main.ts and app.module.ts register it: Express middleware, then every guard (caller, tenant, scope, customer, staff, CSRF, rate limit, permission; the booking-access guard on booking routes), then the interceptors (OpenAPI validation, idempotency) around the controller. Invalid requests therefore still count against the rate limits. No transaction stays open across an Amadeus or Stripe call.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Browser (storefront page + SDK)",
+      "kind": "user"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "kind": "edge"
+    },
+    {
+      "id": "mw",
+      "label": "Express middleware (cls, body, helmet, CORS, cookies)",
+      "kind": "api"
+    },
+    {
+      "id": "guards",
+      "label": "Guards (caller, tenant, scope, session, CSRF, throttler, permission)",
+      "kind": "api"
+    },
+    {
+      "id": "ic",
+      "label": "Interceptors (OpenAPI validation, idempotency)",
+      "kind": "api"
+    },
+    {
+      "id": "svc",
+      "label": "Controller → service",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL tenant_<key>",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "caddy",
+      "label": "POST https://demo.ota.example.com/api/v1/checkouts (cookies, X-CSRF-Token, Idempotency-Key)",
+      "kind": "call"
+    },
+    {
+      "from": "caddy",
+      "to": "mw",
+      "label": "127.0.0.1:4000 + X-Velexis-Edge, X-Velexis-Host, X-Forwarded-For",
+      "kind": "call"
+    },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "X-Request-Id; JSON ≤ 256 KB (10 KB airline card, raw body on /webhooks); helmet; Vary: Origin; cookie-parser",
+      "kind": "self"
+    },
+    {
+      "from": "mw",
+      "to": "guards",
+      "label": "CallerGuard: edge secret compared in constant time (before any lookup)",
+      "kind": "call"
+    },
+    {
+      "from": "guards",
+      "to": "redis",
+      "label": "TenantGuard: host:<hostname> → tenant:<id> (60 s), else platform.tenant_domains / tenants",
+      "kind": "call"
+    },
+    {
+      "from": "redis",
+      "to": "guards",
+      "label": "tenant active? else 403 TENANT_SUSPENDED",
+      "kind": "return"
+    },
+    {
+      "from": "guards",
+      "to": "guards",
+      "label": "ScopeGuard (x-scope), CustomerGuard / StaffGuard (tokens, cookies), CsrfGuard (cookie = X-CSRF-Token, Origin = host)",
+      "kind": "self"
+    },
+    {
+      "from": "guards",
+      "to": "redis",
+      "label": "RateLimitGuard rl:ota_<limit>:<sha256> (Redis down → 503); PermissionGuard in console scope (403 + denied staff_actions row)",
+      "kind": "call"
+    },
+    {
+      "from": "guards",
+      "to": "ic",
+      "label": "OpenAPI validation (Ajv): 400 VALIDATION_FAILED with field paths, never values",
+      "kind": "call"
+    },
+    {
+      "from": "ic",
+      "to": "ic",
+      "label": "Idempotency: claim idempotency_keys row (processing) or replay a stored answer",
+      "kind": "self"
+    },
+    {
+      "from": "ic",
+      "to": "svc",
+      "label": "one service method",
+      "kind": "call"
+    },
+    {
+      "from": "svc",
+      "to": "pg",
+      "label": "tenantTx: set_config(search_path = tenant_demo, reference), statement_timeout 15 s; DML; COMMIT",
+      "kind": "call"
+    },
+    {
+      "from": "pg",
+      "to": "svc",
+      "label": "rows",
+      "kind": "return"
+    },
+    {
+      "from": "svc",
+      "to": "ic",
+      "label": "result; idempotency row completed (redacted body, tokens encrypted)",
+      "kind": "return"
+    },
+    {
+      "from": "ic",
+      "to": "b",
+      "label": "201 + JSON; errors in one envelope {error:{code,message,status,requestId,details?,fieldErrors?,supplier?}}",
+      "kind": "return",
+      "note": "Unknown errors become 500 INTERNAL_ERROR; supplier details only in console scope."
+    }
+  ]
+}

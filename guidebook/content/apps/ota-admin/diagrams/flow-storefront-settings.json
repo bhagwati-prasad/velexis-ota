@@ -1,0 +1,41 @@
+{
+  "id": "flow-storefront-settings",
+  "type": "flow",
+  "title": "Change the storefront's settings",
+  "caption": "Mirrors settings-effects.e2e.ts (primary colour, 40 offers per search). One PATCH per section with If-Match; the API deletes t:<tenantId>:<env>:sf:* itself.",
+  "steps": [
+    {
+      "title": "Brand and theme",
+      "actor": "Owner",
+      "screen": "/settings/storefront?tab=brand",
+      "url": "http://localhost:3002/settings/storefront?tab=brand",
+      "body": "Primary colour `#7c2d12` (text or picker); watch the preview and the contrast verdict; **Save branding and theme**.",
+      "expect": "\"Saved. The storefront shows the change within 5 minutes.\"; version + 1; the storefront's `--vx-primary` changes once the tab's 5-minute copy is forgotten."
+    },
+    {
+      "title": "A failing contrast",
+      "actor": "Tester",
+      "body": "Type a light primary such as `#f0f0f0`.",
+      "expect": "The failing pair is named before saving (the storefront would fall back)."
+    },
+    {
+      "title": "Offers per search",
+      "actor": "Owner",
+      "screen": "/settings/storefront?tab=features",
+      "body": "**Offers per search** 40, **Save search**; then **Use the default** and **Save search**.",
+      "expect": "Next storefront search asks Amadeus `max=40` (check `/supplier-log`), then `max=150`; saving the same value again: \"Nothing to save: the offers per search are as shown.\" and no call."
+    },
+    {
+      "title": "Policies and payments",
+      "actor": "Owner",
+      "body": "Ticketing policy, 3-D Secure, card brands, TTLs; the airline card in TEST.",
+      "expect": "The live airline card box is disabled with the security-review reason while the platform switch is off."
+    },
+    {
+      "title": "Read-only roles",
+      "actor": "Agent / finance / viewer",
+      "body": "Open every tab.",
+      "expect": "Every field disabled, no **Save**; no settings row in `staff_actions`."
+    }
+  ]
+}

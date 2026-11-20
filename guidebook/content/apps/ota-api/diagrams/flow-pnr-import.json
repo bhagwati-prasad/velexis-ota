@@ -1,0 +1,34 @@
+{
+  "id": "flow-pnr-import",
+  "type": "flow",
+  "title": "Console: look up a PNR and import it",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/pnr-import.e2e.ts (console.bookings.findByRecordLocator, console.bookings.import; src/console/pnr-import.service.ts). Office isolation decides which orders an OTA may see.",
+  "steps": [
+    {
+      "title": "Look up",
+      "actor": "Agent",
+      "screen": "/pnr",
+      "url": "http://localhost:3002/pnr",
+      "body": "Type the record locator of an order made in the Amadeus terminal (or the stub) for this OTA's office.",
+      "expect": "`GET /v1/console/bookings/by-record-locator?recordLocator=…` → the order with \"Import as a booking\"; `staff_actions` `pnr.lookup` (audited read); `supplier_requests` row."
+    },
+    {
+      "title": "Import",
+      "actor": "Agent",
+      "body": "Import with a reason and a pricing mode (markup rules, net, override).",
+      "expect": "`POST /v1/console/bookings/imports` → `201` booking `channel = import`, status from the order (`confirmed`, `partially_ticketed`, `ticketed` or `cancelled`), `ticketing_status` `issued` / `partially_issued`, or `manual_review` for an order without tickets (the ticketing job never takes it); no payment (`paymentStatus = not_applicable`); staff action `booking.import`, event `booking.imported`. An optional `note` becomes a `staff.note` event, stored as typed (no card-number check)."
+    },
+    {
+      "title": "Import twice",
+      "actor": "Agent",
+      "body": "Import the same record locator again.",
+      "expect": "`409 ORDER_ALREADY_IMPORTED` (unique index `bookings_record_locator_uq`)."
+    },
+    {
+      "title": "Another OTA's office",
+      "actor": "Agent",
+      "body": "Look up a record locator owned by another OTA's office (e.g. the demo OTA's).",
+      "expect": "`403 OFFICE_NOT_ALLOWED` (\"This record locator belongs to an office outside this OTA.\"); nothing of the order shown."
+    }
+  ]
+}

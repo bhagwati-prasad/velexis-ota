@@ -1,0 +1,31 @@
+{
+  "id": "flow-plans-and-prices",
+  "type": "flow",
+  "title": "Create, edit, retire a plan; link Stripe prices",
+  "caption": "Stripe linking needs FEATURE_STRIPE_BILLING and Stripe test keys on the platform API.",
+  "steps": [
+    {
+      "title": "New plan",
+      "screen": "/plans",
+      "url": "http://localhost:3001/plans",
+      "body": "**New plan**: code, name, currency, monthly (and optional yearly) price, trial days, limits (staff seats, API keys, custom domains, may go live), feature rows, 'Public' (off by default), order, settlement fee (bps).",
+      "expect": "Field problems shown at each field with focus on the first, nothing sent; on success the plan is active and the form says whether the pricing page offers it."
+    },
+    {
+      "title": "Edit the plan",
+      "screen": "/plans/[planCode]",
+      "body": "**Edit the plan**, change a limit, save. Open the page in two tabs and save both.",
+      "expect": "'The plan is saved'; the second save is refused as stale (412) with a full-reload link; typed values kept."
+    },
+    {
+      "title": "Link Stripe prices",
+      "body": "**Link Stripe prices**: `prod_…`, `price_…` monthly and yearly → **Save the links**; then **Check prices**.",
+      "expect": "Saved even with warnings; each warning in words next to its price; one price for both intervals refused at the yearly field; `502` says nothing was saved."
+    },
+    {
+      "title": "Retire and reactivate",
+      "body": "**Retire plan** (confirm), then **Make the plan active again**.",
+      "expect": "Retired plans leave the pricing page and the manual subscription form; their OTAs keep them; `/plans` shows 'Retired, not offered'."
+    }
+  ]
+}

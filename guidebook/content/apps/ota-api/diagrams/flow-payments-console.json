@@ -1,0 +1,40 @@
+{
+  "id": "flow-payments-console",
+  "type": "flow",
+  "title": "Console: capture and refund a Stripe payment",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/payments.e2e.ts (nightly, Stripe test mode). console.payments.capture needs payments:capture, refund needs payments:refund (owner, admin, finance).",
+  "steps": [
+    {
+      "title": "Make a payment wait",
+      "actor": "Owner",
+      "screen": "/settings/storefront",
+      "body": "Set the ticketing policy to Manual review; book on the storefront with a Stripe test card.",
+      "expect": "Booking `confirmed`, `ticketing_status = manual_review`; payment `authorized`, not captured."
+    },
+    {
+      "title": "Capture",
+      "actor": "Finance",
+      "screen": "/payments/[paymentId]",
+      "body": "Capture the payment.",
+      "expect": "`POST /v1/console/payments/{id}/capture` → `200`; payment `captured`, `payment_events` (source staff), `booking_events`, `staff_actions` `payment.capture`. Capturing a payment that is not an authorised Stripe payment → `409 CONFLICT` (payment_not_capturable); a stale If-Match → `412`."
+    },
+    {
+      "title": "Partial refund",
+      "actor": "Finance",
+      "body": "Refund part of it with a reason.",
+      "expect": "`POST …/refunds` → `201` refund `pending`; `refund.submit` on `ota-payments` sends it; Stripe's webhook makes it `succeeded` and the payment `partially_refunded`. The customer sees `refund.requested`, then `refund.succeeded`."
+    },
+    {
+      "title": "Airline-card payments",
+      "actor": "Finance",
+      "body": "Try to refund an airline-card payment.",
+      "expect": "Refused `422` (`refund_via_airline`): the airline refunds airline cards; no `refunds` row."
+    },
+    {
+      "title": "Authorisation watch",
+      "actor": "Worker",
+      "body": "Leave an authorised payment uncaptured for more than 5 days (or inspect the job).",
+      "expect": "`payments.authorisation_watch` (06:15 UTC daily) alerts staff once per payment (`payment.authorisation_expiring` event)."
+    }
+  ]
+}

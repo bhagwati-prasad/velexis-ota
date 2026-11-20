@@ -1,0 +1,32 @@
+{
+  "id": "flow-settlement-review",
+  "type": "flow",
+  "title": "Review and pay a settlement (admin, M5)",
+  "caption": "FEATURE_SETTLEMENTS on; Velexis-mode payments collected in the Velexis Stripe account.",
+  "steps": [
+    {
+      "title": "Payout account",
+      "actor": "Owner",
+      "body": "`PUT /v1/tenants/{tenantId}/payout-account` (step-up) with IBAN or local details.",
+      "expect": "`pending_review`; bank details encrypted; masked reads only."
+    },
+    {
+      "title": "Review it",
+      "actor": "Platform admin",
+      "body": "`POST /v1/admin/tenants/{tenantId}/payout-account/review` verify or reject.",
+      "expect": "`verified` / `rejected`; `payouts.reviewed` e-mail."
+    },
+    {
+      "title": "Generate",
+      "actor": "Platform admin",
+      "body": "`POST /v1/admin/settlements/generate {periodStart}` or wait for day 3, 05:00 UTC.",
+      "expect": "Drafts with lines from Stripe balance transactions."
+    },
+    {
+      "title": "Adjust, approve, pay",
+      "actor": "Platform admin",
+      "body": "`…/adjustments` (reason), `…/approve` (If-Match, step-up), `…/mark-paid {paidAt, payoutReference}` (step-up).",
+      "expect": "draft → approved → paid (or carried_forward when net ≤ 0); `settlement.paid` e-mail; CSV via `lines.csv`."
+    }
+  ]
+}

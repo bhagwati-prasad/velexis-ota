@@ -1,0 +1,25 @@
+{
+  "id": "flow-audit-export",
+  "type": "flow",
+  "title": "Search the audit log and export CSV",
+  "caption": "Mirrors admin-audit.e2e.ts. Days are UTC; 'to' is inclusive in the form and exclusive (next day) in the API call.",
+  "steps": [
+    {
+      "title": "Open the OTA's audit",
+      "screen": "/tenants/[tenantId]",
+      "body": "Tab **Audit** → **Full audit log of this OTA**.",
+      "expect": "`/audit?tenantId=ten_…`; 'Choose a period (from and to) to export: at most one year.'"
+    },
+    {
+      "title": "Filter",
+      "screen": "/audit",
+      "body": "Set from/to days, actor type, action, target type, target id → **Search**.",
+      "expect": "Every filter in the URL; table 'Audit rows, newest first' with OTA, actor (kind + e-mail), action, target, request id, IP, browser, details JSON. A first day after the last shows a notice and calls nothing."
+    },
+    {
+      "title": "Download",
+      "body": "**Download CSV** (a plain link).",
+      "expect": "`velexis-audit-<from>-<day after to>.csv` with the same rows; a new `audit.exported` row appears in the log."
+    }
+  ]
+}

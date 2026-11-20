@@ -1,0 +1,98 @@
+{
+  "id": "seq-tenant-tx",
+  "type": "sequence",
+  "title": "tenantTx: one tenant transaction on a pooled connection",
+  "caption": "packages/db/src/tenant-db.ts. The schema comes from the resolved tenant (cache or platform.tenants), never from user input. Both settings end with the transaction, so the pooled connection carries no tenant afterwards.",
+  "actors": [
+    {
+      "id": "svc",
+      "label": "OTA service (e.g. bookings)",
+      "kind": "api"
+    },
+    {
+      "id": "tx",
+      "label": "tenantTx (@velexis/db)",
+      "kind": "lib"
+    },
+    {
+      "id": "pool",
+      "label": "pg.Pool (velexis_ota_app)",
+      "kind": "lib"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "svc",
+      "to": "tx",
+      "label": "tenantTx(tenants, \"tenant_demo\", fn, { statementTimeoutMs: 5000 })",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "tx",
+      "label": "assertTenantSchema: ^tenant_[a-z][a-z0-9_]{1,39}$ and 1 ≤ timeout ≤ 2^31−1",
+      "kind": "self",
+      "note": "Invalid → InvalidTenantSchemaError / TypeError before any connection is taken."
+    },
+    {
+      "from": "tx",
+      "to": "pool",
+      "label": "take a connection",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "pg",
+      "label": "BEGIN",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "pg",
+      "label": "leak guard (APP_ENV ≠ production): SELECT current_setting('search_path'), reset_val FROM pg_settings",
+      "kind": "call",
+      "note": "Different → SearchPathLeakError, ROLLBACK, fn never runs."
+    },
+    {
+      "from": "tx",
+      "to": "pg",
+      "label": "SELECT set_config('search_path', $1, true)  -- $1 = 'tenant_demo, reference'",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "pg",
+      "label": "SELECT set_config('statement_timeout', '5000', true)",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "svc",
+      "label": "fn(trx): unqualified tenant tables, reference.* resolve",
+      "kind": "return"
+    },
+    {
+      "from": "svc",
+      "to": "pg",
+      "label": "queries through trx",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "pg",
+      "label": "COMMIT (or ROLLBACK and rethrow when fn throws)",
+      "kind": "call"
+    },
+    {
+      "from": "tx",
+      "to": "pool",
+      "label": "release: search_path back to the role default pg_catalog",
+      "kind": "return"
+    }
+  ]
+}

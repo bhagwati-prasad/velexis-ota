@@ -1,0 +1,134 @@
+{
+  "id": "payment-states",
+  "type": "state",
+  "title": "Payment status (payments.status)",
+  "caption": "Stripe payments follow the PaymentIntent the worker re-reads (src/payments/payment-state.ts: unconfirmed states take any Stripe state; authorized → captured | canceled only; captured never moves back; canceled and failed are final for Stripe). Airline-card payments are written by the booking orchestrator: processing while the card is sent, captured when the order comes back with every ticket, failed on a decline (the next card is accepted on the same payment). CHECK: refunded ≤ captured ≤ amount.",
+  "states": [
+    {
+      "id": "requires_payment_method",
+      "label": "requires_payment_method",
+      "kind": "initial",
+      "detail": "Row inserted by checkout.createPayment; PaymentIntent created with manual capture."
+    },
+    {
+      "id": "requires_action",
+      "label": "requires_action",
+      "kind": "normal",
+      "detail": "3-D Secure challenge (`next_action`)."
+    },
+    {
+      "id": "processing",
+      "label": "processing",
+      "kind": "normal",
+      "detail": "Stripe processing; airline card: the card was sent to Flight Create Orders (brand, BIN, last 4 recorded), outcome unknown or order without every ticket (then ticketing manual_review)."
+    },
+    {
+      "id": "authorized",
+      "label": "authorized",
+      "kind": "normal",
+      "detail": "PaymentIntent `requires_capture`; checkout.complete may run. Watched by payments.authorisation_watch after 5 days."
+    },
+    {
+      "id": "captured",
+      "label": "captured",
+      "kind": "normal",
+      "detail": "After the order exists (or staff capture in the console)."
+    },
+    {
+      "id": "partially_refunded",
+      "label": "partially_refunded",
+      "kind": "normal",
+      "detail": "Charge refunded in part (refund webhook)."
+    },
+    {
+      "id": "refunded",
+      "label": "refunded",
+      "kind": "final",
+      "detail": "Fully refunded."
+    },
+    {
+      "id": "canceled",
+      "label": "canceled",
+      "kind": "final",
+      "detail": "Authorisation voided (`payment.void`: expiry, price change, refusal, not found)."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Stripe failure; airline card: declined (`airline.declined`) or refused. An airline-card payment in `failed` takes the traveller's next card on the same paymentId."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "requires_payment_method",
+      "to": "requires_action",
+      "label": "3-D Secure"
+    },
+    {
+      "from": "requires_action",
+      "to": "authorized",
+      "label": "challenge passed"
+    },
+    {
+      "from": "requires_payment_method",
+      "to": "authorized",
+      "label": "confirmed without challenge"
+    },
+    {
+      "from": "requires_payment_method",
+      "to": "processing",
+      "label": "processing"
+    },
+    {
+      "from": "processing",
+      "to": "authorized",
+      "label": "requires_capture"
+    },
+    {
+      "from": "authorized",
+      "to": "captured",
+      "label": "capture (record step, capture_retry, console capture)"
+    },
+    {
+      "from": "authorized",
+      "to": "canceled",
+      "label": "void"
+    },
+    {
+      "from": "captured",
+      "to": "partially_refunded",
+      "label": "partial refund succeeded"
+    },
+    {
+      "from": "captured",
+      "to": "refunded",
+      "label": "full refund succeeded"
+    },
+    {
+      "from": "partially_refunded",
+      "to": "refunded",
+      "label": "rest refunded"
+    },
+    {
+      "from": "processing",
+      "to": "captured",
+      "label": "airline card: order with every ticket (airline.charged)"
+    },
+    {
+      "from": "processing",
+      "to": "failed",
+      "label": "airline card declined / refused"
+    },
+    {
+      "from": "processing",
+      "to": "requires_payment_method",
+      "label": "airline card: not sent or price changed (card asked again)"
+    },
+    {
+      "from": "failed",
+      "to": "processing",
+      "label": "airline card: next card sent"
+    }
+  ]
+}

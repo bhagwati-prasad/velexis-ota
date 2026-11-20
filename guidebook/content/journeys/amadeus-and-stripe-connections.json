@@ -1,0 +1,113 @@
+{
+  "id": "amadeus-and-stripe-connections",
+  "title": "Check the Amadeus test connection and set up Stripe test payments",
+  "summary": "What provisioning connected for a new OTA (a test office of the Velexis Amadeus pool, a Stripe connection in Velexis mode), how both look in the portal and the platform admin, and how to make Stripe test payments work locally with the Stripe CLI.",
+  "apps": ["portal", "platform-admin", "platform-api", "ota-api", "storefront", "tools"],
+  "roles": ["OTA owner", "Velexis staff", "Developer"],
+  "duration": "25 min",
+  "prerequisites": [
+    "An active OTA of your own ([[journey:signup-and-provision]]) and the platform admin signed in ([[journey:run-the-stack]]).",
+    "For the Stripe steps: a Stripe account in test mode, the Stripe CLI and your own `sk_test_…`/`pk_test_…` keys (never live keys)."
+  ],
+  "steps": [
+    {
+      "id": "portal-amadeus",
+      "app": "portal",
+      "title": "The OTA's Amadeus page",
+      "url": "http://localhost:3000/otas/ten_…/amadeus",
+      "actions": "Open your OTA → **Amadeus**. Read the test connection. As owner or admin, change one connection setting (default, queuing or owner office, ticketing defaults or monitored queues), save, then reload.",
+      "expect": "The **Amadeus** page shows one card per environment, test first, through the Velexis test account, status active, with the assigned `DEV1A…` office. Owners and admins get the settings form; finance members read the same values without a form. With `FEATURE_LIVE_SWITCH` off (the default) there is no live access section; with it on, an owner on `early_access` (no live mode) gets no request button. Saved settings stay after a reload.",
+      "data": "`SELECT environment, status, credential_source, office_ids, default_office_id, queuing_office_id, owner_office_id, monitored_queues FROM platform.supplier_connections WHERE tenant_id = 'ten_…';`. A settings change writes the audit row `amadeus.settings_updated` and publishes `vx:invalidate {type: \"connection\"}` (watch with `redis-cli -a dev_redis SUBSCRIBE vx:invalidate`).",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/amadeus/page.tsx",
+        "platform/backend/src/supplier-connections/connections.service.ts"
+      ]
+    },
+    {
+      "id": "admin-amadeus",
+      "app": "platform-admin",
+      "title": "The Velexis Amadeus account and the office pool",
+      "url": "http://localhost:3001/amadeus/accounts",
+      "actions": "Open **Amadeus → Accounts** and **Amadeus → Offices**; filter offices by status. Open your OTA on **Tenants** and find its connection.",
+      "expect": "The test account is active with its last verification time; the pool shows the offices `assigned` to `demo` and to your OTA and the rest `available`. The tenant page names the same office as the portal.",
+      "data": "`SELECT office_id, status, assigned_tenant_id FROM platform.amadeus_offices WHERE status <> 'available';`",
+      "code": [
+        "platform/admin/src/app/(app)/amadeus/accounts/page.tsx",
+        "platform/admin/src/app/(app)/amadeus/offices/page.tsx",
+        "platform/backend/src/supplier-connections/amadeus-offices.service.ts"
+      ]
+    },
+    {
+      "id": "token-cache",
+      "app": "ota-api",
+      "title": "See the shared Amadeus token and rate buckets",
+      "actions": "Run one search on your storefront, then list the Amadeus keys in Redis: `REDISCLI_AUTH=dev_redis redis-cli -n 0 --scan --pattern 'amadeus:*'` and `--pattern 'rl:amadeus:*'`.",
+      "expect": "One `amadeus:token:<credId>:test` key (encrypted value) with a TTL a minute shorter than the token's lifetime, shared by the demo OTA and yours (same Velexis credentials). Rate-limit keys `rl:amadeus:cred:…` and `rl:amadeus:ten:<tenantId>:test` with a TTL of about 2 s.",
+      "data": "`SELECT operation, http_status, duration_ms, office_id FROM tenant_<key>.supplier_requests ORDER BY created_at DESC LIMIT 5;` shows the token-backed calls with your office.",
+      "code": [
+        "ota/backend/src/amadeus/token-provider.ts",
+        "ota/backend/src/amadeus/rate-limiter.ts",
+        "ota/backend/src/amadeus/limits.ts"
+      ]
+    },
+    {
+      "id": "portal-payments",
+      "app": "portal",
+      "title": "The OTA's Payments page and card statement descriptor",
+      "url": "http://localhost:3000/otas/ten_…/payments",
+      "actions": "Open **Payments**. Read the connection (Velexis mode, test). As owner or admin, change the card statement suffix: try `-BAD`, a 23-character text and `ÅSE TRAVEL`, then `ACME TRAVEL`.",
+      "expect": "Velexis mode is shown as active for test. Invalid suffixes are refused at the field with the rule's message: `-BAD` and `ÅSE TRAVEL` \"Use only the letters A to Z, digits and spaces: no accents, punctuation or other symbols.\", 23 characters \"Use at most 22 characters.\" (rules: 2 to 22 characters, letters A to Z, digits and spaces, at least one letter, starting with a letter or digit). `ACME TRAVEL` is saved (\"The card statement suffix is saved. …\") and shown after a reload. The **Payout account** and **Settlements** entries appear only with `FEATURE_SETTLEMENTS=true`.",
+      "data": "`SELECT provider, environment, account_mode, capture_mode, status, statement_descriptor_suffix FROM platform.payment_provider_connections WHERE tenant_id = 'ten_…';`",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/payments/page.tsx",
+        "platform/backend/src/payment-connections/descriptor.ts",
+        "platform/backend/src/payment-connections/payment-connections.service.ts"
+      ]
+    },
+    {
+      "id": "storefront-config",
+      "app": "storefront",
+      "title": "Read the payment configuration the storefront receives",
+      "url": "http://localhost:5173",
+      "actions": "Open your storefront with DevTools → Network and inspect the answer of `/api/v1/storefront`.",
+      "expect": "Its payment section names the account mode `velexis`, merchant \"Velexis on behalf of `<OTA name>`\" and the descriptor; `publishableKey` is the value of `STRIPE_PUBLISHABLE_KEY_TEST`. With the committed dummy key the card method cannot work; no secret key ever appears.",
+      "code": [
+        "ota/backend/src/storefront/storefront.mapper.ts",
+        "ota/backend/src/payments/payment-gateway.ts"
+      ]
+    },
+    {
+      "id": "stripe-keys",
+      "app": "tools",
+      "title": "Give the OTA backend real Stripe test keys and start the listener",
+      "actions": "Put `STRIPE_SECRET_KEY_TEST=sk_test_…` and `STRIPE_PUBLISHABLE_KEY_TEST=pk_test_…` in `ota/backend/.env.local`. Run `stripe login` once, then `bash tools/dev/stripe-listen.sh --only ota`. Copy the printed `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=whsec_…` into `ota/backend/.env.local` and restart the OTA backend.",
+      "expect": "The script prints `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=whsec_…`, then `==> [ota] stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test` and the Stripe CLI's own lines prefixed `[ota] ` (its `> Ready! …` line among them). It stops with `ERROR: …` when `STRIPE_API_KEY` holds a live key or `/etc/velexis` exists. After the restart `/api/v1/storefront` carries your real publishable key.",
+      "code": [
+        "tools/dev/stripe-listen.sh",
+        "ota/backend/src/payments/webhooks/stripe-velexis-webhook.controller.ts"
+      ]
+    },
+    {
+      "id": "stripe-trigger",
+      "app": "ota-api",
+      "title": "Send a webhook without a tenant",
+      "actions": "Run `stripe trigger payment_intent.succeeded` and watch the listener and the OTA API log.",
+      "expect": "The listener shows `[ota] … --> payment_intent.succeeded` and `<-- [200]`. The OTA API logs the event as one of an unknown tenant (no `velexis_tenant_id` metadata) and acknowledges it, so Stripe does not retry it.",
+      "data": "No new `payment_events` row in any tenant schema.",
+      "code": ["ota/backend/src/payments/webhooks/webhook-receiver.service.ts"]
+    },
+    {
+      "id": "billing-optional",
+      "app": "platform-api",
+      "title": "Optional: platform billing with Stripe Billing",
+      "actions": "Only to test M5 billing: as platform admin give a public plan a Stripe test Price (**Billing → Plans**; `early_access` has none). Set `FEATURE_STRIPE_BILLING=true`, a real test `STRIPE_SECRET_KEY` and the `STRIPE_BILLING_WEBHOOK_SECRET` printed by `bash tools/dev/stripe-listen.sh --only billing` in `platform/backend/.env.local`; restart API and worker; create a new OTA on that plan.",
+      "expect": "Create OTA now redirects to Stripe Checkout (a plan without a Stripe Price answers `422 PLAN_NOT_AVAILABLE`); after paying with `4242 4242 4242 4242` you come back to `/otas/<id>/setup?checkout=success` and provisioning starts once `checkout.session.completed` has been processed.",
+      "data": "`platform.stripe_events` (inbox) rows `received` → `processed`; `platform.subscriptions` `trialing` or `active`; `platform.billing_customers`.",
+      "code": [
+        "platform/backend/src/billing/checkout.service.ts",
+        "platform/backend/src/billing/stripe-billing.gateway.ts",
+        "platform/backend/src/billing/sync"
+      ]
+    }
+  ]
+}

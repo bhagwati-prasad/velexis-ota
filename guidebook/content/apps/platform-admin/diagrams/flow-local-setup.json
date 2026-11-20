@@ -1,0 +1,41 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Run the platform admin locally",
+  "caption": "Native services, no Docker. All values below are development only.",
+  "steps": [
+    {
+      "title": "Platform services up",
+      "actor": "Developer",
+      "body": "PostgreSQL 16, Redis 7, Mailpit (`http://127.0.0.1:8025`) and, for Amadeus checks, `pnpm stub:amadeus` (`:4900`). Then `pnpm dev:keys`, `pnpm db:migrate`, `pnpm db:seed:reference`.",
+      "expect": "`psql postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis -c 'select 1'` works."
+    },
+    {
+      "title": "Seed the development admin",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/platform-backend dev:seed`. Copy the printed password and add the `otpauth://` URI to an authenticator app (both printed **once**).",
+      "expect": "`admin@example.com` exists with `is_platform_admin = true` and MFA on; 40 test offices `DEV1A0001…DEV1A0040`; the Velexis test Amadeus account."
+    },
+    {
+      "title": "Start the platform API and worker",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/platform-backend dev`.",
+      "expect": "`curl http://127.0.0.1:3100/health/live` → `{\"status\":\"ok\"}`."
+    },
+    {
+      "title": "Start the console",
+      "actor": "Developer",
+      "body": "`cp .env.example .env.local` at the root once (it carries `PLATFORM_API_URL`, `PLATFORM_BFF_KEY`, `PUBLIC_PLATFORM_ADMIN_URL=http://localhost:3001`, `PUBLIC_PORTAL_URL`), then `pnpm --filter @velexis/platform-admin dev`.",
+      "url": "http://localhost:3001/health/ready",
+      "expect": "`{\"status\":\"ok\",\"checks\":{\"platformApi\":\"ok\"}}`. A missing variable answers 500 and the terminal names it (`ConfigError`)."
+    },
+    {
+      "title": "Sign in",
+      "actor": "Platform admin",
+      "screen": "/sign-in",
+      "url": "http://localhost:3001/sign-in",
+      "body": "Use **localhost**, not 127.0.0.1 (the sign-out Origin check and the redirects use `PUBLIC_PLATFORM_ADMIN_URL`).",
+      "expect": "Password step → code step → Dashboard with your e-mail top right and a 'Development' badge."
+    }
+  ]
+}

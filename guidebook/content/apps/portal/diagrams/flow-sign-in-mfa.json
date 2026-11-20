@@ -1,0 +1,41 @@
+{
+  "id": "flow-sign-in-mfa",
+  "type": "flow",
+  "title": "Sign in with two-factor authentication",
+  "caption": "PF-03, PF-04 AC2. Needs an account with MFA on (Security page).",
+  "steps": [
+    {
+      "title": "Password",
+      "actor": "Member",
+      "screen": "Sign in",
+      "url": "http://localhost:3000/sign-in",
+      "body": "Type the address and password, **Sign in**.",
+      "expect": "Redirect to `/sign-in/mfa` (\"Two-factor authentication\"); only `__Host-vxp_mfa` and `__Host-vxp_next` are set, no session cookie."
+    },
+    {
+      "title": "Code",
+      "actor": "Member",
+      "screen": "Two-factor authentication",
+      "body": "Type the 6-digit code of the authenticator app, **Verify and sign in**.",
+      "expect": "Redirect to `next` or `/dashboard`; the challenge cookies are deleted; `platform.account_sessions` has a new family (`audience = 'portal'`)."
+    },
+    {
+      "title": "Recovery code instead",
+      "actor": "Member",
+      "body": "Choose **Use a recovery code instead** and type one of the ten codes.",
+      "expect": "Signed in; `platform.account_recovery_codes.used_at` is set for that code; the same code fails the next time."
+    },
+    {
+      "title": "Wrong and expired codes",
+      "actor": "Tester",
+      "body": "Type a wrong code; wait more than 5 minutes and try again.",
+      "expect": "Wrong code: message at the field, challenge kept. After 5 wrong codes or 5 minutes: back to `/sign-in?mfa=expired`."
+    },
+    {
+      "title": "Lock-out",
+      "actor": "Tester",
+      "body": "Type a wrong password 5 times.",
+      "expect": "\"try again in 15 minutes\" (wait from `Retry-After`); `accounts.locked_until` set, audit `auth.locked`."
+    }
+  ]
+}

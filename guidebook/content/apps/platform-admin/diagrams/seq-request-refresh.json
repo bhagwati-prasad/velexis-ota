@@ -1,0 +1,72 @@
+{
+  "id": "seq-request-refresh",
+  "type": "sequence",
+  "title": "One page request: middleware refresh, layout, page",
+  "caption": "The middleware only reads the JWT's exp and aud (the API checks the signature). Concurrent requests with the same refresh token share one adminRefresh call for 10 s (lib/session.ts createRefresh).",
+  "actors": [
+    { "id": "b", "label": "Browser", "kind": "user" },
+    { "id": "mw", "label": "middleware.ts", "kind": "edge" },
+    { "id": "lay", "label": "(app)/layout.tsx", "kind": "ui" },
+    { "id": "pg", "label": "page.tsx (server component)", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "mw",
+      "label": "GET /tenants/ten_… with __Host-vxa_at, __Host-vxa_rt",
+      "kind": "call"
+    },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "access token missing, unreadable, aud ≠ platform_admin or exp within 30 s?",
+      "kind": "self"
+    },
+    {
+      "from": "mw",
+      "to": "api",
+      "label": "POST /v1/admin/auth/refresh {refreshToken} (single-flight by sha256 of the token)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "mw",
+      "label": "AdminSession | REFRESH_TOKEN_INVALID / REUSED / UNAUTHENTICATED (final: cookies deleted) | 429 / unreachable (cookies kept)",
+      "kind": "return"
+    },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "new nonce, CSP header; forward new cookies inside the request",
+      "kind": "self"
+    },
+    { "from": "mw", "to": "lay", "label": "NextResponse.next (or 303 /sign-in?next=…)", "kind": "call" },
+    { "from": "lay", "to": "api", "label": "GET /v1/admin/me", "kind": "call" },
+    {
+      "from": "api",
+      "to": "lay",
+      "label": "{fullName, email, features} | UNAUTHENTICATED → redirect /sign-in | other → error card + Sign out",
+      "kind": "return"
+    },
+    { "from": "lay", "to": "pg", "label": "render inside AdminShell", "kind": "call" },
+    {
+      "from": "pg",
+      "to": "api",
+      "label": "GET /v1/admin/tenants/{tenantId} (cache: no-store)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "AdminTenantDetail | NOT_FOUND → not-found page",
+      "kind": "return"
+    },
+    {
+      "from": "pg",
+      "to": "b",
+      "label": "HTML; Set-Cookie with refreshed tokens; X-Robots-Tag noindex",
+      "kind": "return"
+    }
+  ]
+}

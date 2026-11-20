@@ -1,0 +1,116 @@
+{
+  "id": "invitation-accept-states",
+  "type": "state",
+  "title": "The invitation page (/invitations/accept)",
+  "caption": "What the page offers, decided on the server from the invitation cookie, lookupInvitation and getMe.",
+  "states": [
+    {
+      "id": "link",
+      "label": "Link opened",
+      "kind": "initial",
+      "detail": "Middleware moved `?token=` into `__Host-vxp_invite` (15 min)."
+    },
+    {
+      "id": "nocookie",
+      "label": "No invitation waiting",
+      "kind": "error",
+      "detail": "\"Open the link from the e-mail again.\""
+    },
+    {
+      "id": "invalid",
+      "label": "Invitation cannot be used",
+      "kind": "error",
+      "detail": "INVITATION_INVALID: expired, used, revoked or unknown."
+    },
+    {
+      "id": "signedout",
+      "label": "Sign in or create an account",
+      "kind": "normal",
+      "detail": "Links prefill `email` and keep `next=/invitations/accept`."
+    },
+    {
+      "id": "other",
+      "label": "Sent to another address",
+      "kind": "normal",
+      "detail": "\"Sign out and sign in with the invited address\"."
+    },
+    {
+      "id": "unverified",
+      "label": "Verify your address first",
+      "kind": "normal"
+    },
+    {
+      "id": "ready",
+      "label": "Accept the invitation",
+      "kind": "normal"
+    },
+    {
+      "id": "member",
+      "label": "Already a member",
+      "kind": "final"
+    },
+    {
+      "id": "joined",
+      "label": "Joined the OTA",
+      "kind": "final",
+      "detail": "Cookie deleted, 303 `/otas/<tenantId>`."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "link",
+      "to": "nocookie",
+      "label": "cookie missing (15 min passed, other browser)"
+    },
+    {
+      "from": "link",
+      "to": "invalid",
+      "label": "lookupInvitation refused"
+    },
+    {
+      "from": "link",
+      "to": "signedout",
+      "label": "no session"
+    },
+    {
+      "from": "link",
+      "to": "other",
+      "label": "getMe e-mail differs (case ignored)"
+    },
+    {
+      "from": "link",
+      "to": "unverified",
+      "label": "emailVerified false"
+    },
+    {
+      "from": "link",
+      "to": "ready",
+      "label": "signed in with the invited address"
+    },
+    {
+      "from": "signedout",
+      "to": "ready",
+      "label": "sign in, come back"
+    },
+    {
+      "from": "other",
+      "to": "signedout",
+      "label": "signOutForInvitation"
+    },
+    {
+      "from": "ready",
+      "to": "joined",
+      "label": "acceptInvitation 200"
+    },
+    {
+      "from": "ready",
+      "to": "member",
+      "label": "ALREADY_MEMBER"
+    },
+    {
+      "from": "ready",
+      "to": "invalid",
+      "label": "INVITATION_INVALID"
+    }
+  ]
+}

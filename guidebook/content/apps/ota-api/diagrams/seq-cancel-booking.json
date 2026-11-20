@@ -1,0 +1,124 @@
+{
+  "id": "seq-cancel-booking",
+  "type": "sequence",
+  "title": "Customer cancellation: quote, cancel, money step",
+  "caption": "bookings.quoteCancellation and bookings.cancel (ota/docs/flows/change-and-cancel.md §2-§3, src/bookings/cancellation.service.ts, cancellation-mode.ts). Modes: release (nothing ticketed), void (every ticket issued today in storefront_settings.time_zone), request_only (staff), not_allowed.",
+  "actors": [
+    {
+      "id": "c",
+      "label": "Customer or guest (storefront)",
+      "kind": "user"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "pg",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus",
+      "kind": "external"
+    },
+    {
+      "id": "w",
+      "label": "OTA worker",
+      "kind": "worker"
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "c",
+      "to": "api",
+      "label": "GET /v1/bookings/{id}/cancellation-quote (session or booking token)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Order Management GET (refund fare rules)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "t:<tenantId>:<env>:cxq:<bookingId> (10 min): mode + refund estimate",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "200 {mode: release|void|request_only|not_allowed, refund, voidDeadlineAt}",
+      "kind": "return"
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/bookings/{id}/cancellation {expectedRefund} + If-Match + Idempotency-Key",
+      "kind": "call",
+      "note": "Different or missing expectedRefund: 409 REFUND_AMOUNT_CHANGED. Ticketing in progress: 409 BOOKING_NOT_MODIFIABLE (ticketing_in_progress)."
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "claim: bookings.cancellation_claimed_at (holds the ticketing claims)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Order Management DELETE (release / void only)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "booking cancelled (cancelled_at, cancelled_by customer), segments/tickets, booking.cancelled event, refunds row, outbox booking.cancelled",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "w",
+      "label": "refund.submit on ota-payments after the commit (captured payment); safety-net capture/void job (10 min); document.render cancelled itinerary",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "200 Cancellation (booking cancelled; refund pending until Stripe answers) or 202 Cancellation.status = pending (request_only: the staff complete it)",
+      "kind": "return"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "after the commit, an authorised payment: capture the kept amount (pi:capture:<pay_id>:cancellation:<amount>), Stripe releases the rest; nothing kept: void (pi:cancel:<pay_id>); a failure → payment.capture_retry / payment.void 10 min later",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "stripe",
+      "label": "refund.submit: Stripe refund of a captured payment (idempotency key refund:<rfd_id>)",
+      "kind": "call"
+    },
+    {
+      "from": "stripe",
+      "to": "api",
+      "label": "webhook charge.refunded → ota-stripe-events → refund succeeded, payment partially_refunded / refunded",
+      "kind": "async"
+    }
+  ]
+}

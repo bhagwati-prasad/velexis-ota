@@ -1,0 +1,75 @@
+{
+  "id": "checkout-states",
+  "type": "state",
+  "title": "Checkout status (checkouts.status)",
+  "caption": "src/checkout/checkout.service.ts, checkout-expiry.processor.ts (checkouts.expire every minute), the booking orchestrator and account deletion. Steps on a non-open checkout answer 409 CHECKOUT_ALREADY_COMPLETED, 409 CHECKOUT_BEING_COMPLETED or 410 CHECKOUT_EXPIRED.",
+  "states": [
+    {
+      "id": "open",
+      "label": "open",
+      "kind": "initial",
+      "detail": "Created by `POST /v1/checkouts`; travellers, contacts, extras, remarks editable (If-Match on `version`)."
+    },
+    {
+      "id": "payment_pending",
+      "label": "payment_pending",
+      "kind": "normal",
+      "detail": "A payment session exists; while a booking is `pending` the checkout stays locked."
+    },
+    {
+      "id": "completed",
+      "label": "completed",
+      "kind": "final",
+      "detail": "The booking was recorded (`completed_at`)."
+    },
+    {
+      "id": "expired",
+      "label": "expired",
+      "kind": "final",
+      "detail": "Past `expires_at` (checkout_ttl_minutes); its authorisation voided via `payment.void` unless a pending booking holds it; also on tenant suspension."
+    },
+    {
+      "id": "abandoned",
+      "label": "abandoned",
+      "kind": "final",
+      "detail": "The customer opened another checkout of the same priced offer, or deleted the account."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "open",
+      "to": "payment_pending",
+      "label": "checkout.createPayment"
+    },
+    {
+      "from": "payment_pending",
+      "to": "completed",
+      "label": "checkout.complete / airline-card completion / reconciler found"
+    },
+    {
+      "from": "open",
+      "to": "expired",
+      "label": "checkouts.expire job"
+    },
+    {
+      "from": "payment_pending",
+      "to": "expired",
+      "label": "checkouts.expire job (no pending booking)"
+    },
+    {
+      "from": "open",
+      "to": "abandoned",
+      "label": "new checkout of same priced offer / account.delete"
+    },
+    {
+      "from": "payment_pending",
+      "to": "open",
+      "label": "booking failed (refused, price changed, reconciliation or review: not booked); expired instead when past expires_at"
+    },
+    {
+      "from": "payment_pending",
+      "to": "abandoned",
+      "label": "account.delete"
+    }
+  ]
+}

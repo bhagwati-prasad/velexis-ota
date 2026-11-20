@@ -1,0 +1,83 @@
+{
+  "id": "seq-error-envelope",
+  "type": "sequence",
+  "title": "From a thrown error to the API's error envelope",
+  "caption": "packages/errors/src/envelope.ts, used by platform/backend/src/common/http/error.filter.ts and ota/backend/src/common/http/error.filter.ts.",
+  "actors": [
+    {
+      "id": "client",
+      "label": "Client",
+      "kind": "user"
+    },
+    {
+      "id": "ctrl",
+      "label": "Controller / service",
+      "kind": "api"
+    },
+    {
+      "id": "filter",
+      "label": "Exception filter",
+      "kind": "api"
+    },
+    {
+      "id": "env",
+      "label": "toErrorEnvelope",
+      "kind": "lib"
+    },
+    {
+      "id": "log",
+      "label": "pino logger",
+      "kind": "lib"
+    }
+  ],
+  "steps": [
+    {
+      "from": "client",
+      "to": "ctrl",
+      "label": "request (X-Request-Id kept or generated)",
+      "kind": "call"
+    },
+    {
+      "from": "ctrl",
+      "to": "filter",
+      "label": "throw new AppError('PRICE_CHANGED', { details })  or any other value",
+      "kind": "call"
+    },
+    {
+      "from": "filter",
+      "to": "env",
+      "label": "toErrorEnvelope(err, requestId, { exposeSupplier: console scope })",
+      "kind": "call"
+    },
+    {
+      "from": "env",
+      "to": "env",
+      "label": "AppError → catalogue status; fieldErrors only for FIELD_ERROR_CODES; supplier only if exposed",
+      "kind": "self"
+    },
+    {
+      "from": "env",
+      "to": "env",
+      "label": "anything else → 500 INTERNAL_ERROR, generic message, no stack, no cause",
+      "kind": "self"
+    },
+    {
+      "from": "env",
+      "to": "filter",
+      "label": "{ status, body: { error: { code, message, status, requestId, … } } }",
+      "kind": "return"
+    },
+    {
+      "from": "filter",
+      "to": "log",
+      "label": "log err (type, message, stack, code, cause chain; never bodies)",
+      "kind": "async"
+    },
+    {
+      "from": "filter",
+      "to": "client",
+      "label": "HTTP status + envelope",
+      "kind": "return"
+    }
+  ]
+}

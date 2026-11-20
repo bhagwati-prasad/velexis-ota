@@ -1,0 +1,55 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Run the OTA admin locally with an OTA of your own",
+  "caption": "docs/mvp/local-development.md §2-§3. The demo OTA has no owner, so the console needs an OTA you create in the portal. Passwords are development only.",
+  "steps": [
+    {
+      "title": "One-time setup",
+      "actor": "Developer",
+      "body": "`cp .env.example .env.local`, `bash deploy/scripts/dev-setup.sh`, `pnpm dev:keys`, `pnpm build`, `pnpm db:migrate`, `pnpm db:seed:reference`.",
+      "expect": "Database `velexis` with the roles of `.env.example`; Redis password `dev_redis`; `.local/keys/` created."
+    },
+    {
+      "title": "Seed the platform and the demo OTA",
+      "actor": "Developer",
+      "body": "`pnpm stub:amadeus &`, then `pnpm --filter @velexis/platform-backend dev:seed` and `pnpm --filter @velexis/ota-backend dev:seed`.",
+      "expect": "40 test Amadeus offices `DEV1A0001`…; the demo OTA `tenant_demo` active (its keys printed once)."
+    },
+    {
+      "title": "Start everything",
+      "actor": "Developer",
+      "body": "`mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &` and `pnpm dev` (portal 3000, platform API 3100, OTA API 4000, OTA admin 3002, storefront 5173).",
+      "expect": "`curl -s http://127.0.0.1:3002/health/ready` answers `200` once the OTA API is up."
+    },
+    {
+      "title": "Sign up in the portal",
+      "actor": "You",
+      "screen": "/sign-up",
+      "url": "http://localhost:3000/sign-up",
+      "body": "Create an account and open the verification e-mail in Mailpit (`http://localhost:8025`).",
+      "expect": "Signed in to the portal dashboard."
+    },
+    {
+      "title": "Create an OTA",
+      "actor": "You (owner)",
+      "screen": "/otas/new",
+      "url": "http://localhost:3000/otas/new",
+      "body": "Name and key; submit. The OTA worker provisions `tenant_<key>` and assigns a test office.",
+      "expect": "The OTA's page shows it **Active** with an active Amadeus test connection."
+    },
+    {
+      "title": "Open the console",
+      "actor": "You (owner)",
+      "screen": "/otas/<tenantId>",
+      "body": "Press **Open console**.",
+      "expect": "`http://localhost:3002/bookings` with your OTA's name, a TEST badge and \"Owner\" in the header."
+    },
+    {
+      "title": "Get bookings to work on",
+      "actor": "You",
+      "body": "Set `STOREFRONT_DEV_HOST=<key>.ota.example.com` in `ota/frontend/.env.local`, restart the storefront and book on `http://localhost:5173`; or import a PNR of your office at `/pnr`.",
+      "expect": "The bookings appear in `/bookings` and `SELECT reference, status FROM tenant_<key>.bookings;`."
+    }
+  ]
+}

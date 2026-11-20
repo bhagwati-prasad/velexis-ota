@@ -1,0 +1,48 @@
+{
+  "id": "account-states",
+  "type": "state",
+  "title": "Account as support sees it",
+  "caption": "platform.accounts.status plus the lockout (failed_login_count, locked_until) and the flags mfa_enabled / is_platform_admin. Actions of /accounts/[accountId]; nothing for a deleted account and no Disable on your own account.",
+  "states": [
+    {
+      "id": "pending",
+      "label": "pending_verification",
+      "kind": "initial",
+      "detail": "Address not verified yet."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "**Disable** (reason); **Reset two-factor** when MFA is on and not a platform admin."
+    },
+    {
+      "id": "locked",
+      "label": "locked / lockout",
+      "kind": "error",
+      "detail": "5 wrong passwords: `423 ACCOUNT_LOCKED`. **Unlock** (no reason)."
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "normal",
+      "detail": "Sessions revoked, `staffdeny:acct:` written. **Enable** (reason)."
+    },
+    { "id": "deleted", "label": "deleted", "kind": "final", "detail": "No action offered." }
+  ],
+  "transitions": [
+    { "from": "pending", "to": "active", "label": "verify e-mail (portal)" },
+    { "from": "active", "to": "locked", "label": "5 wrong passwords" },
+    { "from": "locked", "to": "active", "label": "Unlock / lock expires" },
+    { "from": "active", "to": "disabled", "label": "Disable (reason)" },
+    { "from": "locked", "to": "disabled", "label": "Disable (reason)" },
+    { "from": "pending", "to": "disabled", "label": "Disable (reason)" },
+    { "from": "disabled", "to": "active", "label": "Enable (verified address)" },
+    { "from": "disabled", "to": "pending", "label": "Enable (address never verified)" },
+    {
+      "from": "active",
+      "to": "active",
+      "label": "Reset two-factor (reason, step-up): MFA off, sessions revoked"
+    }
+  ]
+}

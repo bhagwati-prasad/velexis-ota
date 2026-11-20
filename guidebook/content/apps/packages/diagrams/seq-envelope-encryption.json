@@ -1,0 +1,84 @@
+{
+  "id": "seq-envelope-encryption",
+  "type": "sequence",
+  "title": "Encrypting and decrypting a secret column",
+  "caption": "packages/crypto/src/envelope.ts. The AAD binds the value to its place, so a ciphertext copied to another row, column or tenant fails with DecryptionError (always 'Decryption failed').",
+  "actors": [
+    {
+      "id": "svc",
+      "label": "Backend service",
+      "kind": "api"
+    },
+    {
+      "id": "env",
+      "label": "encryptValue / decryptValue",
+      "kind": "lib"
+    },
+    {
+      "id": "kp",
+      "label": "LocalFileKeyProvider (KEKs)",
+      "kind": "lib"
+    },
+    {
+      "id": "db",
+      "label": "PostgreSQL row",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "svc",
+      "to": "env",
+      "label": "encryptValue(secret, { aad: aadFor('platform','supplier_connections','client_secret_ciphertext', id), keys })",
+      "kind": "call"
+    },
+    {
+      "from": "env",
+      "to": "env",
+      "label": "fresh 32-byte DEK; AES-256-GCM(value, AAD, 12-byte IV)",
+      "kind": "self"
+    },
+    {
+      "from": "env",
+      "to": "kp",
+      "label": "wrap(DEK) with currentKekId (local:v1), AAD = kekId",
+      "kind": "call"
+    },
+    {
+      "from": "env",
+      "to": "svc",
+      "label": "{ ciphertext: 0x01|kekId|wrapped DEK|iv|tag|ct, kekId }",
+      "kind": "return"
+    },
+    {
+      "from": "svc",
+      "to": "db",
+      "label": "INSERT … *_ciphertext = ciphertext, encryption_key_id = kekId",
+      "kind": "call"
+    },
+    {
+      "from": "svc",
+      "to": "db",
+      "label": "later: SELECT the row",
+      "kind": "call"
+    },
+    {
+      "from": "svc",
+      "to": "env",
+      "label": "decryptValue(ciphertext, { aad of the SAME place, keys })",
+      "kind": "call"
+    },
+    {
+      "from": "env",
+      "to": "kp",
+      "label": "unwrap(wrapped, kekId named in the envelope) — any loaded KEK",
+      "kind": "call"
+    },
+    {
+      "from": "env",
+      "to": "svc",
+      "label": "Buffer (never logged; fill(0) when done) or DecryptionError",
+      "kind": "return"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "flow-search-price-api",
+  "type": "flow",
+  "title": "Search, filter and price with a publishable key (curl)",
+  "caption": "Customer scope through X-Api-Key pk_test_… (no Origin header needed from curl; a browser must be on the key's origin allow-list). Against the Amadeus stub, Madrid → Paris returns five offers; destination ZZZ returns none.",
+  "steps": [
+    {
+      "title": "Search",
+      "body": "`curl -s -X POST localhost:4000/v1/flight-searches -H 'X-Api-Key: pk_test_…' -H 'Content-Type: application/json' -d '{\"mode\":\"simple\",\"originLocationCode\":\"MAD\",\"destinationLocationCode\":\"PAR\",\"departureDate\":\"<a date 30 days ahead>\",\"adults\":1}'`",
+      "expect": "`201` with `srch_…`, `status: completed`, `resultCount` 5 (stub). Rows: `tenant_demo.flight_searches` + 5 `flight_offers` (net, markup, selling), one `supplier_requests` row (FlightOffersSearch, success)."
+    },
+    {
+      "title": "List and filter",
+      "body": "`GET /v1/flight-searches/{searchId}/offers?stops=0&sort=price&limit=10`",
+      "expect": "`200` with offers sorted by price; only selling amounts (no `net*`, `markup*`, `margin*` keys in customer scope). No new `supplier_requests` row."
+    },
+    {
+      "title": "Offer detail and upsell",
+      "body": "`GET /v1/flight-offers/{offerId}`, then `POST /v1/flight-offers/{offerId}/upsells -d '{}'`",
+      "expect": "Upsell `200` with fare families (stub: BASIC, CLASSIC, FLEXIBLE) stored as `flight_offers` with `origin = 'upsell'`; the same request again answers `cached: true` without a new Amadeus call."
+    },
+    {
+      "title": "Price",
+      "body": "`POST /v1/priced-offers -d '{\"offerIds\":[\"off_…\"],\"include\":[\"bags\",\"credit-card-fees\",\"detailed-fare-rules\"]}'`",
+      "expect": "`201` `prc_…` with `selling_total = net + markup + fees`, `priceChanged` false (send `X-Stub-Scenario: price-changed` to see true with old and new totals). Row in `priced_offers`."
+    },
+    {
+      "title": "Expiry",
+      "body": "Wait past the search's `expires_at` (or test with an old search id), then list again.",
+      "expect": "`GET /v1/flight-searches/{id}/offers` → `410 SEARCH_EXPIRED`; `GET /v1/flight-searches/{id}` still `200` with `status: expired`; `offers.purge` (every 15 min) later deletes the expired search unless a checkout references its priced offer."
+    },
+    {
+      "title": "Edge cases",
+      "body": "Destination `ZZZ`; 31 searches within a minute from one IP; Amadeus stub stopped.",
+      "expect": "Zero offers with `201`; `429 RATE_LIMITED` with `Retry-After`; `503 SUPPLIER_UNAVAILABLE` / `504 SUPPLIER_TIMEOUT` and the search row `failed`."
+    }
+  ]
+}

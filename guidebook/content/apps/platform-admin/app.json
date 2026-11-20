@@ -1,0 +1,703 @@
+{
+  "id": "platform-admin",
+  "name": "Platform admin",
+  "kind": "frontend",
+  "product": "platform",
+  "summary": "The Velexis staff console (Next.js 15, 127.0.0.1:3001): platform admins sign in with password and TOTP and run the fleet of OTAs, billing, the Amadeus office pool, settlements, domains, accounts and the audit log through the platform API's /v1/admin surface.",
+  "audience": ["Velexis platform admins (staff)", "Developer / operator (first admin via CLI)"],
+  "repoPath": "platform/admin",
+  "package": "@velexis/platform-admin",
+  "stack": [
+    "Next.js 15.5 App Router (standalone output)",
+    "React 19",
+    "TypeScript 5.6 strict",
+    "Tailwind CSS 4 + shadcn/ui (Radix)",
+    "@tanstack/react-table",
+    "openapi-fetch typed by @velexis/api-types/platform",
+    "Zod 4 (form and action validation)",
+    "@velexis/config, @velexis/errors",
+    "Vitest 4 + Testing Library (happy-dom)",
+    "Playwright e2e (tools/e2e, project platform-admin)"
+  ],
+  "local": {
+    "url": "http://localhost:3001",
+    "port": 3001,
+    "command": "pnpm --filter @velexis/platform-admin dev",
+    "notes": "Binds 127.0.0.1:3001. Needs the platform API on 127.0.0.1:3100 (and its worker), PostgreSQL, Redis and Mailpit. Configuration comes from platform/admin/.env.local, then the root .env.local. Browse http://localhost:3001 (the origin of PUBLIC_PLATFORM_ADMIN_URL), not 127.0.0.1, or Sign out answers 403. Sign in as admin@example.com from the platform's dev:seed (password and TOTP URI printed once; development only)."
+  },
+  "production": { "host": "admin.platform.example.com" },
+  "dependsOn": ["platform-api", "packages"],
+  "talksTo": [
+    {
+      "app": "platform-api",
+      "how": "HTTP on loopback from server code only (BFF): /v1/admin/** with the admin Bearer token from __Host-vxa_at, X-Velexis-Bff-Key and the end-user IP/agent headers (PADR-0019)"
+    },
+    {
+      "app": "portal",
+      "how": "Links only: MFA is enabled at PUBLIC_PORTAL_URL/account/security and passwords reset at /forgot-password; the pricing page is linked from /plans"
+    },
+    {
+      "app": "deploy",
+      "how": "Caddy serves admin.platform.example.com to 127.0.0.1:3001 (health paths 404 from outside); systemd unit velexis-platform-admin; deploy.sh polls /health/ready"
+    },
+    {
+      "app": "packages",
+      "how": "@velexis/api-types (platform types, queue names), @velexis/config, @velexis/errors"
+    },
+    {
+      "app": "ota-api",
+      "how": "Indirect only: suspend/resume/migrate jobs reach the OTA worker through ota-tenant-ops; OTA queues are shown read-only"
+    }
+  ],
+  "data": [
+    "platform.accounts",
+    "platform.account_sessions",
+    "platform.account_recovery_codes",
+    "platform.tenants",
+    "platform.tenant_memberships",
+    "platform.tenant_invitations",
+    "platform.tenant_domains",
+    "platform.provisioning_jobs",
+    "platform.plans",
+    "platform.subscriptions",
+    "platform.invoices",
+    "platform.stripe_events",
+    "platform.amadeus_accounts",
+    "platform.amadeus_offices",
+    "platform.supplier_connections",
+    "platform.payment_provider_connections",
+    "platform.credential_submissions",
+    "platform.settlements",
+    "platform.settlement_lines",
+    "platform.tenant_payout_accounts",
+    "platform.email_outbox",
+    "platform.platform_audit_log",
+    "Redis: mfach:<sha256>, mfastep:<accountId>, staffdeny:acct:<accountId>, rl:*, BullMQ vx:* (read through the API)"
+  ],
+  "docs": [
+    "platform/admin/README.md",
+    "platform/docs/flows/platform-admin-operations.md",
+    "platform/docs/api-inventory-admin.md",
+    "platform/docs/runbooks/platform-operations.md",
+    "tools/e2e/README.md"
+  ],
+  "adrs": [
+    "platform/docs/adr/0006-platform-admin-access-and-audit.md",
+    "platform/docs/adr/0014-tenant-suspension-and-resume.md",
+    "platform/docs/adr/0015-milestone-feature-switches.md",
+    "platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md",
+    "platform/docs/adr/0012-amadeus-office-pool.md",
+    "docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md",
+    "docs/mvp/adr/0008-identity-accounts-customers-sessions.md"
+  ],
+  "roles": [
+    {
+      "name": "Platform admin",
+      "can": "Everything in the console after password + TOTP; reason actions need 5-500 characters, step-up actions a TOTP code from the last 15 minutes"
+    },
+    {
+      "name": "Portal user without admin rights",
+      "can": "Nothing: the password step answers INVALID_CREDENTIALS, exactly as for a wrong password"
+    },
+    {
+      "name": "Platform admin without MFA",
+      "can": "Nothing until MFA is on in the portal: MFA_REQUIRED with a link to /account/security"
+    },
+    {
+      "name": "Developer / operator (CLI)",
+      "can": "Creates the first admin (admin:grant), resets an admin's MFA (admin:reset-mfa), seeds the dev admin (dev:seed)"
+    }
+  ],
+  "screens": [
+    {
+      "route": "/sign-in",
+      "title": "Sign in",
+      "purpose": "E-mail and password; always continues to the code step",
+      "code": "platform/admin/src/app/(auth)/sign-in/page.tsx"
+    },
+    {
+      "route": "/sign-in/mfa",
+      "title": "Two-factor authentication",
+      "purpose": "TOTP or one recovery code on every sign-in",
+      "code": "platform/admin/src/app/(auth)/sign-in/mfa/page.tsx"
+    },
+    {
+      "route": "/",
+      "title": "Dashboard",
+      "purpose": "OTAs by status, failed provisioning (24 h), failed jobs per platform queue, office pool, live office requests, M5 'To review' counters",
+      "code": "platform/admin/src/app/(app)/page.tsx"
+    },
+    {
+      "route": "/tenants",
+      "title": "Tenants",
+      "purpose": "Search OTAs by key, name or owner e-mail; filter by status and plan",
+      "code": "platform/admin/src/app/(app)/tenants/page.tsx"
+    },
+    {
+      "route": "/tenants/[tenantId]",
+      "title": "Tenant",
+      "purpose": "Seven tabs (?tab=); suspend, resume, migrate, notes, connection status, assign office, payout account",
+      "code": "platform/admin/src/app/(app)/tenants/[tenantId]/page.tsx"
+    },
+    {
+      "route": "/provisioning-jobs",
+      "title": "Provisioning jobs",
+      "purpose": "Tenant jobs by status, kind and OTA",
+      "code": "platform/admin/src/app/(app)/provisioning-jobs/page.tsx"
+    },
+    {
+      "route": "/provisioning-jobs/[jobId]",
+      "title": "Provisioning job",
+      "purpose": "Step log, lease, BullMQ state; Retry (failed), Cancel job (queued, reason)",
+      "code": "platform/admin/src/app/(app)/provisioning-jobs/[jobId]/page.tsx"
+    },
+    {
+      "route": "/queues",
+      "title": "Queues",
+      "purpose": "BullMQ counts of every platform and OTA queue",
+      "code": "platform/admin/src/app/(app)/queues/page.tsx"
+    },
+    {
+      "route": "/queues/[queue]",
+      "title": "Queue",
+      "purpose": "50 most recent failed jobs; Retry on platform- queues only",
+      "code": "platform/admin/src/app/(app)/queues/[queue]/page.tsx"
+    },
+    {
+      "route": "/plans",
+      "title": "Plans",
+      "purpose": "Every plan with prices, limits, OTA count, Stripe link state; New plan",
+      "code": "platform/admin/src/app/(app)/plans/page.tsx"
+    },
+    {
+      "route": "/plans/[planCode]",
+      "title": "Plan",
+      "purpose": "Edit, retire/reactivate, Link Stripe prices, Check prices",
+      "code": "platform/admin/src/app/(app)/plans/[planCode]/page.tsx"
+    },
+    {
+      "route": "/subscriptions",
+      "title": "Subscriptions",
+      "purpose": "Filter by status, provider, plan",
+      "code": "platform/admin/src/app/(app)/subscriptions/page.tsx"
+    },
+    {
+      "route": "/subscriptions/[subscriptionId]",
+      "title": "Subscription",
+      "purpose": "Detail, invoices, Stripe events; edit a manual subscription (reason) or Resync from Stripe",
+      "code": "platform/admin/src/app/(app)/subscriptions/[subscriptionId]/page.tsx"
+    },
+    {
+      "route": "/invoices",
+      "title": "Invoices",
+      "purpose": "All invoices with Stripe links (M5, stripeBilling)",
+      "code": "platform/admin/src/app/(app)/invoices/page.tsx"
+    },
+    {
+      "route": "/stripe-events",
+      "title": "Stripe events",
+      "purpose": "Webhook inbox, failed and ignored first; Reprocess (M5)",
+      "code": "platform/admin/src/app/(app)/stripe-events/page.tsx"
+    },
+    {
+      "route": "/amadeus/accounts",
+      "title": "Amadeus accounts",
+      "purpose": "The Velexis Amadeus account per environment: create, edit, rotate secret (step-up), verify, disable",
+      "code": "platform/admin/src/app/(app)/amadeus/accounts/page.tsx"
+    },
+    {
+      "route": "/amadeus/offices",
+      "title": "Office pool",
+      "purpose": "Offices by environment and status; add in bulk, assign, retire, notes, release",
+      "code": "platform/admin/src/app/(app)/amadeus/offices/page.tsx"
+    },
+    {
+      "route": "/settlements",
+      "title": "Settlements",
+      "purpose": "Statements by status, month, OTA; Generate drafts (M5)",
+      "code": "platform/admin/src/app/(app)/settlements/page.tsx"
+    },
+    {
+      "route": "/settlements/[settlementId]",
+      "title": "Statement",
+      "purpose": "Totals, lines, payout status; adjustment, approve, mark paid, void",
+      "code": "platform/admin/src/app/(app)/settlements/[settlementId]/page.tsx"
+    },
+    {
+      "route": "/settlements/[settlementId]/lines.csv",
+      "title": "Statement lines CSV (route handler)",
+      "purpose": "GET streams adminDownloadSettlementLines; HEAD 405",
+      "code": "platform/admin/src/app/(app)/settlements/[settlementId]/lines.csv/route.ts"
+    },
+    {
+      "route": "/domains",
+      "title": "Domains",
+      "purpose": "Every storefront host with DNS and TLS state; Re-check, Remove (M5)",
+      "code": "platform/admin/src/app/(app)/domains/page.tsx"
+    },
+    {
+      "route": "/accounts",
+      "title": "Accounts",
+      "purpose": "Search accounts by e-mail or name, filter by status",
+      "code": "platform/admin/src/app/(app)/accounts/page.tsx"
+    },
+    {
+      "route": "/accounts/[accountId]",
+      "title": "Account",
+      "purpose": "Fields, sessions, memberships, audit; unlock, disable, enable, reset two-factor",
+      "code": "platform/admin/src/app/(app)/accounts/[accountId]/page.tsx"
+    },
+    {
+      "route": "/admins",
+      "title": "Platform admins",
+      "purpose": "List admins; grant (reason, step-up), revoke (step-up)",
+      "code": "platform/admin/src/app/(app)/admins/page.tsx"
+    },
+    {
+      "route": "/audit",
+      "title": "Audit log",
+      "purpose": "Search platform_audit_log with every filter in the URL; export link",
+      "code": "platform/admin/src/app/(app)/audit/page.tsx"
+    },
+    {
+      "route": "/audit/export.csv",
+      "title": "Audit CSV (route handler)",
+      "purpose": "GET streams adminExportAudit (at most one year); HEAD 405",
+      "code": "platform/admin/src/app/(app)/audit/export.csv/route.ts"
+    },
+    {
+      "route": "/sign-out",
+      "title": "Sign out (route handler)",
+      "purpose": "POST only, Origin must be the admin's; revokes the family, clears cookies, 303 to /sign-in?signedOut=1",
+      "code": "platform/admin/src/app/sign-out/route.ts"
+    },
+    {
+      "route": "/health/live",
+      "title": "Liveness (route handler)",
+      "purpose": "200 {status: ok}; no dependency checked",
+      "code": "platform/admin/src/app/health/live/route.ts"
+    },
+    {
+      "route": "/health/ready",
+      "title": "Readiness (route handler)",
+      "purpose": "200 when the platform API's /health/live answers within 2 s, else 503; 500 on invalid config",
+      "code": "platform/admin/src/app/health/ready/route.ts"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/sign-in",
+      "operationId": "adminSignIn",
+      "purpose": "Password step; answers an MFA challenge"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/mfa/verify",
+      "operationId": "adminVerifyMfa",
+      "purpose": "TOTP or recovery code; answers AdminSession"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/refresh",
+      "operationId": "adminRefresh",
+      "purpose": "Middleware refresh (single-flight)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/step-up",
+      "operationId": "adminStepUp",
+      "purpose": "Fresh TOTP; new tokens with mfa_at = now"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/sign-out",
+      "operationId": "adminSignOut",
+      "purpose": "Revoke the refresh family"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/me",
+      "operationId": "adminGetMe",
+      "purpose": "Admin name, e-mail and milestone switches (every request)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/dashboard",
+      "operationId": "adminGetDashboard",
+      "purpose": "Dashboard counters and live office requests"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/tenants",
+      "operationId": "adminListTenants",
+      "purpose": "Tenant search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/tenants/{tenantId}",
+      "operationId": "adminGetTenant",
+      "purpose": "Tenant detail (one call for every tab)"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/tenants/{tenantId}",
+      "operationId": "adminUpdateTenant",
+      "purpose": "Notes and legal name (If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/suspend",
+      "operationId": "adminSuspendTenant",
+      "purpose": "Suspend (reason)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/resume",
+      "operationId": "adminResumeTenant",
+      "purpose": "Resume (reason)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/migrate",
+      "operationId": "adminMigrateTenant",
+      "purpose": "Queue a migrate job"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/connections/{kind}/{environment}/status",
+      "operationId": "adminSetConnectionStatus",
+      "purpose": "Disable or enable an Amadeus or payment connection (reason)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/provisioning-jobs",
+      "operationId": "adminListProvisioningJobs",
+      "purpose": "Job list"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/provisioning-jobs/{jobId}",
+      "operationId": "adminGetProvisioningJob",
+      "purpose": "Job detail with steps and BullMQ state"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/provisioning-jobs/{jobId}/retry",
+      "operationId": "adminRetryProvisioningJob",
+      "purpose": "New job for a failed one"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/provisioning-jobs/{jobId}/cancel",
+      "operationId": "adminCancelProvisioningJob",
+      "purpose": "Cancel a queued job (reason)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/queues",
+      "operationId": "adminListQueues",
+      "purpose": "Queue counts"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/queues/{queue}/failed",
+      "operationId": "adminListFailedQueueJobs",
+      "purpose": "Failed jobs of one queue"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/queues/{queue}/jobs/{jobId}/retry",
+      "operationId": "adminRetryQueueJob",
+      "purpose": "Retry a failed platform job (OTA queues 403)"
+    },
+    { "method": "GET", "path": "/v1/admin/plans", "operationId": "adminListPlans", "purpose": "Every plan" },
+    { "method": "POST", "path": "/v1/admin/plans", "operationId": "adminCreatePlan", "purpose": "New plan" },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/plans/{planCode}",
+      "operationId": "adminUpdatePlan",
+      "purpose": "Edit, retire, link Stripe prices (If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/plans/{planCode}/check-prices",
+      "operationId": "adminCheckPlanPrices",
+      "purpose": "Compare linked prices with Stripe"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/subscriptions",
+      "operationId": "adminListSubscriptions",
+      "purpose": "Subscription list"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/subscriptions/{subscriptionId}",
+      "operationId": "adminGetSubscription",
+      "purpose": "Subscription, invoices, Stripe events"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/subscriptions/{subscriptionId}",
+      "operationId": "adminUpdateManualSubscription",
+      "purpose": "Edit a manual subscription (reason, If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/subscriptions/{subscriptionId}/resync",
+      "operationId": "adminResyncSubscription",
+      "purpose": "Re-fetch a Stripe subscription"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/invoices",
+      "operationId": "adminListInvoices",
+      "purpose": "Invoices"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/stripe-events",
+      "operationId": "adminListStripeEvents",
+      "purpose": "Webhook inbox"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/stripe-events/{eventId}/reprocess",
+      "operationId": "adminReprocessStripeEvent",
+      "purpose": "Re-run a failed or ignored event"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/amadeus-accounts",
+      "operationId": "adminListAmadeusAccounts",
+      "purpose": "Velexis Amadeus accounts"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-accounts",
+      "operationId": "adminCreateAmadeusAccount",
+      "purpose": "Enter shared credentials (step-up)"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/amadeus-accounts/{accountId}",
+      "operationId": "adminUpdateAmadeusAccount",
+      "purpose": "Rename, rotate (step-up for secret/client id/host), disable (If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-accounts/{accountId}/verify",
+      "operationId": "adminVerifyAmadeusAccount",
+      "purpose": "Queue a verification"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/amadeus-offices",
+      "operationId": "adminListAmadeusOffices",
+      "purpose": "Office pool"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices",
+      "operationId": "adminAddAmadeusOffices",
+      "purpose": "Add offices in bulk"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}",
+      "operationId": "adminUpdateAmadeusOffice",
+      "purpose": "Office notes (If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}/assign",
+      "operationId": "adminAssignAmadeusOffice",
+      "purpose": "Assign to an OTA"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}/release",
+      "operationId": "adminReleaseAmadeusOffice",
+      "purpose": "Back to the pool (reason, confirmNoOpenBookings)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}/retire",
+      "operationId": "adminRetireAmadeusOffice",
+      "purpose": "Retire an available office (reason)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements",
+      "operationId": "adminListSettlements",
+      "purpose": "Statements"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/generate",
+      "operationId": "adminGenerateSettlements",
+      "purpose": "(Re)build drafts of an ended month"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements/{settlementId}",
+      "operationId": "adminGetSettlement",
+      "purpose": "Statement detail"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements/{settlementId}/lines",
+      "operationId": "adminListSettlementLines",
+      "purpose": "Lines page"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements/{settlementId}/lines.csv",
+      "operationId": "adminDownloadSettlementLines",
+      "purpose": "Lines as CSV (streamed)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/adjustments",
+      "operationId": "adminAddSettlementAdjustment",
+      "purpose": "Manual line (reason)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/approve",
+      "operationId": "adminApproveSettlement",
+      "purpose": "Approve (step-up, If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/mark-paid",
+      "operationId": "adminMarkSettlementPaid",
+      "purpose": "Record the bank transfer (step-up, If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/void",
+      "operationId": "adminVoidSettlement",
+      "purpose": "Void a draft (reason)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/tenants/{tenantId}/payout-account",
+      "operationId": "adminGetPayoutAccount",
+      "purpose": "Masked payout account"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/payout-account/reveal",
+      "operationId": "adminRevealPayoutAccount",
+      "purpose": "Full bank details (reason, step-up)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/payout-account/review",
+      "operationId": "adminReviewPayoutAccount",
+      "purpose": "Verify or reject (If-Match)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/domains",
+      "operationId": "adminListDomains",
+      "purpose": "Every host"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/domains/{domainId}/recheck",
+      "operationId": "adminRecheckDomain",
+      "purpose": "Queue DNS check and TLS probe"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/domains/{domainId}/remove",
+      "operationId": "adminRemoveDomain",
+      "purpose": "Remove a custom domain (reason)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/accounts",
+      "operationId": "adminListAccounts",
+      "purpose": "Account search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/accounts/{accountId}",
+      "operationId": "adminGetAccount",
+      "purpose": "Account, memberships, session count, audit"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/disable",
+      "operationId": "adminDisableAccount",
+      "purpose": "Disable (reason)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/enable",
+      "operationId": "adminEnableAccount",
+      "purpose": "Enable (reason)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/unlock",
+      "operationId": "adminUnlockAccount",
+      "purpose": "Clear lockout"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/reset-mfa",
+      "operationId": "adminResetAccountMfa",
+      "purpose": "Turn MFA off (reason, step-up)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/admins",
+      "operationId": "adminListAdmins",
+      "purpose": "Platform admins"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/admins",
+      "operationId": "adminGrantAdmin",
+      "purpose": "Grant admin rights (reason, step-up)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/admin/admins/{accountId}",
+      "operationId": "adminRevokeAdmin",
+      "purpose": "Revoke admin rights (step-up; the console sends no reason)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/audit-log",
+      "operationId": "adminListAudit",
+      "purpose": "Audit search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/audit-log.csv",
+      "operationId": "adminExportAudit",
+      "purpose": "Audit CSV export (audited)"
+    }
+  ],
+  "tags": [
+    "staff console",
+    "BFF",
+    "MFA",
+    "step-up",
+    "audit",
+    "suspension",
+    "provisioning",
+    "queues",
+    "plans",
+    "billing",
+    "Amadeus office pool",
+    "settlements",
+    "domains",
+    "support"
+  ]
+}

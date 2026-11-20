@@ -1,0 +1,55 @@
+{
+  "id": "flow-create-ota",
+  "type": "flow",
+  "title": "Create an OTA and follow its set-up",
+  "caption": "PF-10, PF-11. Needs the platform worker, the OTA worker and the Amadeus stub.",
+  "steps": [
+    {
+      "title": "Open the wizard",
+      "actor": "Verified account",
+      "screen": "My OTAs",
+      "url": "http://localhost:3000/dashboard",
+      "body": "Click **Create an OTA**.",
+      "expect": "`/otas/new`, step 1 \"OTA details\"; the time zone is the account's own."
+    },
+    {
+      "title": "OTA details",
+      "actor": "Owner",
+      "screen": "Create an OTA",
+      "body": "OTA name (the key follows it), OTA key, country, default currency, time zone; **Continue**.",
+      "expect": "\"Storefront address: <key>.ota.example.com\" and \"This key is available.\" A taken or reserved key (`admin`, `demo`, `test`…) keeps you on step 1."
+    },
+    {
+      "title": "Plan",
+      "actor": "Owner",
+      "body": "Before M5: early access is preselected. With `FEATURE_STRIPE_BILLING` on: pick a plan and the Annual billing switch.",
+      "expect": "Plans in `sort_order`; a plan without a Stripe price for the interval is disabled with the reason."
+    },
+    {
+      "title": "Review and create",
+      "actor": "Owner",
+      "body": "Check every value, **Create OTA** (M5: \"Create OTA and continue to payment\"). Double-click to test idempotency.",
+      "expect": "`/otas/ten_…/setup` (M5: Stripe Checkout). One `platform.tenants` row (`provisioning`), owner membership, subscription (`trialing`/`manual` pre-M5), sub-domain, one `provisioning_jobs` row."
+    },
+    {
+      "title": "Watch the set-up",
+      "actor": "Owner",
+      "screen": "OTA set-up",
+      "body": "Stay on the page; it polls every 2 seconds.",
+      "expect": "\"Your OTA is ready\" within about a minute; `tenants.status = 'active'`, `schema_version` set, test Amadeus office assigned, Stripe test connection, two test keys; e-mail \"<OTA> is ready on Velexis\"."
+    },
+    {
+      "title": "Reveal the test keys",
+      "actor": "Owner",
+      "body": "**Reveal the test keys** once.",
+      "expect": "`pk_test_…` and `sk_test_…` shown once; reload → \"The initial keys were already shown\"; `provisioning_jobs.revealed_at` set and `reveal_ciphertext` null."
+    },
+    {
+      "title": "Overview",
+      "actor": "Owner",
+      "screen": "Overview",
+      "body": "**Go to the OTA dashboard**.",
+      "expect": "\"Get your OTA ready\" checklist: Verify your e-mail, Turn on two-factor sign-in, OTA set up, Get your API keys, Open your storefront, Amadeus test office active Done; Invite your team To do (M5 items appear only with their switches)."
+    }
+  ]
+}

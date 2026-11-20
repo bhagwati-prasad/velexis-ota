@@ -1,0 +1,102 @@
+{
+  "id": "ticketing-states",
+  "type": "state",
+  "title": "Ticketing status (bookings.ticketing_status, the API's IssuanceStatus)",
+  "caption": "Driven by storefront_settings.ticketing_policy (issue_after_payment default, issue_at_booking, manual_review), the ticketing job (ticketing.scan every 5 min, ticketing.issue on ota-ticketing) and console.bookings.issue (src/bookings/ticketing.service.ts, ticketing-schedule.ts).",
+  "states": [
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "initial",
+      "detail": "Default at insert; `ticketing_next_attempt_at` set when the job should try."
+    },
+    {
+      "id": "in_progress",
+      "label": "in_progress",
+      "kind": "normal",
+      "detail": "A claim: the job or a staff issuance holds it; cancellations wait (`409 BOOKING_NOT_MODIFIABLE ticketing_in_progress`)."
+    },
+    {
+      "id": "issued",
+      "label": "issued",
+      "kind": "final",
+      "detail": "All tickets stored; booking `ticketed`."
+    },
+    {
+      "id": "partially_issued",
+      "label": "partially_issued",
+      "kind": "normal",
+      "detail": "Booking `partially_ticketed`."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Last attempt failed (`ticketing_error_code`, `ticketing_attempts`). ticketing-schedule.ts retries 5 min, 15 min, 1 h, then every 2 h, at most 8 attempts, none later than the deadline − 2 h, none after PAYMENT_DECLINED. When no attempt is left: staff alert `staff.ticketing_failed` and traveller e-mail `booking.ticketing_delayed` (once each); the status stays failed."
+    },
+    {
+      "id": "manual_review",
+      "label": "manual_review",
+      "kind": "normal",
+      "detail": "Staff must act: policy manual_review, capture failed, airline-card order without every ticket, reconciliation undecided, PNR import of an unticketed order. The ticketing job never takes it."
+    },
+    {
+      "id": "not_applicable",
+      "label": "not_applicable",
+      "kind": "final",
+      "detail": "Failed booking, or cancelled before issuance."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "pending",
+      "to": "in_progress",
+      "label": "claim (checkout issue step / ticketing job / staff)"
+    },
+    {
+      "from": "in_progress",
+      "to": "issued",
+      "label": "Flight Order Issue OK"
+    },
+    {
+      "from": "in_progress",
+      "to": "partially_issued",
+      "label": "some tickets"
+    },
+    {
+      "from": "in_progress",
+      "to": "failed",
+      "label": "issue failed"
+    },
+    {
+      "from": "failed",
+      "to": "in_progress",
+      "label": "retry while ticketing_next_attempt_at < deadline"
+    },
+    {
+      "from": "pending",
+      "to": "manual_review",
+      "label": "policy manual_review / capture failed / import"
+    },
+    {
+      "from": "manual_review",
+      "to": "in_progress",
+      "label": "staff Issue tickets (captures first)"
+    },
+    {
+      "from": "pending",
+      "to": "not_applicable",
+      "label": "booking failed or cancelled before issuance"
+    },
+    {
+      "from": "partially_issued",
+      "to": "in_progress",
+      "label": "issue the rest"
+    },
+    {
+      "from": "pending",
+      "to": "issued",
+      "label": "order came back with tickets (issue=true, airline card, import)"
+    }
+  ]
+}

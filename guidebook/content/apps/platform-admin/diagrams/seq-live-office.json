@@ -1,0 +1,80 @@
+{
+  "id": "seq-live-office",
+  "type": "sequence",
+  "title": "Live office: request, assignment, release",
+  "caption": "The dashboard reads live requests from supplier_connections (live velexis connection pending_verification without an office), never from the audit log. Code: (app)/page.tsx, (app)/tenants/[tenantId]/assign-office-form.tsx, (app)/amadeus/offices/release-dialog.tsx.",
+  "actors": [
+    { "id": "o", "label": "OTA owner (portal)", "kind": "user" },
+    { "id": "ad", "label": "Admin", "kind": "user" },
+    { "id": "ui", "label": "Platform admin", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" },
+    { "id": "pw", "label": "Platform worker", "kind": "worker" }
+  ],
+  "steps": [
+    {
+      "from": "o",
+      "to": "api",
+      "label": "Request live access (portal Amadeus page)",
+      "kind": "call",
+      "note": "live velexis connection pending_verification, no office; audit amadeus.live_requested"
+    },
+    { "from": "ad", "to": "ui", "label": "Dashboard 'Live office requests' → Assign office", "kind": "call" },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "GET /v1/admin/dashboard (liveOfficeRequests ≤ 50, oldest first)",
+      "kind": "call"
+    },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "/tenants/<id>?tab=connections#connection-<id>: GET /v1/admin/amadeus-offices?environment=live&status=available&limit=200",
+      "kind": "call"
+    },
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "pick an office → Assign office",
+      "kind": "call"
+    },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "POST /v1/admin/amadeus-offices/{officeRowId}/assign {tenantId}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "amadeus_offices available → assigned; supplier_connections active with office_ids; audit amadeus_office.assigned; email_outbox amadeus.live_ready",
+      "kind": "call"
+    },
+    { "from": "pw", "to": "o", "label": "e-mail 'Live Amadeus access is ready for <OTA>'", "kind": "async" },
+    {
+      "from": "o",
+      "to": "api",
+      "label": "later: the OTA's own live credentials are applied",
+      "kind": "call",
+      "note": "the Velexis office becomes releasing (release_requested_at)"
+    },
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "/amadeus/offices?environment=live&status=releasing → Release (box + reason)",
+      "kind": "call"
+    },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "POST …/release {confirmNoOpenBookings: true, reason}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "releasing|assigned → available (409 connection_active if an active velexis connection holds it); audit amadeus_office.released",
+      "kind": "call"
+    }
+  ]
+}

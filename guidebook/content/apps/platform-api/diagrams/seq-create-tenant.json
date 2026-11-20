@@ -1,0 +1,103 @@
+{
+  "id": "seq-create-tenant",
+  "type": "sequence",
+  "title": "Create an OTA (before M5 billing)",
+  "caption": "createTenant writes six rows in one transaction and dispatches tenant.provision after the commit. With FEATURE_STRIPE_BILLING on, it opens a Stripe Checkout instead and the webhook opens the dispatch gate.",
+  "actors": [
+    {
+      "id": "fe",
+      "label": "Portal server",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API (provisioning/)",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "r",
+      "label": "Redis / BullMQ",
+      "kind": "queue"
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "GET /v1/tenants/key-availability?key=acme (30/min per account)",
+      "kind": "call"
+    },
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/tenants {key, name, countryCode, defaultCurrency, timeZone} + Idempotency-Key",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "idempotency lock vx:idem:<acc>:<key>:lock (503 while Redis is down)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "lock account FOR UPDATE: verified + active (403 EMAIL_NOT_VERIFIED)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "key free and not reserved (409 TENANT_KEY_UNAVAILABLE); < MAX_TENANTS_PER_ACCOUNT non-failed (422 tenant_limit)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "INSERT tenants (provisioning, test), tenant_memberships (owner), subscriptions (manual trialing), tenant_domains (<key>.ota.example.com verified primary), provisioning_jobs (provision, queued), platform_audit_log tenant.created",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "dispatch: job running, attempt 1, locked_until +15 min",
+      "kind": "call",
+      "note": "Dispatch failure never fails the call: the reconciler takes a job left queued."
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "ota-tenant-ops tenant.provision (job id job_…-1)",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "202 {tenant, provisioningJob {id, status}, checkoutUrl: null}",
+      "kind": "return"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "M5 only: customer + Checkout Session (idempotency checkout:<tenantId>:<key>)",
+      "kind": "call",
+      "note": "Then checkoutUrl is returned and the job stays queued until checkout.session.completed."
+    },
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "poll GET /v1/tenants/{id}/provisioning until active or failed",
+      "kind": "call"
+    }
+  ]
+}

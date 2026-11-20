@@ -1,0 +1,32 @@
+{
+  "id": "flow-egress-change",
+  "type": "flow",
+  "title": "A refused outbound call: read it, allow it, or open it in an emergency",
+  "caption": "docs/mvp/runbooks/outbound-allow-list.md §2–§4; deploy/egress/allowed-hosts.conf; deploy/scripts/egress.sh.",
+  "steps": [
+    {
+      "title": "Read the refusal",
+      "actor": "Operator",
+      "body": "`journalctl -k -g VELEXIS-EGRESS-DENY --since -1h` (DST, DPT, PROTO, UID); `journalctl -u velexis-egress-refresh -n 50`.",
+      "expect": "The refused destination and the user (zone) that tried."
+    },
+    {
+      "title": "Check the table",
+      "actor": "Operator",
+      "body": "`sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh --only firewall`",
+      "expect": "PASS lines, or FAIL naming the line without an address or an extra destination."
+    },
+    {
+      "title": "Add a host by pull request",
+      "actor": "Developer",
+      "body": "Add `host port proto user reason` to `deploy/egress/allowed-hosts.conf`; after merge and deploy run `sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps egress`.",
+      "expect": "`velexis-egress validate` accepts the file; addresses appear within 2 minutes."
+    },
+    {
+      "title": "Emergency opening (outage only)",
+      "actor": "Operator",
+      "body": "Record the incident first, then `sudo nft add element inet velexis_egress emergency4 '{ 198.51.100.7 . tcp . 443 timeout 4h comment \"INC-… reason, name\" }'`.",
+      "expect": "check-vm.sh reports `an emergency opening is in place` until it expires; review within a working day."
+    }
+  ]
+}

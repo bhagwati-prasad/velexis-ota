@@ -1,0 +1,38 @@
+{
+  "id": "flow-add-migration",
+  "type": "flow",
+  "title": "Add a database migration (platform, reference or tenant)",
+  "caption": "packages/db/README.md 'Files'; conventions §9. Baselines are byte copies of docs/velexis-sdk/db/*.sql and are never edited; neither is any merged file.",
+  "steps": [
+    {
+      "title": "Write the file",
+      "actor": "Developer",
+      "body": "Next number in the right folder: `platform/backend/migrations/platform/0005_<name>.sql`, `…/reference/`, or `ota/backend/migrations/tenant/0006_<name>.sql`. First line `-- velexis:phase expand|migrate|contract`, then `-- <description>`. No BEGIN/COMMIT. `CREATE INDEX CONCURRENTLY` needs `-- velexis:no-transaction` and `IF NOT EXISTS`.",
+      "expect": "File names match `^\\d{4}_[a-z0-9_]+\\.sql$`."
+    },
+    {
+      "title": "Grants (platform tables the OTA reads)",
+      "actor": "Developer",
+      "body": "Edit `R__ota_read_access.sql` (GRANT/REVOKE/COMMENT ON only) — it may be edited, it re-applies when its SHA-256 changes. Tenant tables need no GRANT: default privileges cover them.",
+      "expect": "`velexis_ota_app` can SELECT the new platform table; nothing else."
+    },
+    {
+      "title": "Apply locally",
+      "actor": "Developer",
+      "body": "`pnpm db:migrate` (platform/reference) or `pnpm db:migrate:tenants`.",
+      "expect": "`{\"set\":…,\"status\":\"applied\",…}` lines; exit 0."
+    },
+    {
+      "title": "Regenerate table types",
+      "actor": "Developer",
+      "body": "`pnpm db:codegen` (scratch database `velexis_codegen_<pid>`, never your `velexis`).",
+      "expect": "`packages/db/src/generated/*.ts` change: `wrote`; else `unchanged`."
+    },
+    {
+      "title": "Test and commit",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/db test`, `pnpm typecheck`, `pnpm test:int` for the backend that uses it. Commit the migration and the generated files together.",
+      "expect": "CI's 'generated files up to date' step passes."
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "id": "seq-issue-tickets",
+  "type": "sequence",
+  "title": "Issue tickets from the booking page",
+  "caption": "ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts issueTickets → ota/backend/src/console/console-booking-actions.service.ts issue. The key is rendered with the page; a double submit replays the same request.",
+  "actors": [
+    { "id": "staff", "label": "Staff", "kind": "user" },
+    { "id": "dlg", "label": "IssueDialog (ConfirmDialog)", "kind": "ui" },
+    { "id": "act", "label": "Server action issueTickets", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "stripe", "label": "Stripe", "kind": "external" },
+    { "id": "ama", "label": "Amadeus", "kind": "external" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" }
+  ],
+  "steps": [
+    {
+      "from": "staff",
+      "to": "dlg",
+      "label": "Issue tickets: reason, e-mail box, (airline card: CASH/ACCOUNT, allowUnpaid)",
+      "kind": "call",
+      "note": "Hidden: bookingId, version (If-Match), actionKey = crypto.randomUUID() of this render"
+    },
+    { "from": "dlg", "to": "act", "label": "POST server action (FormData)", "kind": "call" },
+    {
+      "from": "act",
+      "to": "act",
+      "label": "requireStaff(\"bookings:issue\") (refresh if < 60 s); Zod; allowUnpaid only owner/admin",
+      "kind": "self"
+    },
+    {
+      "from": "act",
+      "to": "api",
+      "label": "POST /v1/console/bookings/{id}/issuance — If-Match: version, Idempotency-Key: actionKey, capturePayment: true",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "idempotency_keys (processing); claim ticketing_status = in_progress",
+      "kind": "call",
+      "note": "412 stale version, 409 ALREADY_ISSUED / BOOKING_NOT_MODIFIABLE (ticketing_in_progress, cancellation_pending), 402 PAYMENT_REQUIRED"
+    },
+    { "from": "api", "to": "stripe", "label": "capture the authorised payment", "kind": "call" },
+    { "from": "api", "to": "ama", "label": "Flight Order Management GET (resync first)", "kind": "call" },
+    { "from": "api", "to": "ama", "label": "Flight Order Issue (once)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "booking_tickets, bookings ticketed/issued, payments captured, booking_events, notifications booking.ticketed, staff_actions payment.capture + booking.issue",
+      "kind": "call"
+    },
+    { "from": "api", "to": "act", "label": "ConsoleBooking (new ETag)", "kind": "return" },
+    {
+      "from": "act",
+      "to": "act",
+      "label": "revalidatePath(/bookings/{id}) → new render, new keys",
+      "kind": "self",
+      "note": "Final 4xx stored under the key → state carries nextActionKey; 412/429/5xx/timeout → same key; 409 IDEMPOTENCY_KEY_REUSED → same key + reload message"
+    },
+    {
+      "from": "act",
+      "to": "dlg",
+      "label": "{ ok: true, message: \"Tickets issued\" } + warnings",
+      "kind": "return"
+    }
+  ]
+}

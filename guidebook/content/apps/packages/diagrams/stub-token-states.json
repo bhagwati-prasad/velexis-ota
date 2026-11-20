@@ -1,0 +1,56 @@
+{
+  "id": "stub-token-states",
+  "type": "state",
+  "title": "An OAuth token of the Amadeus stub",
+  "caption": "tools/amadeus-stub/src/oauth.ts. Tokens live in memory per server and expire after 1799 s on the injected clock.",
+  "states": [
+    {
+      "id": "issued",
+      "label": "Issued (200, expires_in 1799)",
+      "kind": "initial"
+    },
+    {
+      "id": "valid",
+      "label": "Valid at this server",
+      "kind": "normal"
+    },
+    {
+      "id": "expired",
+      "label": "Expired → 401 38192",
+      "kind": "error"
+    },
+    {
+      "id": "unknown",
+      "label": "Unknown here → 401 38190",
+      "kind": "error",
+      "detail": "Another stub's token, or the stub restarted (like a revoked token)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "issued",
+      "to": "valid",
+      "label": "Authorization: Bearer"
+    },
+    {
+      "from": "valid",
+      "to": "expired",
+      "label": "1799 s pass"
+    },
+    {
+      "from": "valid",
+      "to": "unknown",
+      "label": "stub restarted / other server"
+    },
+    {
+      "from": "expired",
+      "to": "issued",
+      "label": "client requests a new token"
+    },
+    {
+      "from": "unknown",
+      "to": "issued",
+      "label": "client requests a new token"
+    }
+  ]
+}

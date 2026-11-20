@@ -1,0 +1,62 @@
+{
+  "id": "plan-task-states",
+  "type": "state",
+  "title": "A plan task as plan-lint reads it",
+  "caption": "tools/plan-lint/plan-lint.mjs (ADR-0025 item 6). Done = heading ends with ` ✅`; a Status line, when present, must agree.",
+  "states": [
+    {
+      "id": "open",
+      "label": "Open (no ✅)",
+      "kind": "initial"
+    },
+    {
+      "id": "ready",
+      "label": "Ready: every dependency done",
+      "kind": "normal",
+      "detail": "Shown by `--remaining` for the lowest open milestone, critical path first."
+    },
+    {
+      "id": "inprogress",
+      "label": "Status: in progress (PR #n)",
+      "kind": "normal"
+    },
+    {
+      "id": "done",
+      "label": "Done: `done (PR #n)` + ` ✅`",
+      "kind": "final"
+    },
+    {
+      "id": "error",
+      "label": "ERRORS (exit 1)",
+      "kind": "error",
+      "detail": "✅ with a non-done status, done status without ✅, ✅ elsewhere in the heading, missing fields, cycles."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "open",
+      "to": "ready",
+      "label": "dependencies get ✅"
+    },
+    {
+      "from": "ready",
+      "to": "inprogress",
+      "label": "PR adds Status"
+    },
+    {
+      "from": "inprogress",
+      "to": "done",
+      "label": "last commit sets done + ✅"
+    },
+    {
+      "from": "inprogress",
+      "to": "error",
+      "label": "✅ without done status"
+    },
+    {
+      "from": "done",
+      "to": "error",
+      "label": "status edited back"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "id": "session-states",
+  "type": "state",
+  "title": "Refresh family (account_sessions)",
+  "caption": "Portal families live 30 days (idle 7 days per token), admin families 12 hours. Each refresh writes a new generation row.",
+  "states": [
+    {
+      "id": "start",
+      "label": "sign-in",
+      "kind": "initial"
+    },
+    {
+      "id": "current",
+      "label": "current generation",
+      "kind": "normal",
+      "detail": "The only usable refresh token of the family."
+    },
+    {
+      "id": "rotated",
+      "label": "rotated",
+      "kind": "normal",
+      "detail": "Replaced by the next generation (`replaced_by_id`)."
+    },
+    {
+      "id": "revoked",
+      "label": "revoked",
+      "kind": "final",
+      "detail": "Sign-out, sign out everywhere, password change/reset, disable, MFA reset, or reuse detected."
+    },
+    {
+      "id": "expired",
+      "label": "expired",
+      "kind": "final",
+      "detail": "Past `expires_at` or `family_expires_at`; purged 30 days later."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "current",
+      "label": "signIn / verifyMfa / adminVerifyMfa"
+    },
+    {
+      "from": "current",
+      "to": "rotated",
+      "label": "refreshSession / stepUp"
+    },
+    {
+      "from": "rotated",
+      "to": "revoked",
+      "label": "rotated token presented again → whole family revoked (401 REFRESH_TOKEN_REUSED)"
+    },
+    {
+      "from": "current",
+      "to": "revoked",
+      "label": "signOut / signOutEverywhere / revokeSession / admin disable"
+    },
+    {
+      "from": "current",
+      "to": "expired",
+      "label": "idle or absolute end"
+    }
+  ]
+}

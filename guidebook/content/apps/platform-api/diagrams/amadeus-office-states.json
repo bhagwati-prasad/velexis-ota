@@ -1,0 +1,67 @@
+{
+  "id": "amadeus-office-states",
+  "type": "state",
+  "title": "Amadeus office in the pool",
+  "caption": "`platform.amadeus_offices.status` (PADR-0012). `amadeus.pool_level` e-mails ops when fewer than 3 offices are available per environment.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "available",
+      "label": "available",
+      "kind": "normal"
+    },
+    {
+      "id": "assigned",
+      "label": "assigned",
+      "kind": "normal",
+      "detail": "Backs one OTA's velexis connection (`assigned_tenant_id`)."
+    },
+    {
+      "id": "releasing",
+      "label": "releasing",
+      "kind": "normal",
+      "detail": "The OTA moved to its own credentials; old orders still use the Velexis account."
+    },
+    {
+      "id": "retired",
+      "label": "retired",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "available",
+      "label": "adminAddAmadeusOffices / dev:seed (DEV1A0001-0040)"
+    },
+    {
+      "from": "available",
+      "to": "assigned",
+      "label": "post-step assign_amadeus_office / adminAssignAmadeusOffice"
+    },
+    {
+      "from": "assigned",
+      "to": "releasing",
+      "label": "own credentials applied"
+    },
+    {
+      "from": "releasing",
+      "to": "available",
+      "label": "adminReleaseAmadeusOffice (confirmNoOpenBookings, reason)"
+    },
+    {
+      "from": "assigned",
+      "to": "available",
+      "label": "adminReleaseAmadeusOffice when no active velexis connection holds it"
+    },
+    {
+      "from": "available",
+      "to": "retired",
+      "label": "adminRetireAmadeusOffice"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "id": "flow-rollback",
+  "type": "flow",
+  "title": "Roll back a release",
+  "caption": "deploy/scripts/deploy.sh --rollback. Migrations are not reversed (expand-only, N-1 compatible).",
+  "steps": [
+    {
+      "title": "Decide",
+      "actor": "Developer",
+      "body": "A deploy finished but the app misbehaves (an automatic rollback already happened if a unit failed its health check: the run then failed with `rolled back to <sha>`).",
+      "expect": "You know the sha that is current: `sudo velexis-deploy --status`."
+    },
+    {
+      "title": "Roll back",
+      "actor": "Developer",
+      "body": "`sudo /usr/local/sbin/velexis-deploy --rollback`",
+      "expect": "Log `ROLLBACK to <previous sha>`; units, drop-in, Caddyfile, WAF files and Caddy build re-installed from the previous snapshot; units restarted and healthy."
+    },
+    {
+      "title": "Verify",
+      "actor": "Developer",
+      "body": "`sudo velexis-deploy --status`; `tail /var/lib/velexis/deploy-history`.",
+      "expect": "`current: /srv/velexis/releases/<previous>`; history ends with `<previous> rollback`."
+    },
+    {
+      "title": "Fix forward",
+      "actor": "Developer",
+      "body": "Commit the fix and deploy again; a second `--rollback` would toggle back to the newer release.",
+      "expect": "Never edit files under /srv/velexis/releases (read-only)."
+    }
+  ]
+}

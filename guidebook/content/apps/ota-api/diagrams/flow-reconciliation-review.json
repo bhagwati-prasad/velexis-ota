@@ -1,0 +1,39 @@
+{
+  "id": "flow-reconciliation-review",
+  "type": "flow",
+  "title": "Reproduce a lost order and close the review",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/reconciliation-review.e2e.ts (OBE-099 console.bookings.closeReview, src/console/review-closure.service.ts). The stub scenario server-error makes Flight Create Orders answer 500 without storing an order.",
+  "steps": [
+    {
+      "title": "Lose an order",
+      "actor": "Tester",
+      "body": "Complete an airline-card checkout with header `X-Stub-Scenario: server-error` on the completion (development only; the API forwards it to the stub outside production).",
+      "expect": "`504 SUPPLIER_TIMEOUT {bookingId}`; booking `pending`, `reconcile_until` = +15 min, event `booking.supplier_timeout`; job `booking.reconcile` on `ota-bookings`."
+    },
+    {
+      "title": "Let the reconciler search",
+      "actor": "Worker",
+      "body": "Wait: `bookings.reconcile_scan` runs every minute for 15 minutes (Queue List + by-reference reads).",
+      "expect": "Airline card not found → `reconcile_outcome = manual_review`, `ticketing_status = manual_review`, event `booking.reconcile_manual_review`, e-mail `staff.manual_review` to ops_alert_email / owners."
+    },
+    {
+      "title": "Open Reconciliation review",
+      "actor": "Agent",
+      "screen": "/bookings (Reconciliation review view)",
+      "body": "Filter `reconcileOutcome=manual_review`.",
+      "expect": "The booking is listed with `canCloseReview` true."
+    },
+    {
+      "title": "Close as not booked",
+      "actor": "Agent",
+      "body": "Close the review → Not booked, with a note (a note containing a card number is refused at the field).",
+      "expect": "`POST …/review-closure` → booking `failed`, payment `failed` (airline card: nothing to release), staff event `booking.reconcile_closed`."
+    },
+    {
+      "title": "Close as order found",
+      "actor": "Agent",
+      "body": "On a second lost booking: Order found with the record locator the agent found.",
+      "expect": "A PNR without the remark `VELEXIS <reference>` is refused at the record locator; the right one → booking `confirmed` with that record locator; the view becomes empty."
+    }
+  ]
+}

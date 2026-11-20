@@ -1,0 +1,25 @@
+{
+  "title": "Velexis Guidebook",
+  "tagline": "Usage and architecture guide to every Velexis application, with a glossary, taxonomy, knowledge graph and ontology of the system.",
+  "repoBase": "https://github.com/bhagwati-prasad/velexis-ota/blob/HEAD/",
+  "commit": "a68a8cd8",
+  "date": "2026-11-20",
+  "version": "1.0.0",
+  "apps": [
+    "portal",
+    "platform-admin",
+    "platform-api",
+    "storefront",
+    "ota-admin",
+    "ota-api",
+    "sdk",
+    "packages",
+    "deploy"
+  ],
+  "appAliases": { "tools": "packages" },
+  "appGroups": [
+    { "label": "Platform", "apps": ["portal", "platform-admin", "platform-api"] },
+    { "label": "OTA", "apps": ["storefront", "ota-admin", "ota-api", "sdk"] },
+    { "label": "Shared", "apps": ["packages", "deploy"] }
+  ]
+}

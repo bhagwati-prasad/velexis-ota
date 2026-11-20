@@ -1,0 +1,100 @@
+{
+  "id": "seq-suspend-resume",
+  "type": "sequence",
+  "title": "Admin suspends and resumes an OTA",
+  "caption": "The status switch is the effect; the OTA worker only does housekeeping (PADR-0014).",
+  "actors": [
+    {
+      "id": "ad",
+      "label": "Platform admin server",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API (admin/, provisioning/)",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "r",
+      "label": "Redis / BullMQ",
+      "kind": "queue"
+    },
+    {
+      "id": "ow",
+      "label": "OTA worker",
+      "kind": "worker"
+    },
+    {
+      "id": "pw",
+      "label": "Platform worker",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "ad",
+      "to": "api",
+      "label": "POST /v1/admin/tenants/{id}/suspend {suspensionReason abuse|request|admin, reason 5-500 chars}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "lock tenant; active → suspended (409 not_active otherwise); suspend job queued; audit tenant.suspended; outbox tenant.suspended to owners",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "after commit: vx:invalidate tenant; ota-tenant-ops tenant.suspend {reason}",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "ad",
+      "label": "tenant + job",
+      "kind": "return"
+    },
+    {
+      "from": "r",
+      "to": "ow",
+      "label": "expire open checkouts, void authorisations, deny staff refresh",
+      "kind": "async"
+    },
+    {
+      "from": "ow",
+      "to": "r",
+      "label": "platform-tenant-events tenant.suspended",
+      "kind": "async"
+    },
+    {
+      "from": "r",
+      "to": "pw",
+      "label": "markAnswered: job succeeded",
+      "kind": "async"
+    },
+    {
+      "from": "ad",
+      "to": "api",
+      "label": "POST /v1/admin/tenants/{id}/resume {reason}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "suspended → active (billing suspension only while the subscription is trialing/active); resume job; audit tenant.resumed; outbox tenant.resumed",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "vx:invalidate tenant; tenant.resume",
+      "kind": "async"
+    }
+  ]
+}

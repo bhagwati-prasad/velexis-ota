@@ -1,0 +1,31 @@
+{
+  "id": "healthcheck-states",
+  "type": "state",
+  "title": "One health check's state (de-duplicated alerts)",
+  "caption": "deploy/scripts/healthcheck.sh; files /var/lib/velexis/healthcheck/<check>.state ('ok' or 'fail', since when, first problem).",
+  "states": [
+    { "id": "new", "label": "no state yet", "kind": "initial" },
+    { "id": "ok", "label": "ok", "kind": "normal" },
+    {
+      "id": "fail",
+      "label": "fail",
+      "kind": "error",
+      "detail": "One 'health check failed' e-mail on entry; nothing more while it keeps failing."
+    },
+    {
+      "id": "skip",
+      "label": "skipped this run",
+      "kind": "normal",
+      "detail": "Unit not enabled or masked, deploy running, worker answer without `queues`: state kept as it was."
+    }
+  ],
+  "transitions": [
+    { "from": "new", "to": "ok", "label": "passes (no mail)" },
+    { "from": "new", "to": "fail", "label": "fails first run → alert" },
+    { "from": "ok", "to": "fail", "label": "fails → 'health check failed: <check>'" },
+    { "from": "fail", "to": "ok", "label": "passes → 'health check recovered: <check>'" },
+    { "from": "fail", "to": "fail", "label": "fails again → silent; alert not sent → retried next run" },
+    { "from": "ok", "to": "skip", "label": "unknown this run" },
+    { "from": "skip", "to": "ok", "label": "next run passes" }
+  ]
+}

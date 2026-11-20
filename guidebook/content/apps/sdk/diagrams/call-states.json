@@ -1,0 +1,78 @@
+{
+  "id": "call-states",
+  "type": "state",
+  "title": "Lifecycle of one SDK call",
+  "caption": "From the method call to its result or error (internal/client.js, session.js, http.js). Retries happen only for the retry classes safe and idempotent, at most maxRetries (default 2) times; a call is sent again after TOKEN_EXPIRED or CSRF_TOKEN_INVALID at most once, with the same Idempotency-Key, except the airline-card completion.",
+  "states": [
+    { "id": "called", "label": "method called", "kind": "initial" },
+    {
+      "id": "validated",
+      "label": "options and params validated",
+      "kind": "normal",
+      "detail": "Unknown or invalid option, missing path param, `.`/`..` path param, missing `ifMatch`, cookie-mode token → `TypeError` before any request."
+    },
+    {
+      "id": "csrf",
+      "label": "fetching CSRF cookie (cookie mode, writes)",
+      "kind": "normal",
+      "detail": "`GET /v1/storefront` with `cache: no-store`, shared by concurrent writes of the family."
+    },
+    {
+      "id": "sending",
+      "label": "attempt in flight",
+      "kind": "normal",
+      "detail": "Timeout per attempt (body included): call `timeoutMs`, else route-table value (60 s / 90 s), else client (30 s)."
+    },
+    {
+      "id": "waiting",
+      "label": "back-off / Retry-After wait",
+      "kind": "normal",
+      "detail": "0.5 s × 2^(n-1), max 8 s, ± 20 %; `Retry-After` replaces it; > 30 s ends the call. The signal's abort ends the wait."
+    },
+    {
+      "id": "refreshing",
+      "label": "waiting for the session refresh",
+      "kind": "normal",
+      "detail": "After `401 TOKEN_EXPIRED`: joins the family's refresh in flight or starts one; skipped when the session already moved on."
+    },
+    { "id": "resolved", "label": "resolved (body, undefined or Page)", "kind": "final" },
+    {
+      "id": "apierror",
+      "label": "rejected: mapped API error",
+      "kind": "error",
+      "detail": "ValidationError, AuthenticationError, PermissionError, NotFoundError, ConflictError (PriceChanged, SoldOut), ExpiredError, PaymentError, RateLimitError, SupplierError, ServerError, or plain VelexisError (412, 423)."
+    },
+    {
+      "id": "connerror",
+      "label": "rejected: ConnectionError",
+      "kind": "error",
+      "detail": "`NETWORK_ERROR` (after retries), `TIMEOUT` (never retried), `ABORTED` (never retried); status 0."
+    },
+    { "id": "typeerror", "label": "rejected: TypeError", "kind": "error" }
+  ],
+  "transitions": [
+    { "from": "called", "to": "validated", "label": "checks pass" },
+    { "from": "called", "to": "typeerror", "label": "invalid input" },
+    { "from": "validated", "to": "csrf", "label": "cookie mode write, no __Host-vx_csrf" },
+    { "from": "validated", "to": "sending", "label": "send" },
+    { "from": "csrf", "to": "sending", "label": "cookie issued" },
+    { "from": "sending", "to": "resolved", "label": "2xx" },
+    {
+      "from": "sending",
+      "to": "waiting",
+      "label": "429 / 503 / 504 / network error, retry class safe|idempotent, budget left"
+    },
+    { "from": "waiting", "to": "sending", "label": "same Idempotency-Key" },
+    { "from": "sending", "to": "refreshing", "label": "401 TOKEN_EXPIRED and the client refreshes" },
+    { "from": "refreshing", "to": "sending", "label": "new session (sent once more)" },
+    {
+      "from": "refreshing",
+      "to": "apierror",
+      "label": "refresh refused 401 → onSessionExpired; or airline card (never resent)"
+    },
+    { "from": "sending", "to": "csrf", "label": "403 CSRF_TOKEN_INVALID (once)" },
+    { "from": "sending", "to": "apierror", "label": "other 4xx/5xx, budget spent, or Retry-After > 30 s" },
+    { "from": "sending", "to": "connerror", "label": "timeout / abort / network error with no budget" },
+    { "from": "waiting", "to": "connerror", "label": "signal aborted" }
+  ]
+}

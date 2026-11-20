@@ -1,0 +1,133 @@
+{
+  "id": "console-manage-booking",
+  "title": "Staff manage bookings in the OTA admin",
+  "summary": "The owner works the console: the needs-attention lists, a booking's timeline and staff notes, issuing a manual-review booking, cancelling a booking ticketed today (void), capturing and refunding a Stripe payment, the PNR lookup with office isolation, queues, the supplier log and the reconciliation review.",
+  "apps": ["ota-admin", "sdk", "ota-api", "portal", "storefront"],
+  "roles": ["OTA owner", "OTA staff"],
+  "duration": "40 min",
+  "prerequisites": [
+    "The console open for your OTA ([[journey:storefront-settings-and-markups]], step \"open-console\").",
+    "At least two airline-card bookings of your OTA made today ([[journey:book-with-airline-card]]); for the payment steps a Stripe booking ([[journey:book-with-stripe]]) made while the ticketing policy is *Manual review*.",
+    "One booking on the **demo** OTA (the dev server without `STOREFRONT_DEV_HOST`) to use as \"another OTA's\" PNR."
+  ],
+  "steps": [
+    {
+      "id": "manual-review-booking",
+      "app": "storefront",
+      "title": "Make a booking that waits for staff",
+      "actions": "Book with the airline card again, adding `X-Stub-Scenario: ticketing-failed` to the `…/airline-card-completion` request only.",
+      "expect": "The airline creates the order without tickets: the confirmation says tickets are being issued; the booking waits in manual review.",
+      "data": "`SELECT reference, status, ticketing_status FROM tenant_<key>.bookings ORDER BY created_at DESC LIMIT 1;` → `confirmed`, `manual_review`; the payment `processing` (the airline charged nothing).",
+      "code": [
+        "ota/backend/src/bookings/ticketing.service.ts",
+        "ota/backend/src/bookings/ticketing-schedule.ts"
+      ]
+    },
+    {
+      "id": "lists",
+      "app": "ota-admin",
+      "title": "Dashboard and bookings list",
+      "url": "http://localhost:3002/bookings",
+      "actions": "Open the dashboard (`/`) and **Bookings**. Try a saved view (Needs attention: Ticketing problems, Reconciliation review, Deadline within 24 h, Cancellation requested, Schedule changed; Lists: All bookings, To issue, Reconciling, Cancelled, Imported) and the filters (Search, Status, Ticketing, Payment, Channel, Sort, and more: record locator, booking reference, customer e-mail, traveller last name, dates).",
+      "expect": "The dashboard shows three counts (Ticketing failed or in manual review, Ticketing deadline within 24 h, Outcome unknown (reconciling)), Authorised, not captured, Last queue read and Latest bookings; a count that is not 0 is amber and equals the total of its saved view. The list shows only this OTA's bookings of the current environment (TEST), 25 a page, with reference, record locator (\"None yet\"), lead traveller, route and departure, status, ticketing, payment, total (with net and markup), channel and created time in the OTA's time zone. Filters are kept in the URL.",
+      "code": [
+        "ota/admin/src/app/(console)/page.tsx",
+        "ota/admin/src/app/(console)/bookings/page.tsx",
+        "ota/backend/src/console/console-bookings.service.ts"
+      ]
+    },
+    {
+      "id": "note",
+      "app": "ota-admin",
+      "title": "Read the timeline and add a staff note",
+      "url": "http://localhost:3002/bookings/bkg_…",
+      "actions": "Open the manual-review booking. Read its tabs (Overview, Travellers and contacts, Amadeus order, Tickets and documents, Payments, Timeline and notes, Staff actions). On **Timeline and notes**, under **Add a note**, write a short note and press **Add note**. Then add a note that contains a test card number such as `4111 1111 1111 1111`.",
+      "expect": "\"Note added.\"; the note appears in the timeline marked Internal and never on the storefront's booking page. The note with the card number is accepted too (\"Note added.\") and stored as typed: a known security gap (only the reconciliation-review note refuses a card number, *A note never holds a card number: remove it.*); report it.",
+      "data": "`SELECT type, actor_type, summary, visible_to_customer FROM tenant_<key>.booking_events WHERE booking_id = 'bkg_…' ORDER BY created_at DESC LIMIT 3;` → `staff.note` rows with `visible_to_customer = false`; the card-number note's `summary` holds the whole number. `staff_actions` `booking.note` with the note id only.",
+      "code": [
+        "ota/admin/src/app/(console)/bookings/[bookingId]/note-form.tsx",
+        "ota/backend/src/console/console-booking-actions.service.ts",
+        "ota/backend/src/console/staff-actions.writer.ts"
+      ]
+    },
+    {
+      "id": "issue",
+      "app": "ota-admin",
+      "title": "Issue the manual-review booking",
+      "url": "http://localhost:3002/bookings/bkg_…",
+      "actions": "In the **Booking actions** bar press **Issue tickets**. Read the dialog (\"The airline card cannot be charged again…\"). Choose **Settlement with the airline** \"ACCOUNT: the OTA's account with the airline\", give a reason (3-500 characters), tick **Issue although the payment is not captured** (owner or admin only), keep \"E-mail the e-ticket receipts to the traveller\"; press **Issue tickets**. Double-click the confirm button on purpose.",
+      "expect": "One issuance (the Idempotency-Key and the ticketing claim prevent a second): \"Tickets issued.\"; the booking shows Ticketed with ticket numbers on the Tickets and documents tab; the dialog closes and the page re-renders.",
+      "data": "`bookings.status` → `ticketed`, `ticketing_status` → `issued`; `booking_tickets` rows; `staff_actions` `booking.issue` with your reason, `outcome = succeeded`; one Flight Order Issue row in `supplier_requests` (after a GET).",
+      "code": [
+        "ota/admin/src/app/(console)/bookings/[bookingId]/issue-dialog.tsx",
+        "ota/backend/src/console/console-booking-actions.service.ts"
+      ]
+    },
+    {
+      "id": "cancel-void",
+      "app": "ota-admin",
+      "title": "Cancel a booking ticketed today (void)",
+      "url": "http://localhost:3002/bookings/bkg_…",
+      "actions": "Open another airline-card booking ticketed today → **Cancel the booking**. Read the dialog; choose **Reason category** \"The customer asked\" and write a reason; keep \"E-mail the cancellation to the traveller\"; press **Cancel the booking**.",
+      "expect": "The dialog says \"The tickets were issued today: Amadeus voids them while the void window is open (until midnight, the OTA's time).\" and offers only *No refund from the console* (the void reverses the airline's charge; airline cards are never refunded through Stripe). After confirming: \"Booking cancelled.\" and status Cancelled; the traveller gets the cancellation e-mail.",
+      "data": "`bookings.status = cancelled`, `cancelled_by = staff`, `cancel_reason` = `customer_request: <reason>`; `payment_events` has `airline.void_expected`; no `refunds` row; `staff_actions` `booking.cancel`.",
+      "code": [
+        "ota/admin/src/app/(console)/bookings/[bookingId]/cancel-dialog.tsx",
+        "ota/backend/src/bookings/cancellation.service.ts",
+        "ota/backend/src/bookings/cancellation-mode.ts"
+      ]
+    },
+    {
+      "id": "capture-refund",
+      "app": "ota-admin",
+      "title": "Capture and partly refund a Stripe payment",
+      "url": "http://localhost:3002/payments",
+      "actions": "With the Stripe CLI listener running (`tools/dev/stripe-listen.sh`), open the Stripe booking made under *Manual review* → its payment (`/payments/pay_…`). **Capture** with a reason and an empty amount. Then **Refund** `10.00` with **Reason category** *Goodwill* and a reason.",
+      "expect": "Before: Authorised (PaymentIntent `requires_capture`). After capture: \"Captured €…\" and Captured. After the refund: \"Refund of €10.00 requested: Stripe completes it.\"; the refund is shown as requested until Stripe's webhook completes it, then the payment is Partially refunded.",
+      "data": "`SELECT status, amount_captured, amount_refunded FROM tenant_<key>.payments WHERE id = 'pay_…';` → `partially_refunded`, refunded `10.00`. `refunds` row `pending` → `succeeded`; `payment_events` `refund.requested`, `webhook.charge.refunded`, `refund.succeeded`; `staff_actions` `payment.capture` and `payment.refund`; booking events `refund.requested`, `refund.succeeded`.",
+      "code": [
+        "ota/admin/src/app/(console)/payments/[paymentId]/page.tsx",
+        "ota/backend/src/console/console-payments.service.ts",
+        "ota/backend/src/payments/payments.processor.ts"
+      ]
+    },
+    {
+      "id": "pnr",
+      "app": "ota-admin",
+      "title": "PNR lookup and office isolation",
+      "url": "http://localhost:3002/pnr",
+      "actions": "Look up the record locator of one of your own bookings (typed in lower case). Then look up the record locator of the demo OTA's booking (`SELECT record_locator FROM tenant_demo.bookings ORDER BY created_at DESC LIMIT 1;`).",
+      "expect": "Your own: the order with its travellers (`LAST/FIRST`), flights, queuing office and net total, with \"Already a booking of this OTA:\" and a link. The demo OTA's: *This order belongs to an office outside this OTA* with \"This OTA's offices: …\", nothing of the order (no traveller, no other office), no import offered.",
+      "data": "`staff_actions`: `pnr.lookup` `succeeded` for yours, `denied` for the other office (`403 OFFICE_NOT_ALLOWED`).",
+      "code": ["ota/admin/src/app/(console)/pnr/page.tsx", "ota/backend/src/console/pnr-import.service.ts"]
+    },
+    {
+      "id": "queues-log",
+      "app": "ota-admin",
+      "title": "Queues, shopping, supplier log and customers",
+      "url": "http://localhost:3002/queues",
+      "actions": "Open **Queues**, then **Open a queue** (number, category, office) and press **Read now from Amadeus**; **Shopping** (`/shopping`, a raw search with net prices); **Supplier log** (`/supplier-log`); **Customers** (`/customers`) and one customer.",
+      "expect": "`/queues` lists the stored reads (the poller's every 15 minutes and the staff's), newest 100 only. Opening a queue shows its last stored read without calling Amadeus; **Read now from Amadeus** reads and stores a snapshot; each PNR links its booking or shows \"No booking\" with **Import**. Shopping shows net prices only (console only). The supplier log lists calls with the request id and, on demand, redacted bodies. Viewing a customer is audited (the page says so).",
+      "data": "`queue_snapshots` rows; `staff_actions` `customer.view` and `amadeus.<operation>` rows for audited reads.",
+      "code": [
+        "ota/backend/src/console/queues.service.ts",
+        "ota/backend/src/console/raw-amadeus.service.ts",
+        "ota/backend/src/console/supplier-log.repository.ts",
+        "ota/backend/src/console/customers.service.ts"
+      ]
+    },
+    {
+      "id": "reconciliation",
+      "app": "ota-admin",
+      "title": "Close a reconciliation review",
+      "url": "http://localhost:3002/bookings",
+      "actions": "If you did the optional \"lost answer\" step of [[journey:book-with-airline-card]], open the reconciliation review view of bookings, open the booking → **Close the review** → *Not booked*, with a note of what you checked.",
+      "expect": "The booking shows *Failed* and *Payment failed*, no more **Close the review**, and the view no longer lists it.",
+      "data": "`bookings.status = failed`, `failure_code = SUPPLIER_TIMEOUT`, `reconcile_outcome = not_found`; payment `failed`; `booking_events` `booking.reconcile_closed`; `staff_actions` `booking.reconcile_close` with the note.",
+      "code": [
+        "ota/backend/src/console/review-closure.service.ts",
+        "ota/admin/src/app/(console)/bookings/[bookingId]/sections.tsx"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "id": "complete-states",
+  "type": "state",
+  "title": "Complete page after Stripe",
+  "caption": "`src/pages/checkout-complete.js` (docs/pages.md §10). The idempotency key `complete-<checkoutId>-<paymentId>` makes a reload or Retry replay the first outcome instead of booking twice.",
+  "states": [
+    {
+      "id": "reading",
+      "label": "Reading the payment",
+      "kind": "initial"
+    },
+    {
+      "id": "waiting",
+      "label": "Waiting for the bank",
+      "kind": "normal",
+      "detail": "`processing` / `requires_action`: read every 2 s, at most 60 s."
+    },
+    {
+      "id": "slow",
+      "label": "Your bank has not confirmed the payment yet",
+      "kind": "error",
+      "detail": "Retry waits again; link to the card page."
+    },
+    {
+      "id": "completing",
+      "label": "Completing your booking",
+      "kind": "normal",
+      "detail": "`checkout.complete` with `expectedTotal`, 90 s."
+    },
+    {
+      "id": "retry",
+      "label": "Shared state with Retry (same key)",
+      "kind": "error",
+      "detail": "`503`, network, `429`, `502 PAYMENT_PROVIDER_ERROR`, `409 CONFLICT`."
+    },
+    {
+      "id": "notpaid",
+      "label": "Payment did not go through",
+      "kind": "error",
+      "detail": "`failed`, `cancelled`, `requires_payment_method`, `402`: a link back to the card page, never an automatic redirect."
+    },
+    {
+      "id": "notbooked",
+      "label": "Your booking did not go through",
+      "kind": "error",
+      "detail": "`502 SUPPLIER_ERROR` / `TICKETING_FAILED`, `409 SOLD_OUT`: nothing charged."
+    },
+    {
+      "id": "pending",
+      "label": "Confirmation (pending=1)",
+      "kind": "final",
+      "detail": "`504 SUPPLIER_TIMEOUT`, `409 CHECKOUT_BEING_COMPLETED`."
+    },
+    {
+      "id": "confirmation",
+      "label": "Confirmation",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "reading",
+      "to": "waiting",
+      "label": "processing / requires_action"
+    },
+    {
+      "from": "waiting",
+      "to": "completing",
+      "label": "authorized / captured"
+    },
+    {
+      "from": "waiting",
+      "to": "slow",
+      "label": "60 s passed"
+    },
+    {
+      "from": "slow",
+      "to": "reading",
+      "label": "Retry"
+    },
+    {
+      "from": "reading",
+      "to": "completing",
+      "label": "authorized / captured"
+    },
+    {
+      "from": "reading",
+      "to": "notpaid",
+      "label": "not paid"
+    },
+    {
+      "from": "completing",
+      "to": "confirmation",
+      "label": "201 / 409 ALREADY_COMPLETED"
+    },
+    {
+      "from": "completing",
+      "to": "pending",
+      "label": "504 / 409 BEING_COMPLETED"
+    },
+    {
+      "from": "completing",
+      "to": "notbooked",
+      "label": "airline refused / sold out"
+    },
+    {
+      "from": "completing",
+      "to": "retry",
+      "label": "passing failure"
+    },
+    {
+      "from": "retry",
+      "to": "completing",
+      "label": "Retry (same key)"
+    }
+  ]
+}

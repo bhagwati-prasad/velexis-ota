@@ -1,0 +1,51 @@
+{
+  "id": "seq-csv-export",
+  "type": "sequence",
+  "title": "Audit CSV export, streamed",
+  "caption": "The link is a plain <a> (never next/link, whose prefetch would run the export and write its audit row). The handler streams the API's body without buffering; HEAD answers 405. Code: (app)/audit/export.csv/route.ts, (app)/audit/audit-filters.ts.",
+  "actors": [
+    { "id": "b", "label": "Browser", "kind": "user" },
+    { "id": "rh", "label": "GET /audit/export.csv", "kind": "api" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "pg", "label": "platform_audit_log", "kind": "db" }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "rh",
+      "label": "Download CSV (tenantId, actorType, action, … from=YYYY-MM-DD, to=YYYY-MM-DD)",
+      "kind": "call"
+    },
+    {
+      "from": "rh",
+      "to": "rh",
+      "label": "validate like the page; period set and ≤ 1 calendar year, else 400 text/plain",
+      "kind": "self"
+    },
+    {
+      "from": "rh",
+      "to": "api",
+      "label": "GET /v1/admin/audit-log.csv?from=…T00:00:00Z&to=<next day>T00:00:00Z (parseAs stream)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "SELECT ≤ 100 000 rows newest first; INSERT audit.exported",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "rh",
+      "label": "200 text/csv stream | 400 VALIDATION_FAILED | 401 | 429",
+      "kind": "return"
+    },
+    {
+      "from": "rh",
+      "to": "b",
+      "label": "stream: text/csv; Content-Disposition velexis-audit-<from>-<day after to>.csv; Cache-Control no-store",
+      "kind": "return",
+      "note": "A failure mid-stream aborts the download; an ended session → /sign-in?next=/audit?<filters>"
+    }
+  ]
+}

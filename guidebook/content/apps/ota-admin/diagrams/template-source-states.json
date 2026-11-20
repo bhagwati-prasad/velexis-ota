@@ -1,0 +1,49 @@
+{
+  "id": "template-source-states",
+  "type": "state",
+  "title": "Where an e-mail template comes from",
+  "caption": "notification_templates (key, channel, locale) and the code defaults in ota/backend/src/notifications/templates. The editor sends If-Match whenever the page showed a version (the seeded row included). Code: settings/templates/actions.ts.",
+  "states": [
+    {
+      "id": "code",
+      "label": "Default (code)",
+      "kind": "initial",
+      "detail": "No row for the key and locale or its language: the bundled `.hbs` files; \"Never changed\"."
+    },
+    {
+      "id": "inherited",
+      "label": "Inherited from <language>",
+      "kind": "normal",
+      "detail": "No row of the locale (e.g. `fr-CA`), the language's row (`fr`) serves it; \"See the <language> template\"."
+    },
+    {
+      "id": "seeded",
+      "label": "Default (own copy)",
+      "kind": "normal",
+      "detail": "Row seeded by provisioning from the code default: has a `version`, not customised."
+    },
+    {
+      "id": "custom",
+      "label": "Customised",
+      "kind": "normal",
+      "detail": "Saved by staff (`settings.templates.put`)."
+    },
+    {
+      "id": "invalid",
+      "label": "Refused draft",
+      "kind": "error",
+      "detail": "`422 TEMPLATE_INVALID` listed per part and line; nothing saved; `failed` staff action."
+    }
+  ],
+  "transitions": [
+    { "from": "code", "to": "custom", "label": "Save (creates the locale's row, no If-Match)" },
+    { "from": "inherited", "to": "custom", "label": "Save (creates the locale's row)" },
+    { "from": "seeded", "to": "custom", "label": "Save with If-Match" },
+    { "from": "custom", "to": "custom", "label": "Save with If-Match (version + 1)" },
+    { "from": "custom", "to": "invalid", "label": "Save a draft that does not compile" },
+    { "from": "invalid", "to": "custom", "label": "Fix and save" },
+    { "from": "custom", "to": "inherited", "label": "Reset to default (language row exists)" },
+    { "from": "custom", "to": "code", "label": "Reset to default (no language row)" },
+    { "from": "seeded", "to": "code", "label": "Reset to default" }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "id": "seq-sign-in-mfa",
+  "type": "sequence",
+  "title": "Portal sign-in with MFA, refresh and step-up",
+  "caption": "Password check with lockout, the MFA challenge in Redis, the refresh family in account_sessions, and the 15-minute step-up.",
+  "actors": [
+    {
+      "id": "fe",
+      "label": "Portal server",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API (auth/)",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "r",
+      "label": "Redis",
+      "kind": "cache"
+    }
+  ],
+  "steps": [
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/auth/sign-in {email, password}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "read account; locked_until ahead → 423 ACCOUNT_LOCKED + Retry-After",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "Argon2id verify (dummy hash for unknown address: same 401 INVALID_CREDENTIALS)",
+      "kind": "self",
+      "note": "5th consecutive failure sets locked_until = now + 15 min (audit auth.locked)."
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "MFA on: SET mfach:<sha256> (5 min, 5 attempts)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "200 {mfaRequired, mfaChallengeToken, expiresIn}",
+      "kind": "return"
+    },
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/auth/mfa/verify {mfaChallengeToken, code}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "check code, mfastep:<acc> so a code works once; recovery code alternative",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "account_sessions: new portal family (30 d), refresh token hash, mfa_verified_at",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "PortalSession {accessToken 15 min, refreshToken, account}",
+      "kind": "return"
+    },
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/auth/refresh {refreshToken}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "rotate generation; reuse of a rotated token revokes the family (401 REFRESH_TOKEN_REUSED)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "new PortalSession",
+      "kind": "return"
+    },
+    {
+      "from": "fe",
+      "to": "api",
+      "label": "POST /v1/auth/step-up {code} before a sensitive action",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "rotate with mfa_verified_at = now → access token mfa_at",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "fe",
+      "label": "PortalSession valid for step-up operations for 15 min",
+      "kind": "return"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "flow-ci-pull-request",
+  "type": "flow",
+  "title": "How a change reaches main (CI, E2E, review, merge)",
+  "caption": ".github/workflows/ci.yml and e2e.yml; ADR-0020 and ADR-0028. Agents never edit the workflows to get their own change through.",
+  "steps": [
+    {
+      "title": "Task branch",
+      "actor": "Agent / developer",
+      "body": "One task = one branch `task/<ID>-<slug>`; the wave integrator squash-merges task branches into the integration branch.",
+      "expect": "Each task commit keeps its `Task:` footer."
+    },
+    {
+      "title": "CI on the pull request",
+      "actor": "GitHub",
+      "body": "Jobs: plan-lint, deploy-files, systemd-units, check-vm (VM check test), dev-setup, build-test, integration, alt-hosts, sdk-node22 (not required).",
+      "expect": "Required checks green; deploy-files proves the Caddy build SHA-256, the Caddyfile smoke test and the deploy/healthcheck/log tests."
+    },
+    {
+      "title": "E2E when needed",
+      "actor": "Developer",
+      "body": "Add the `e2e` label (or run E2E on demand); nightly at 02:23 UTC.",
+      "expect": "Projects portal, platform-admin, storefront, ota-admin pass; on failure artefact `e2e-<run id>-<attempt>`."
+    },
+    {
+      "title": "Merge to main",
+      "actor": "Developer",
+      "body": "A wave reaches main as one pull request merged with a merge commit; a single task's PR is squash-merged.",
+      "expect": "`main` history keeps the task commits."
+    },
+    {
+      "title": "Deploy",
+      "actor": "Developer",
+      "body": "Run Deploy from `main`; it calls E2E for the same commit before anything reaches the VM.",
+      "expect": "No way to deploy past a red e2e job."
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "id": "flow-search-and-price",
+  "type": "flow",
+  "title": "Search, filter, choose a fare and price it",
+  "caption": "The M2 journey of `tools/e2e/specs/storefront/search.e2e.ts` against the Amadeus stub (5 offers Madrid → Paris; destination `ZZZ` = none).",
+  "steps": [
+    {
+      "title": "Fill in the search form",
+      "actor": "Traveller",
+      "screen": "/",
+      "url": "http://localhost:5173/",
+      "body": "One way; From: type `Madrid`, pick **MAD**; To: type `Paris`, pick **PAR**; Departure: a date about 40 days ahead; Search flights.",
+      "expect": "The combobox lists airports and cities from 2 characters (debounced 250 ms); the field shows \"Madrid … (MAD)\". Empty fields, same origin and destination, a past date or infants > adults show the focused error summary instead of leaving the page."
+    },
+    {
+      "title": "Results",
+      "actor": "Traveller",
+      "screen": "/search.html",
+      "body": "Wait for the results; check the address.",
+      "expect": "Skeleton cards and \"Searching airlines…\", then the heading **5 flights**. The address gains `search=srch_…`; a reload shows the same results without a new search. DB: one `flight_searches` row (status `completed`, `result_count` 5) and 5 `flight_offers` rows."
+    },
+    {
+      "title": "Filter and sort",
+      "actor": "Traveller",
+      "body": "Tick **Direct** under stops; Sort by **Cheapest first**.",
+      "expect": "\"4 flights\", every card says Direct, the address has `stops=0` and `sort=price`, cards ordered by the API's total. Below 1024 px the filters sit behind \"Filters (n)\"."
+    },
+    {
+      "title": "Open an offer",
+      "actor": "Traveller",
+      "screen": "/offer.html?offer=off_…",
+      "body": "**Select this flight** on a card.",
+      "expect": "\"Flight details\" with bounds, baggage per traveller type, the price box and \"Choose your fare\": BASIC, CLASSIC, FLEXIBLE (stub upsell) with price differences as the API wrote them."
+    },
+    {
+      "title": "Choose a fare and price it",
+      "actor": "Traveller",
+      "body": "Pick **FLEXIBLE**, then **Continue with this fare**.",
+      "expect": "The address keeps `fare=off_…`; then `/price.html?priced=prc_…` with \"Your price\", \"Fare: FLEXIBLE\", a breakdown whose total equals the total box, and \"Price held for mm:ss\". DB: one `priced_offers` row with `expires_at` about `offer_ttl_minutes` (default 30) ahead."
+    },
+    {
+      "title": "Check the price page details",
+      "actor": "Traveller",
+      "body": "Open **Changes and refunds**; read \"What you need to book\" and the extras line.",
+      "expect": "Fare rules at a glance and per category; requirements (names, dates of birth, documents…); \"Available in checkout: … from €…\" only with `features.ancillaries`. **Continue to checkout** is enabled while the price holds."
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "id": "cookie-session-states",
+  "type": "state",
+  "title": "The shared refresh state of a cookie-mode client family",
+  "caption": "RefreshState in internal/session.js (generation, refreshing, fetchingCsrf), shared by the storefront's root client and every client derived from it with withOptions. The browser holds the session in httpOnly cookies (__Host-vx_at, __Host-vx_rt, __Host-vx_bt); JavaScript only reads __Host-vx_csrf.",
+  "states": [
+    { "id": "idle", "label": "idle (generation n)", "kind": "initial" },
+    {
+      "id": "csrf",
+      "label": "fetching CSRF cookie",
+      "kind": "normal",
+      "detail": "One `GET /v1/storefront` with `cache: no-store` for every write of the family that lacks the cookie or got `403 CSRF_TOKEN_INVALID`."
+    },
+    {
+      "id": "refreshing",
+      "label": "refreshing cookies",
+      "kind": "normal",
+      "detail": "One `POST /v1/auth/refresh` with an empty body and `X-CSRF-Token`, sent with the root client's transport settings, whichever client started it."
+    },
+    {
+      "id": "next",
+      "label": "idle (generation n+1)",
+      "kind": "normal",
+      "detail": "Calls whose attempt went out before the refresh finished are sent again without another refresh."
+    },
+    {
+      "id": "expired",
+      "label": "signed out",
+      "kind": "error",
+      "detail": "Refresh refused with 401: the starting client's `onSessionExpired` runs once; the storefront shows the signed-out state."
+    }
+  ],
+  "transitions": [
+    { "from": "idle", "to": "csrf", "label": "write without __Host-vx_csrf, or 403 CSRF_TOKEN_INVALID" },
+    { "from": "csrf", "to": "idle", "label": "cookie set (or failed: the error goes to the waiting writes)" },
+    { "from": "idle", "to": "refreshing", "label": "401 TOKEN_EXPIRED, attempt generation = current" },
+    { "from": "refreshing", "to": "next", "label": "200 (new cookies), generation += 1" },
+    { "from": "refreshing", "to": "expired", "label": "401 REFRESH_TOKEN_INVALID / REFRESH_TOKEN_REUSED" },
+    {
+      "from": "refreshing",
+      "to": "idle",
+      "label": "network error / 503 after the root's retries: thrown as it is"
+    },
+    { "from": "next", "to": "refreshing", "label": "a later TOKEN_EXPIRED" }
+  ]
+}

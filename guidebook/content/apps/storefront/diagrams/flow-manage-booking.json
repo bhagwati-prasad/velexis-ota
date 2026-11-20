@@ -1,0 +1,33 @@
+{
+  "id": "flow-manage-booking",
+  "type": "flow",
+  "title": "Change contacts, cancel, download documents",
+  "caption": "`tools/e2e/specs/storefront/account-bookings.e2e.ts` steps 5-7 and `ota/docs/flows/change-and-cancel.md`. Controls follow `allowedActions` exactly.",
+  "steps": [
+    {
+      "title": "Open the booking",
+      "actor": "Customer or guest",
+      "screen": "/booking.html?id=bkg_…",
+      "body": "From My bookings (customer) or the confirmation / lookup (guest).",
+      "expect": "Trip with each flight's status, travellers and tickets, contact, payment, documents, history. Buttons only for `canModifyContacts`, `canCancel`, `canRefresh`, `canDownloadDocuments`."
+    },
+    {
+      "title": "Change contact details",
+      "actor": "Customer or guest",
+      "body": "Change contact details → new e-mail and mobile → Save.",
+      "expect": "Dialog closes and says where the confirmation went. DB: `booking_contacts` replaced, `bookings.contact_email` and `version` + 1, `booking_events` `booking.contacts_updated`. Mailpit: \"Your booking <ref> with Demo Travel has been updated\" to the new address and \"The contact details of booking <ref> … were changed\" to the old one."
+    },
+    {
+      "title": "Cancel with the refund preview",
+      "actor": "Customer or guest",
+      "body": "Cancel booking → read the mode and refund → choose a reason → Confirm.",
+      "expect": "\"This booking is cancelled\" with the date in the OTA's time zone; the trip moves to the Cancelled tab. DB: `bookings.status = 'cancelled'`, `cancelled_by = 'customer'`, a `refunds` row or a voided authorisation; Redis `t:<tenantId>:test:cxq:<bookingId>` used. Mailpit: \"Your booking <ref> is cancelled\"."
+    },
+    {
+      "title": "Documents and fare rules",
+      "actor": "Customer or guest",
+      "body": "Download a ready document; open **Changes and refunds**; press **Refresh from airline**.",
+      "expect": "Each click asks a fresh signed URL (`/api/v1/files/…?exp=…&sig=…`, 5 minutes). A booking synced < 60 s ago answers the fare rules with `429`: \"The fare rules will be available in about a minute\". Refresh is throttled to once a minute."
+    }
+  ]
+}

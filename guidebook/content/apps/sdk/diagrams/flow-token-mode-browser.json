@@ -1,0 +1,47 @@
+{
+  "id": "flow-token-mode-browser",
+  "type": "flow",
+  "title": "Try token mode from a plain HTML page (IIFE + publishable key)",
+  "caption": "How a third-party browser frontend uses the SDK (build-your-own-frontend guide §2.3, §3, §4). Needs the stack of the smoke-test flow, a built SDK and a publishable test key whose allowed origins list your page's origin.",
+  "steps": [
+    {
+      "title": "Create a publishable key for your page's origin",
+      "actor": "Owner",
+      "screen": "Portal → your OTA → API keys",
+      "url": "http://localhost:3000",
+      "body": "Create a **Publishable key** with the allowed origin `http://localhost:8080` (the seeded `pk_test_` key has no origins, so a browser page is refused). Copy the key: it is shown once.",
+      "expect": "`SELECT prefix, allowed_origins FROM platform.api_keys WHERE kind = 'publishable' ORDER BY created_at DESC LIMIT 1;` lists `{http://localhost:8080}`."
+    },
+    {
+      "title": "Serve a page with the IIFE",
+      "actor": "Owner",
+      "body": "`pnpm --filter @velexis/ota-sdk build`, copy `ota/sdk/dist/velexis-sdk.iife.js` next to an `index.html` that has `<script src=\"velexis-sdk.iife.js\"></script>`, and serve the folder on port 8080 with any static server (for example `python3 -m http.server 8080`).",
+      "expect": "In the DevTools console `typeof Velexis.createVelexisClient` is `\"function\"`; the page loaded nothing else and made no request."
+    },
+    {
+      "title": "Create the client and bootstrap",
+      "actor": "Owner",
+      "url": "http://localhost:8080",
+      "body": "`const v = Velexis.createVelexisClient({ publishableKey: \"pk_test_…\", baseUrl: \"http://localhost:4000\" }); await v.storefront.get();`",
+      "expect": "The OTA's `StorefrontConfig`. Network tab: a preflight `OPTIONS` answered `204`, then `GET /v1/storefront` with `X-Api-Key`, answer headers `Access-Control-Allow-Origin: http://localhost:8080` and `Vary: Origin`, and no cookie sent (`credentials: omit`)."
+    },
+    {
+      "title": "Search, page through and price",
+      "actor": "Owner",
+      "body": "`const s = await v.flights.search({ mode: \"simple\", originLocationCode: \"PAR\", destinationLocationCode: \"NYC\", departureDate: \"<a date 30 days ahead>\", adults: 1, currencyCode: \"EUR\", resultOptions: { limit: 5 } });` then `const page = await v.flights.listResults({ searchId: s.id, limit: 5 }); for await (const o of page) { … }` and `await v.flights.price({ offerIds: [s.offers[0].id] });`",
+      "expect": "`srch_…` with status `completed`; `for await` fetches the next pages only as you iterate; `prc_…` with status `active`. Each POST carries a fresh `Idempotency-Key`."
+    },
+    {
+      "title": "Sign up and act as the customer",
+      "actor": "Owner",
+      "body": "`const r = await v.auth.signUp({ email, password, firstName, lastName, marketingConsent: false, termsVersion: (await v.storefront.get()).legal.termsVersion });` then `const me = v.withOptions({ accessToken: r.session.accessToken, refreshToken: r.session.refreshToken, onSessionRefreshed: (s) => console.log(\"rotated\") }); await me.account.get();`",
+      "expect": "`201` with `cus_…` and a session (unless the OTA requires verification first: then `session: null`). `account.get` answers the profile with `emailVerified: false`."
+    },
+    {
+      "title": "Try the refusals",
+      "actor": "Owner",
+      "body": "`await v.console.auth.me()`; `Velexis.createVelexisClient({ secretKey: \"sk_test_x\" })`; `await v.checkout.completeWithAirlineCard({ … })`; from another origin (port 9999) `await v.storefront.get()`.",
+      "expect": "`PermissionError` `403 SCOPE_NOT_ALLOWED`; `TypeError` (secret key in a browser page, before any request); `403 SCOPE_NOT_ALLOWED` (`edge_only`); `403 ORIGIN_NOT_ALLOWED`, which the page cannot read without CORS (it surfaces as a `ConnectionError` `NETWORK_ERROR`, after two automatic retries of the GET)."
+    }
+  ]
+}

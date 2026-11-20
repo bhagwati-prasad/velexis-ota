@@ -1,0 +1,313 @@
+{
+  "id": "er-reference-data",
+  "type": "er",
+  "title": "The reference schema the loader fills",
+  "caption": "Written only by the reference loader as velexis_platform_app; read by both backends (velexis_ota_app has SELECT). Codes are referenced by value from tenant rows, so rows are deactivated, never deleted.",
+  "entities": [
+    {
+      "id": "cur",
+      "label": "reference.currencies",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "code",
+          "type": "char(3)",
+          "key": "pk"
+        },
+        {
+          "name": "numeric_code",
+          "type": "char(3)"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "symbol",
+          "type": "text"
+        },
+        {
+          "name": "minor_units",
+          "type": "smallint 0..4"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "cty",
+      "label": "reference.countries",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "code",
+          "type": "char(2)",
+          "key": "pk"
+        },
+        {
+          "name": "alpha3",
+          "type": "char(3)",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "continent_code",
+          "type": "char(2)"
+        },
+        {
+          "name": "currency_code",
+          "type": "char(3)",
+          "key": "fk"
+        },
+        {
+          "name": "calling_code",
+          "type": "text"
+        },
+        {
+          "name": "is_eu",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "id": "tz",
+      "label": "reference.time_zones",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "name",
+          "type": "text (IANA)",
+          "key": "pk"
+        },
+        {
+          "name": "country_code",
+          "type": "char(2)",
+          "key": "fk"
+        },
+        {
+          "name": "utc_offset_minutes",
+          "type": "integer"
+        },
+        {
+          "name": "dst_offset_minutes",
+          "type": "integer | NULL"
+        }
+      ]
+    },
+    {
+      "id": "city",
+      "label": "reference.cities",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "iata_code",
+          "type": "char(3)",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "country_code",
+          "type": "char(2)",
+          "key": "fk"
+        },
+        {
+          "name": "state_code",
+          "type": "text"
+        },
+        {
+          "name": "time_zone",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "latitude",
+          "type": "numeric(9,6)"
+        },
+        {
+          "name": "longitude",
+          "type": "numeric(9,6)"
+        },
+        {
+          "name": "search_rank",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "apt",
+      "label": "reference.airports",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "iata_code",
+          "type": "char(3)",
+          "key": "pk"
+        },
+        {
+          "name": "icao_code",
+          "type": "char(4)",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "city_code",
+          "type": "char(3)",
+          "key": "fk"
+        },
+        {
+          "name": "city_name",
+          "type": "text"
+        },
+        {
+          "name": "country_code",
+          "type": "char(2)",
+          "key": "fk"
+        },
+        {
+          "name": "time_zone",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "kind",
+          "type": "airport|heliport|rail_station|bus_station|seaplane_base"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean"
+        },
+        {
+          "name": "search_rank",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "air",
+      "label": "reference.airlines",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "iata_code",
+          "type": "char(2)",
+          "key": "pk"
+        },
+        {
+          "name": "icao_code",
+          "type": "char(3)",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "country_code",
+          "type": "char(2)",
+          "key": "fk"
+        },
+        {
+          "name": "accounting_code",
+          "type": "char(3)"
+        },
+        {
+          "name": "alliance",
+          "type": "star_alliance|oneworld|skyteam"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "id": "acft",
+      "label": "reference.aircraft",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "iata_code",
+          "type": "char(3)",
+          "key": "pk"
+        },
+        {
+          "name": "icao_code",
+          "type": "char(4)"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "body_type",
+          "type": "narrow|wide|regional|turboprop|helicopter|other"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "cur",
+      "to": "cty",
+      "label": "currency_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "cty",
+      "to": "tz",
+      "label": "country_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "cty",
+      "to": "city",
+      "label": "country_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tz",
+      "to": "city",
+      "label": "time_zone",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "city",
+      "to": "apt",
+      "label": "city_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "cty",
+      "to": "apt",
+      "label": "country_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tz",
+      "to": "apt",
+      "label": "time_zone",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "cty",
+      "to": "air",
+      "label": "country_code",
+      "cardinality": "1-n"
+    }
+  ]
+}

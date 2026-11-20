@@ -1,0 +1,107 @@
+{
+  "id": "seq-storefront-request",
+  "type": "sequence",
+  "title": "A storefront request through Caddy, on-demand TLS and the WAF",
+  "caption": "deploy/caddy/Caddyfile snippets (storefront), (waf), (waf_refusal_json); platform/backend/src/domains/tls-ask.service.ts. First visit to a new host triggers the ask; later visits reuse the certificate.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Browser",
+      "kind": "user"
+    },
+    {
+      "id": "c",
+      "label": "Caddy",
+      "kind": "edge"
+    },
+    {
+      "id": "ask",
+      "label": "Platform API /internal/tls/ask",
+      "kind": "api"
+    },
+    {
+      "id": "acme",
+      "label": "Let's Encrypt",
+      "kind": "external"
+    },
+    {
+      "id": "waf",
+      "label": "Coraza WAF (CRS v4, PL1)",
+      "kind": "edge"
+    },
+    {
+      "id": "ota",
+      "label": "OTA API 127.0.0.1:4000",
+      "kind": "api"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "c",
+      "label": "TLS ClientHello for acme.ota.example.com (unknown name)",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "ask",
+      "label": "GET /internal/tls/ask?domain=acme.ota.example.com",
+      "kind": "call"
+    },
+    {
+      "from": "ask",
+      "to": "c",
+      "label": "200 for a provisioning/active/suspended tenant sub-domain or a verified custom domain (active tenant, plan with customDomains > 0, switch custom_domains on); else 404",
+      "kind": "return",
+      "note": "Allowed answers are cached in Redis tlsask:<host> (60 s); refusals in an in-process LRU (10 000 hosts, 60 s)."
+    },
+    {
+      "from": "c",
+      "to": "acme",
+      "label": "obtain certificate (only after 200)",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "c",
+      "label": "GET /api/v1/... or POST /api/v1/checkouts/...",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "c",
+      "label": "request id, security headers, strip client X-Velexis-Edge/Host",
+      "kind": "self"
+    },
+    {
+      "from": "c",
+      "to": "waf",
+      "label": "/api/* and /checkout/*: blocking ({$VELEXIS_WAF_ENGINE:On}); other paths DetectionOnly",
+      "kind": "call"
+    },
+    {
+      "from": "waf",
+      "to": "c",
+      "label": "anomaly ≥ 5 → 403 FORBIDDEN envelope; bad body or ≥ 1000 args → 400 INVALID_REQUEST; > 128 KiB args → 413",
+      "kind": "return"
+    },
+    {
+      "from": "c",
+      "to": "ota",
+      "label": "strip /api, header_up X-Velexis-Edge (secret) + X-Velexis-Host, body ≤ 256KB",
+      "kind": "call"
+    },
+    {
+      "from": "ota",
+      "to": "c",
+      "label": "answer (or 502/503/504 → JSON SERVICE_UNAVAILABLE)",
+      "kind": "return"
+    },
+    {
+      "from": "c",
+      "to": "b",
+      "label": "response; access log with query values filtered",
+      "kind": "return"
+    }
+  ]
+}

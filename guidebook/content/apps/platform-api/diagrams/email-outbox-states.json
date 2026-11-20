@@ -1,0 +1,80 @@
+{
+  "id": "email-outbox-states",
+  "type": "state",
+  "title": "E-mail outbox row",
+  "caption": "`platform.email_outbox.status`. Secret data (links with tokens) is encrypted and erased at a final status (`secrets_purged_at`).",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal",
+      "detail": "Queued in the caller's transaction; job email.send after commit."
+    },
+    {
+      "id": "sending",
+      "label": "sending",
+      "kind": "normal",
+      "detail": "Claimed by the worker (attempts + 1)."
+    },
+    {
+      "id": "sent",
+      "label": "sent",
+      "kind": "final",
+      "detail": "sent_at, provider_message_id (Message-ID); purged after 30 days."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "5 attempts used (30 s, 60 s, 120 s, 240 s backoff: about 7.5 min of SMTP outage) or unrecoverable (unknown template, bad variables or recipient, undecryptable secret). Never retried by the sweep."
+    },
+    {
+      "id": "canceled",
+      "label": "canceled (CHECK only)",
+      "kind": "final",
+      "detail": "Allowed by the CHECK; no code writes it."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending",
+      "label": "OutboxService.queue / queueOpsAlert"
+    },
+    {
+      "from": "pending",
+      "to": "sending",
+      "label": "email.send"
+    },
+    {
+      "from": "sending",
+      "to": "sent",
+      "label": "SMTP accepted"
+    },
+    {
+      "from": "sending",
+      "to": "pending",
+      "label": "SMTP failure (last_error), BullMQ retry"
+    },
+    {
+      "from": "sending",
+      "to": "failed",
+      "label": "last attempt / unrecoverable"
+    },
+    {
+      "from": "pending",
+      "to": "pending",
+      "label": "email.sweep (every minute) re-enqueues rows older than 2 min whose job is missing or finished"
+    },
+    {
+      "from": "sending",
+      "to": "sending",
+      "label": "email.sweep re-enqueues rows unchanged for 10 min (worker stopped mid-send)"
+    }
+  ]
+}

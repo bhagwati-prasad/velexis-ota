@@ -1,0 +1,47 @@
+{
+  "id": "flow-content-and-templates",
+  "type": "flow",
+  "title": "Images, content pages and e-mail templates",
+  "caption": "settings/assets, settings/pages, settings/templates (OAD-014, OAD-015); settings-effects.e2e.ts for the page and the broken template.",
+  "steps": [
+    {
+      "title": "Upload a logo",
+      "actor": "Owner",
+      "screen": "/settings/assets",
+      "body": "**Upload an image**: \"What the image is for\" Logo, a PNG under 1 MB (at most 2000 × 2000 pixels), **Upload**.",
+      "expect": "Listed with type read from the bytes, size, dimensions; pickable in Brand and theme. An SVG or a 1.1 MB file is refused before any call."
+    },
+    {
+      "title": "Create a page",
+      "actor": "Owner",
+      "screen": "/settings/pages/new",
+      "body": "Address `about-us`, Language, Title, a Markdown body, \"Published on the storefront\", \"Listed in the storefront footer\", **Create page**.",
+      "expect": "The page opens; **View on storefront** opens `/p/about-us`; the footer links it."
+    },
+    {
+      "title": "A refused body",
+      "actor": "Tester",
+      "body": "Add raw `<script>` or a `javascript:` link and **Save**.",
+      "expect": "The message next to the line it names with **Go to line N**; nothing saved."
+    },
+    {
+      "title": "Edit a template",
+      "actor": "Owner",
+      "screen": "/settings/templates/booking.confirmed/email/en",
+      "body": "Change the subject, **Preview**, **Save**.",
+      "expect": "Preview in a sandboxed frame; saved as Customised; `settings.templates.put` staff action."
+    },
+    {
+      "title": "A template that does not compile",
+      "actor": "Tester",
+      "body": "Leave `{{` unclosed on line 2 of the HTML body, **Save**.",
+      "expect": "\"The template does not compile\", \"HTML body, line 2\" with **Go to line 2**; the row unchanged; a `failed` staff action."
+    },
+    {
+      "title": "Reset",
+      "actor": "Owner",
+      "body": "**Reset to default**.",
+      "expect": "The page says what serves the locale now (its language's row or the code default)."
+    }
+  ]
+}

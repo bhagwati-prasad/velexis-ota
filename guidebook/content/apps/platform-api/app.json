@@ -1,0 +1,1068 @@
+{
+  "id": "platform-api",
+  "name": "Platform API",
+  "kind": "backend",
+  "product": "platform",
+  "summary": "The NestJS control plane of Velexis: accounts, OTAs (tenants), billing, connections, domains, API keys and admin operations, plus a worker for queues and schedules.",
+  "audience": [
+    "Portal server (BFF)",
+    "Platform admin server",
+    "Caddy (TLS ask, webhooks)",
+    "Stripe (webhooks)",
+    "OTA worker and OTA API (queues, Redis, read-only tables)",
+    "Developers and operators (CLI)"
+  ],
+  "repoPath": "platform/backend",
+  "package": "@velexis/platform-backend",
+  "stack": [
+    "Node.js 24",
+    "TypeScript 5.6 (CommonJS)",
+    "NestJS 11 on Express 5",
+    "Kysely via @velexis/db on PostgreSQL 16",
+    "Redis 7 (ioredis)",
+    "BullMQ 5 (prefix vx)",
+    "Ajv 2020 OpenAPI 3.1 validation",
+    "jose (EdDSA JWT)",
+    "argon2 (Argon2id)",
+    "otplib (TOTP)",
+    "stripe 18",
+    "Nodemailer + Handlebars",
+    "pino / nestjs-pino",
+    "Vitest 4 + Supertest"
+  ],
+  "local": {
+    "url": "http://127.0.0.1:3100",
+    "port": 3100,
+    "command": "pnpm --filter @velexis/platform-backend dev",
+    "notes": "Starts the API (127.0.0.1:3100) and the worker (health on 127.0.0.1:3101). Needs PostgreSQL 16, Redis 7, Mailpit (http://127.0.0.1:8025) and the Amadeus stub (pnpm stub:amadeus); run pnpm dev:keys, pnpm db:migrate, pnpm db:seed:reference and dev:seed first; run the OTA worker for provisioning."
+  },
+  "production": {
+    "host": "api.platform.example.com"
+  },
+  "dependsOn": ["packages"],
+  "talksTo": [
+    {
+      "app": "portal",
+      "how": "Answers the portal server's REST calls on loopback (Bearer portal token, PADR-0019 BFF headers)"
+    },
+    {
+      "app": "platform-admin",
+      "how": "Answers the admin server's REST calls on loopback (Bearer admin token)"
+    },
+    {
+      "app": "ota-api",
+      "how": "BullMQ ota-tenant-ops (out) and platform-tenant-events (in); Redis vx:invalidate, ptk:, staffdeny:, apikey:used:; the OTA role reads selected platform tables"
+    },
+    {
+      "app": "deploy",
+      "how": "Caddy proxies api.platform.example.com, forwards /webhooks/stripe/* and calls GET /internal/tls/ask; systemd units velexis-platform-api and velexis-platform-worker"
+    },
+    {
+      "app": "packages",
+      "how": "Uses @velexis/db, api-types, errors, config, crypto, logger, testing"
+    }
+  ],
+  "data": [
+    "platform.accounts",
+    "platform.account_sessions",
+    "platform.account_tokens",
+    "platform.account_recovery_codes",
+    "platform.tenants",
+    "platform.tenant_memberships",
+    "platform.tenant_invitations",
+    "platform.tenant_domains",
+    "platform.api_keys",
+    "platform.api_key_tenant_grants",
+    "platform.plans",
+    "platform.subscriptions",
+    "platform.billing_customers",
+    "platform.billing_customer_attempts",
+    "platform.invoices",
+    "platform.stripe_events",
+    "platform.provisioning_jobs",
+    "platform.tenant_schema_migrations",
+    "platform.amadeus_accounts",
+    "platform.amadeus_offices",
+    "platform.supplier_connections",
+    "platform.payment_provider_connections",
+    "platform.credential_submissions",
+    "platform.tenant_payout_accounts",
+    "platform.settlements",
+    "platform.settlement_lines",
+    "platform.email_outbox",
+    "platform.platform_audit_log",
+    "platform.schema_migrations",
+    "reference.currencies (read)",
+    "reference.countries (read)",
+    "reference.time_zones (read)",
+    "Redis: ptk:, staffdeny:acct:, apikey:used:, vx:idem:, vx:stripe:sub:, mfach:, mfasetup:, mfastep:, stripe:oauth:, tlsask:, rl:",
+    "Redis channel vx:invalidate",
+    "BullMQ queues ota-tenant-ops, platform-tenant-events, platform-emails, platform-stripe-events, platform-domains, platform-connections, platform-settlements, platform-maintenance"
+  ],
+  "docs": [
+    "platform/backend/README.md",
+    "platform/backend/openapi/README.md",
+    "platform/backend/migrations/README.md",
+    "platform/docs/README.md",
+    "platform/docs/architecture.md",
+    "platform/docs/architecture-flows.md",
+    "platform/docs/data-model.md",
+    "platform/docs/api-inventory.md",
+    "platform/docs/api-inventory-resources.md",
+    "platform/docs/api-inventory-admin.md",
+    "platform/docs/scope.md",
+    "platform/docs/security-review.md",
+    "platform/docs/performance.md",
+    "platform/docs/flows/signup-and-create-ota.md",
+    "platform/docs/flows/provisioning.md",
+    "platform/docs/flows/amadeus-connection.md",
+    "platform/docs/flows/stripe-payments-account.md",
+    "platform/docs/flows/subscription-billing.md",
+    "platform/docs/flows/custom-domains.md",
+    "platform/docs/flows/api-keys.md",
+    "platform/docs/flows/team-and-ota-admin-sso.md",
+    "platform/docs/flows/platform-admin-operations.md",
+    "platform/docs/runbooks/platform-operations.md",
+    "platform/docs/runbooks/launch-checklist.md"
+  ],
+  "adrs": [
+    "platform/docs/adr/0001-tenant-provisioning-orchestration.md",
+    "platform/docs/adr/0002-stripe-billing-integration.md",
+    "platform/docs/adr/0003-settlement-of-velexis-collected-payments.md",
+    "platform/docs/adr/0004-custom-domain-verification.md",
+    "platform/docs/adr/0005-api-key-format-and-hashing.md",
+    "platform/docs/adr/0006-platform-admin-access-and-audit.md",
+    "platform/docs/adr/0007-portal-to-ota-admin-sso-token.md",
+    "platform/docs/adr/0008-email-verification-and-mfa-policy.md",
+    "platform/docs/adr/0009-platform-api-surface-and-authentication.md",
+    "platform/docs/adr/0010-credential-submission-and-verification.md",
+    "platform/docs/adr/0011-stripe-connect-standard-and-api-key-connections.md",
+    "platform/docs/adr/0012-amadeus-office-pool.md",
+    "platform/docs/adr/0013-platform-email-outbox.md",
+    "platform/docs/adr/0014-tenant-suspension-and-resume.md",
+    "platform/docs/adr/0015-milestone-feature-switches.md",
+    "platform/docs/adr/0016-contract-rollout-per-milestone-and-route-parity.md",
+    "platform/docs/adr/0017-platform-test-doubles-and-end-to-end-harness.md",
+    "platform/docs/adr/0018-onboarding-checklist-computation.md",
+    "platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md",
+    "docs/mvp/adr/0003-six-components-two-nestjs-backends.md",
+    "docs/mvp/adr/0004-postgresql-schema-per-tenant.md",
+    "docs/mvp/adr/0006-contract-first-openapi.md",
+    "docs/mvp/adr/0008-identity-accounts-customers-sessions.md",
+    "docs/mvp/adr/0009-background-jobs-bullmq.md",
+    "docs/mvp/adr/0010-secrets-envelope-encryption.md",
+    "docs/mvp/adr/0013-subscription-billing-stripe-billing.md",
+    "docs/mvp/adr/0018-hosted-storefront-custom-domains.md"
+  ],
+  "roles": [
+    {
+      "name": "OTA owner",
+      "can": "Everything on its OTA: profile, keys, domains, connections and credentials (step-up), team incl. owners/admins, billing, payout account (step-up), go-live (step-up), retry setup, reveal initial keys"
+    },
+    {
+      "name": "OTA admin (tenant role)",
+      "can": "Profile, API keys, domains, connections, invite/manage agent, finance and viewer members; no billing, payout or go-live"
+    },
+    {
+      "name": "Finance member",
+      "can": "See overview, connections (masked), subscription, invoices, settlements and payout account (masked)"
+    },
+    {
+      "name": "Agent / viewer",
+      "can": "See the overview and onboarding, list members, open the console, leave the OTA"
+    },
+    {
+      "name": "Platform admin",
+      "can": "Every /v1/admin/** operation (MFA mandatory; step-up for Amadeus credentials, settlement approve/pay, payout reveal, MFA reset, admin grant/revoke); changes, sign-ins and sensitive reads audited"
+    },
+    {
+      "name": "Signed-in, unverified account",
+      "can": "Only portal_unverified operations: getMe, updateMe, MFA set-up, sessions, sign-out, listTenants"
+    },
+    {
+      "name": "Anonymous",
+      "can": "Public operations: sign-up, verify, resend verification, sign-in, MFA verify, refresh, password reset, listPlans, invitation lookup, admin sign-in/MFA/refresh, health/live"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-up",
+      "operationId": "signUp",
+      "purpose": "Create a portal account [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/verify-email",
+      "operationId": "verifyEmail",
+      "purpose": "Verify the e-mail address [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/resend-verification",
+      "operationId": "resendVerification",
+      "purpose": "Send a new verification e-mail [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-in",
+      "operationId": "signIn",
+      "purpose": "Sign in to the portal with e-mail and password [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/mfa/verify",
+      "operationId": "verifyMfa",
+      "purpose": "Complete an MFA sign-in challenge [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/refresh",
+      "operationId": "refreshSession",
+      "purpose": "Rotate the refresh token [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-out",
+      "operationId": "signOut",
+      "purpose": "Sign out of the current session [Auth; portal_unverified]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-out-everywhere",
+      "operationId": "signOutEverywhere",
+      "purpose": "Sign out of every session [Auth; portal_unverified]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/password-reset",
+      "operationId": "requestPasswordReset",
+      "purpose": "E-mail a password reset link [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/password-reset/confirm",
+      "operationId": "confirmPasswordReset",
+      "purpose": "Set a new password with a reset token [Auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/step-up",
+      "operationId": "stepUp",
+      "purpose": "Confirm a sensitive action with a fresh TOTP code [Auth; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/me",
+      "operationId": "getMe",
+      "purpose": "Get the signed-in account [Account; portal_unverified]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/me",
+      "operationId": "updateMe",
+      "purpose": "Update the profile [Account; portal_unverified]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/password",
+      "operationId": "changePassword",
+      "purpose": "Change the password [Account; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/mfa/setup",
+      "operationId": "startMfaSetup",
+      "purpose": "Start the TOTP set-up [Account; portal_unverified]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/mfa/enable",
+      "operationId": "enableMfa",
+      "purpose": "Confirm the TOTP set-up and enable MFA [Account; portal_unverified]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/mfa/disable",
+      "operationId": "disableMfa",
+      "purpose": "Turn MFA off [Account; portal, step-up]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/me/mfa/recovery-codes",
+      "operationId": "regenerateRecoveryCodes",
+      "purpose": "Replace the recovery codes [Account; portal, step-up]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/me/sessions",
+      "operationId": "listSessions",
+      "purpose": "List the account's active sessions [Account; portal_unverified]"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/me/sessions/{familyId}",
+      "operationId": "revokeSession",
+      "purpose": "Revoke one session [Account; portal_unverified]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/plans",
+      "operationId": "listPlans",
+      "purpose": "List the public plans [Plans; public]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/key-availability",
+      "operationId": "checkTenantKey",
+      "purpose": "Check whether an OTA key is available [Tenants; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants",
+      "operationId": "listTenants",
+      "purpose": "List my OTAs [Tenants; portal_unverified]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants",
+      "operationId": "createTenant",
+      "purpose": "Create an OTA [Tenants; portal, Idempotency-Key]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}",
+      "operationId": "getTenant",
+      "purpose": "Get an OTA [Tenants; portal]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/tenants/{tenantId}",
+      "operationId": "updateTenant",
+      "purpose": "Update the OTA profile [Tenants; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/provisioning",
+      "operationId": "getProvisioning",
+      "purpose": "Get the setup progress of an OTA [Tenants; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/provisioning/retry",
+      "operationId": "retryProvisioning",
+      "purpose": "Retry a failed setup [Tenants; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/initial-keys/reveal",
+      "operationId": "revealInitialKeys",
+      "purpose": "Reveal the test API keys issued at setup, once [Tenants; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/onboarding",
+      "operationId": "getOnboarding",
+      "purpose": "Get the onboarding checklist of an OTA [Tenants; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/go-live",
+      "operationId": "goLive",
+      "purpose": "Switch the OTA's storefront to live [Tenants; portal, step-up, feature live_switch]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/members",
+      "operationId": "listMembers",
+      "purpose": "List the members of an OTA [Team; portal]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/tenants/{tenantId}/members/{memberId}",
+      "operationId": "updateMember",
+      "purpose": "Change a member's role [Team; portal; step-up to grant owner]"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/tenants/{tenantId}/members/{memberId}",
+      "operationId": "removeMember",
+      "purpose": "Remove a member, or leave the OTA [Team; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/invitations",
+      "operationId": "listInvitations",
+      "purpose": "List the pending invitations of an OTA [Team; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/invitations",
+      "operationId": "createInvitation",
+      "purpose": "Invite a person by e-mail [Team; portal]"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/tenants/{tenantId}/invitations/{invitationId}",
+      "operationId": "revokeInvitation",
+      "purpose": "Revoke an invitation [Team; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/invitations/{invitationId}/resend",
+      "operationId": "resendInvitation",
+      "purpose": "Send an invitation again [Team; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/invitations/lookup",
+      "operationId": "lookupInvitation",
+      "purpose": "Show an invitation before accepting it [Team; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/invitations/accept",
+      "operationId": "acceptInvitation",
+      "purpose": "Accept an invitation and join the OTA [Team; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/console-token",
+      "operationId": "createConsoleToken",
+      "purpose": "Issue a one-time token that signs the member in to the OTA admin [Team; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/api-keys",
+      "operationId": "listApiKeys",
+      "purpose": "List the API keys of an OTA [API keys; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/api-keys",
+      "operationId": "createApiKey",
+      "purpose": "Create an API key, shown once [API keys; portal; step-up for a live secret key]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/tenants/{tenantId}/api-keys/{keyId}",
+      "operationId": "updateApiKey",
+      "purpose": "Rename an API key or change its origins [API keys; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/api-keys/{keyId}/roll",
+      "operationId": "rollApiKey",
+      "purpose": "Replace an API key with a new one, shown once [API keys; portal; step-up for a live secret key]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/api-keys/{keyId}/revoke",
+      "operationId": "revokeApiKey",
+      "purpose": "Revoke an API key now [API keys; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/domains",
+      "operationId": "listDomains",
+      "purpose": "List the storefront domains of an OTA [Domains; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/domains",
+      "operationId": "addDomain",
+      "purpose": "Add a custom storefront domain [Domains; portal, feature custom_domains]"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/tenants/{tenantId}/domains/{domainId}",
+      "operationId": "removeDomain",
+      "purpose": "Remove a custom domain [Domains; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/domains/{domainId}/check",
+      "operationId": "checkDomain",
+      "purpose": "Check the DNS records of a custom domain now [Domains; portal, feature custom_domains]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/domains/{domainId}/make-primary",
+      "operationId": "makeDomainPrimary",
+      "purpose": "Make a verified domain the primary storefront host [Domains; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/amadeus-connections",
+      "operationId": "listAmadeusConnections",
+      "purpose": "List the Amadeus connections of an OTA [Connections; portal]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/tenants/{tenantId}/amadeus-connections/{environment}",
+      "operationId": "updateAmadeusConnection",
+      "purpose": "Change the office defaults, ticketing defaults and monitored queues of an Amadeus connection [Connections; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/amadeus-connections/live/request",
+      "operationId": "requestLiveAmadeus",
+      "purpose": "Ask Velexis for a live Amadeus office [Connections; portal, feature live_switch]"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/tenants/{tenantId}/amadeus-connections/{environment}/credentials",
+      "operationId": "submitAmadeusCredentials",
+      "purpose": "Submit the OTA's own Amadeus credentials for verification [Connections; portal, step-up, feature own_amadeus]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/credential-submissions/{submissionId}",
+      "operationId": "getCredentialSubmission",
+      "purpose": "Follow the verification of submitted credentials [Connections; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/payment-connections",
+      "operationId": "listPaymentConnections",
+      "purpose": "List the payment connections of an OTA [Connections; portal]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/tenants/{tenantId}/payment-connections/{environment}",
+      "operationId": "updatePaymentConnection",
+      "purpose": "Change the card statement descriptor suffix of a payment connection [Connections; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/payment-connections/stripe-connect/start",
+      "operationId": "startStripeConnect",
+      "purpose": "Start connecting the OTA's own Stripe account with Connect Standard [Connections; portal, step-up, feature own_stripe]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/payment-connections/stripe-connect/callback",
+      "operationId": "completeStripeConnect",
+      "purpose": "Finish connecting the OTA's own Stripe account [Connections; portal, feature own_stripe]"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/tenants/{tenantId}/payment-connections/{environment}/api-keys",
+      "operationId": "submitStripeApiKeys",
+      "purpose": "Submit the OTA's own Stripe API keys for verification [Connections; portal, step-up, feature own_stripe]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/payment-connections/{environment}/use-velexis",
+      "operationId": "useVelexisPayments",
+      "purpose": "Return a payment connection to the Velexis Stripe account [Connections; portal, step-up]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/subscription",
+      "operationId": "getSubscription",
+      "purpose": "Get the subscription of an OTA [Billing; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/billing/checkout-session",
+      "operationId": "createCheckoutSession",
+      "purpose": "Open a Stripe Checkout to choose or restart a paid plan [Billing; portal, feature stripe_billing, Idempotency-Key]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants/{tenantId}/billing/portal-session",
+      "operationId": "createCustomerPortalSession",
+      "purpose": "Open the Stripe Customer Portal [Billing; portal, feature stripe_billing]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/invoices",
+      "operationId": "listInvoices",
+      "purpose": "List the Velexis invoices of an OTA [Billing; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/payout-account",
+      "operationId": "getPayoutAccount",
+      "purpose": "Get the OTA's payout account, masked [Settlements; portal]"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/tenants/{tenantId}/payout-account",
+      "operationId": "setPayoutAccount",
+      "purpose": "Set or replace the OTA's payout account [Settlements; portal, step-up, feature settlements]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/settlements",
+      "operationId": "listSettlements",
+      "purpose": "List the settlement statements of an OTA [Settlements; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/settlements/{settlementId}",
+      "operationId": "getSettlement",
+      "purpose": "Get one settlement statement with its totals [Settlements; portal]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants/{tenantId}/settlements/{settlementId}/lines.csv",
+      "operationId": "downloadSettlementLines",
+      "purpose": "Download the lines of a settlement statement as CSV [Settlements; portal]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/sign-in",
+      "operationId": "adminSignIn",
+      "purpose": "Sign in to the platform admin with e-mail and password [Admin auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/mfa/verify",
+      "operationId": "adminVerifyMfa",
+      "purpose": "Complete an admin sign-in with a TOTP or recovery code [Admin auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/refresh",
+      "operationId": "adminRefresh",
+      "purpose": "Rotate the admin refresh token [Admin auth; public]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/step-up",
+      "operationId": "adminStepUp",
+      "purpose": "Confirm a sensitive admin action with a fresh TOTP code [Admin auth; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/auth/sign-out",
+      "operationId": "adminSignOut",
+      "purpose": "Sign out of the platform admin [Admin auth; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/me",
+      "operationId": "adminGetMe",
+      "purpose": "Get the signed-in platform admin [Admin auth; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/dashboard",
+      "operationId": "adminGetDashboard",
+      "purpose": "Get the counters of the admin dashboard [Admin dashboard; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/tenants",
+      "operationId": "adminListTenants",
+      "purpose": "Search every OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/tenants/{tenantId}",
+      "operationId": "adminGetTenant",
+      "purpose": "Get the control-plane view of an OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/tenants/{tenantId}",
+      "operationId": "adminUpdateTenant",
+      "purpose": "Edit the internal notes or the legal name of an OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/suspend",
+      "operationId": "adminSuspendTenant",
+      "purpose": "Suspend an OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/resume",
+      "operationId": "adminResumeTenant",
+      "purpose": "Resume a suspended OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/migrate",
+      "operationId": "adminMigrateTenant",
+      "purpose": "Re-run the tenant migrations of an OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/connections/{kind}/{environment}/status",
+      "operationId": "adminSetConnectionStatus",
+      "purpose": "Disable or re-enable a connection of an OTA [Admin tenants; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/provisioning-jobs",
+      "operationId": "adminListProvisioningJobs",
+      "purpose": "List the tenant jobs [Admin provisioning jobs; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/provisioning-jobs/{jobId}",
+      "operationId": "adminGetProvisioningJob",
+      "purpose": "Get a tenant job with its step log [Admin provisioning jobs; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/provisioning-jobs/{jobId}/retry",
+      "operationId": "adminRetryProvisioningJob",
+      "purpose": "Retry a failed tenant job [Admin provisioning jobs; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/provisioning-jobs/{jobId}/cancel",
+      "operationId": "adminCancelProvisioningJob",
+      "purpose": "Cancel a queued tenant job [Admin provisioning jobs; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/queues",
+      "operationId": "adminListQueues",
+      "purpose": "Get the health of every queue [Admin queues; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/queues/{queue}/failed",
+      "operationId": "adminListFailedQueueJobs",
+      "purpose": "List the failed jobs of a queue [Admin queues; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/queues/{queue}/jobs/{jobId}/retry",
+      "operationId": "adminRetryQueueJob",
+      "purpose": "Retry a failed job of a platform queue [Admin queues; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/plans",
+      "operationId": "adminListPlans",
+      "purpose": "List every plan with its Stripe link state [Admin billing; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/plans",
+      "operationId": "adminCreatePlan",
+      "purpose": "Create a plan [Admin billing; platform_admin]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/plans/{planCode}",
+      "operationId": "adminUpdatePlan",
+      "purpose": "Edit or retire a plan [Admin billing; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/plans/{planCode}/check-prices",
+      "operationId": "adminCheckPlanPrices",
+      "purpose": "Compare a plan with its Stripe prices [Admin billing; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/subscriptions",
+      "operationId": "adminListSubscriptions",
+      "purpose": "List the subscriptions of every OTA [Admin billing; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/subscriptions/{subscriptionId}",
+      "operationId": "adminGetSubscription",
+      "purpose": "Get a subscription with its invoices and Stripe events [Admin billing; platform_admin]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/subscriptions/{subscriptionId}",
+      "operationId": "adminUpdateManualSubscription",
+      "purpose": "Edit a manual subscription [Admin billing; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/subscriptions/{subscriptionId}/resync",
+      "operationId": "adminResyncSubscription",
+      "purpose": "Re-fetch a Stripe subscription [Admin billing; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/invoices",
+      "operationId": "adminListInvoices",
+      "purpose": "List the invoices of every OTA [Admin billing; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/stripe-events",
+      "operationId": "adminListStripeEvents",
+      "purpose": "List the Stripe webhook inbox [Admin billing; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/stripe-events/{eventId}/reprocess",
+      "operationId": "adminReprocessStripeEvent",
+      "purpose": "Re-run a failed or ignored Stripe event [Admin billing; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/amadeus-accounts",
+      "operationId": "adminListAmadeusAccounts",
+      "purpose": "List the Velexis Amadeus accounts [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-accounts",
+      "operationId": "adminCreateAmadeusAccount",
+      "purpose": "Enter the shared Amadeus credentials of an environment [Admin Amadeus; platform_admin, step-up]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/amadeus-accounts/{accountId}",
+      "operationId": "adminUpdateAmadeusAccount",
+      "purpose": "Rename, rotate or disable a Velexis Amadeus account [Admin Amadeus; platform_admin; step-up for a new host, client id or secret]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-accounts/{accountId}/verify",
+      "operationId": "adminVerifyAmadeusAccount",
+      "purpose": "Verify a Velexis Amadeus account again [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/amadeus-offices",
+      "operationId": "adminListAmadeusOffices",
+      "purpose": "List the Amadeus office pool [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices",
+      "operationId": "adminAddAmadeusOffices",
+      "purpose": "Add offices to the pool in bulk [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}",
+      "operationId": "adminUpdateAmadeusOffice",
+      "purpose": "Edit the notes of an office [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}/assign",
+      "operationId": "adminAssignAmadeusOffice",
+      "purpose": "Assign an office to an OTA [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}/release",
+      "operationId": "adminReleaseAmadeusOffice",
+      "purpose": "Return an office to the pool [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/amadeus-offices/{officeRowId}/retire",
+      "operationId": "adminRetireAmadeusOffice",
+      "purpose": "Retire an office [Admin Amadeus; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements",
+      "operationId": "adminListSettlements",
+      "purpose": "List the settlement statements of every OTA [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/generate",
+      "operationId": "adminGenerateSettlements",
+      "purpose": "Build or rebuild the drafts of a month [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements/{settlementId}",
+      "operationId": "adminGetSettlement",
+      "purpose": "Get a statement with its totals and the payout account status [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements/{settlementId}/lines",
+      "operationId": "adminListSettlementLines",
+      "purpose": "List the lines of a statement [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/settlements/{settlementId}/lines.csv",
+      "operationId": "adminDownloadSettlementLines",
+      "purpose": "Download the lines of a statement as CSV [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/adjustments",
+      "operationId": "adminAddSettlementAdjustment",
+      "purpose": "Add a manual adjustment line to a draft [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/approve",
+      "operationId": "adminApproveSettlement",
+      "purpose": "Approve a draft [Admin settlements; platform_admin, step-up]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/mark-paid",
+      "operationId": "adminMarkSettlementPaid",
+      "purpose": "Record the bank transfer of an approved statement [Admin settlements; platform_admin, step-up]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/settlements/{settlementId}/void",
+      "operationId": "adminVoidSettlement",
+      "purpose": "Void a draft [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/tenants/{tenantId}/payout-account",
+      "operationId": "adminGetPayoutAccount",
+      "purpose": "Get an OTA's payout account, masked [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/payout-account/reveal",
+      "operationId": "adminRevealPayoutAccount",
+      "purpose": "Reveal an OTA's bank details to pay a settlement [Admin settlements; platform_admin, step-up]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/tenants/{tenantId}/payout-account/review",
+      "operationId": "adminReviewPayoutAccount",
+      "purpose": "Verify or reject an OTA's payout account [Admin settlements; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/domains",
+      "operationId": "adminListDomains",
+      "purpose": "List the storefront hosts of every OTA [Admin domains; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/domains/{domainId}/recheck",
+      "operationId": "adminRecheckDomain",
+      "purpose": "Check a host's DNS records and certificate now [Admin domains; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/domains/{domainId}/remove",
+      "operationId": "adminRemoveDomain",
+      "purpose": "Remove an abusive custom domain [Admin domains; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/accounts",
+      "operationId": "adminListAccounts",
+      "purpose": "Search the accounts [Admin accounts; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/accounts/{accountId}",
+      "operationId": "adminGetAccount",
+      "purpose": "Get an account for support [Admin accounts; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/disable",
+      "operationId": "adminDisableAccount",
+      "purpose": "Disable an account [Admin accounts; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/enable",
+      "operationId": "adminEnableAccount",
+      "purpose": "Enable a disabled account [Admin accounts; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/unlock",
+      "operationId": "adminUnlockAccount",
+      "purpose": "Clear the sign-in lockout of an account [Admin accounts; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/accounts/{accountId}/reset-mfa",
+      "operationId": "adminResetAccountMfa",
+      "purpose": "Turn off the MFA of an account after an identity check [Admin accounts; platform_admin, step-up]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/admins",
+      "operationId": "adminListAdmins",
+      "purpose": "List the platform admins [Admin accounts; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/admin/admins",
+      "operationId": "adminGrantAdmin",
+      "purpose": "Grant platform admin rights [Admin accounts; platform_admin, step-up]"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/admin/admins/{accountId}",
+      "operationId": "adminRevokeAdmin",
+      "purpose": "Revoke platform admin rights [Admin accounts; platform_admin, step-up]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/audit-log",
+      "operationId": "adminListAudit",
+      "purpose": "Search the platform audit log [Admin audit; platform_admin]"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/admin/audit-log.csv",
+      "operationId": "adminExportAudit",
+      "purpose": "Export the platform audit log as CSV [Admin audit; platform_admin]"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/stripe/billing",
+      "operationId": "receiveStripeBillingEvent",
+      "purpose": "Receive a Stripe Billing event [Webhooks; webhook]"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/stripe/connect-accounts",
+      "operationId": "receiveStripeConnectAccountEvent",
+      "purpose": "Receive a Stripe Connect account event [Webhooks; webhook]"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/tls/ask",
+      "operationId": "tlsAsk",
+      "purpose": "Decide whether Caddy may obtain a certificate for a host [Internal; internal]"
+    },
+    {
+      "method": "GET",
+      "path": "/health/live",
+      "operationId": "healthLive",
+      "purpose": "Liveness of the API process [Internal; public]"
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "operationId": "healthReady",
+      "purpose": "Readiness of the API process and its dependencies [Internal; internal]"
+    }
+  ],
+  "tags": [
+    "control-plane",
+    "nestjs",
+    "tenancy",
+    "provisioning",
+    "billing",
+    "stripe",
+    "amadeus",
+    "custom-domains",
+    "api-keys",
+    "mfa",
+    "audit",
+    "bullmq",
+    "openapi"
+  ]
+}

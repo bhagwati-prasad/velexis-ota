@@ -1,0 +1,38 @@
+{
+  "id": "flow-add-operation",
+  "type": "flow",
+  "title": "Add or change an operation in the SDK (contract first)",
+  "caption": "What a fix that touches the API surface must do so CI stays green (CLAUDE.md rule 3, README §6). The contract files under docs/velexis-sdk/sdk/src/ are never edited.",
+  "steps": [
+    {
+      "title": "Change the OpenAPI document",
+      "actor": "Maintainer",
+      "body": "Edit `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`: the operation with its `x-sdk-method` (dotted name), `x-scope`, `x-permission`, `x-error-codes`, `x-tenant-tables`, and `x-idempotent-by-design` where a POST is safe to repeat. Regenerate the API types (`pnpm contracts:generate` or the api-types build).",
+      "expect": "The document lints; `@velexis/api-types` has the new schemas."
+    },
+    {
+      "title": "Regenerate the route table",
+      "actor": "Maintainer",
+      "body": "`pnpm --filter @velexis/ota-sdk generate`. Long operations or `retry: never` need an entry with a `reason` in `scripts/operation-overrides.json`.",
+      "expect": "`src/internal/operations.js` and `test/contract/methods.generated.ts` change; the parity test now fails until the method exists."
+    },
+    {
+      "title": "Write the one-line method with JSDoc",
+      "actor": "Maintainer",
+      "body": "In `src/namespaces/<ns>.js`: `name: (params, options) => core.call(op.<ns>_<name>, params, live(options))` with `@param`, `@returns` and one `@throws` per class of the operation's `x-error-codes` (and the generic refusals it lists). Use `requireIfMatch` when the operation requires `If-Match`.",
+      "expect": "`pnpm --filter @velexis/ota-sdk typecheck` passes; `test/contract/throws.test.js` passes."
+    },
+    {
+      "title": "Test it",
+      "actor": "Maintainer",
+      "body": "Add a case to `test/unit/namespaces-<ns>.test.js` with the fake fetch: method, path, query, headers (Idempotency-Key, If-Match, X-Velexis-Environment) and body.",
+      "expect": "`pnpm --filter @velexis/ota-sdk test` green, parity included."
+    },
+    {
+      "title": "Document it",
+      "actor": "Maintainer",
+      "body": "An MVP addition goes into `ota/sdk/docs/extensions.md` §3; add a line to `CHANGELOG.md`; update counts in `README.md` §1 and §5.2.",
+      "expect": "`pnpm --filter @velexis/ota-sdk build` stays under 25 KB; the bundle test passes."
+    }
+  ]
+}

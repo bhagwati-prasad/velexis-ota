@@ -1,0 +1,41 @@
+{
+  "id": "screen-map",
+  "type": "tree",
+  "title": "Portal screen map",
+  "caption": "Route groups of the Next.js app directory.",
+  "root": {
+    "name": "Portal",
+    "detail": "`platform/frontend/src/app`",
+    "children": [
+      {
+        "name": "(marketing)",
+        "children": [{ "name": "/" }, { "name": "/pricing" }, { "name": "/legal/terms" }]
+      },
+      {
+        "name": "(auth)",
+        "children": [
+          { "name": "/sign-up", "detail": "Creates an [[account]]." },
+          { "name": "/sign-in" },
+          { "name": "/sign-in/mfa", "term": "mfa" },
+          { "name": "/forgot-password" }
+        ]
+      },
+      {
+        "name": "(app)",
+        "children": [
+          { "name": "/dashboard" },
+          { "name": "/otas/new", "term": "tenant" },
+          {
+            "name": "/otas/[tenantId]",
+            "children": [
+              { "name": "billing", "term": "subscription" },
+              { "name": "team", "term": "membership" },
+              { "name": "api-keys", "term": "api-key" }
+            ]
+          },
+          { "name": "/account/security", "term": "mfa" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,669 @@
+{
+  "id": "er-shop-and-book",
+  "type": "er",
+  "title": "Tables behind search, checkout and booking",
+  "caption": "What the storefront's calls read and write in the OTA's `tenant_<key>` schema (`ota/backend/migrations/tenant/0001_baseline.sql` + `0002`-`0005`). The storefront never touches the database itself: every row here is written by the OTA API through `tenantTx`. Key columns only.",
+  "entities": [
+    {
+      "id": "storefront_settings",
+      "label": "storefront_settings",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "brand_name",
+          "type": "text"
+        },
+        {
+          "name": "theme",
+          "type": "jsonb"
+        },
+        {
+          "name": "default_currency / supported_currencies",
+          "type": "char(3) / text[]"
+        },
+        {
+          "name": "guest_checkout_enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "customer_accounts_enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "require_email_verification",
+          "type": "boolean"
+        },
+        {
+          "name": "features",
+          "type": "jsonb (ancillaries, brandedFareUpsell, selfServiceCancellation)"
+        },
+        {
+          "name": "airline_card_enabled_test / _live",
+          "type": "boolean"
+        },
+        {
+          "name": "offer_ttl_minutes / checkout_ttl_minutes",
+          "type": "integer"
+        },
+        {
+          "name": "accepted_card_brands",
+          "type": "text[]"
+        },
+        {
+          "name": "time_zone",
+          "type": "text"
+        },
+        {
+          "name": "version",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "storefront_pages",
+      "label": "storefront_pages",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "locale",
+          "type": "text"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "body_markdown",
+          "type": "text"
+        },
+        {
+          "name": "is_published",
+          "type": "boolean"
+        },
+        {
+          "name": "show_in_footer",
+          "type": "boolean"
+        },
+        {
+          "name": "sort_order",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "storefront_assets",
+      "label": "storefront_assets",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (ast_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "content_type",
+          "type": "text"
+        },
+        {
+          "name": "storage_key",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "flight_searches",
+      "label": "flight_searches",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (srch_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "mode",
+          "type": "simple|advanced"
+        },
+        {
+          "name": "customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "criteria",
+          "type": "jsonb"
+        },
+        {
+          "name": "currency",
+          "type": "char(3)"
+        },
+        {
+          "name": "status",
+          "type": "pending|completed|failed"
+        },
+        {
+          "name": "result_count",
+          "type": "integer"
+        },
+        {
+          "name": "facets",
+          "type": "jsonb"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "flight_offers",
+      "label": "flight_offers",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (off_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "search_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "origin",
+          "type": "search|upsell"
+        },
+        {
+          "name": "net_total / markup_amount / selling_total",
+          "type": "numeric(12,2)"
+        },
+        {
+          "name": "max_stops",
+          "type": "smallint"
+        },
+        {
+          "name": "marketing_carriers",
+          "type": "text[]"
+        },
+        {
+          "name": "branded_fares",
+          "type": "text[]"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "priced_offers",
+      "label": "priced_offers",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (prc_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "offer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "parent_priced_offer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "booking_requirements",
+          "type": "jsonb"
+        },
+        {
+          "name": "price_changed",
+          "type": "boolean"
+        },
+        {
+          "name": "selling_total / fee_amount",
+          "type": "numeric(12,2)"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "checkouts",
+      "label": "checkouts",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (chk_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "is_guest",
+          "type": "boolean"
+        },
+        {
+          "name": "base_priced_offer_id / priced_offer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "status",
+          "type": "open|payment_pending|completed|expired|abandoned"
+        },
+        {
+          "name": "pricing_mode",
+          "type": "markup_rules|net"
+        },
+        {
+          "name": "total_amount",
+          "type": "numeric(12,2)"
+        },
+        {
+          "name": "terms_accepted_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "version",
+          "type": "integer"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "checkout_travelers",
+      "label": "checkout_travelers",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (ctr_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "checkout_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "traveler_type",
+          "type": "text"
+        },
+        {
+          "name": "first_name / last_name",
+          "type": "text"
+        },
+        {
+          "name": "date_of_birth",
+          "type": "date"
+        },
+        {
+          "name": "documents_ciphertext",
+          "type": "bytea"
+        }
+      ]
+    },
+    {
+      "id": "checkout_contacts",
+      "label": "checkout_contacts",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "checkout_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "is_primary",
+          "type": "boolean"
+        },
+        {
+          "name": "email",
+          "type": "text"
+        },
+        {
+          "name": "phones",
+          "type": "jsonb"
+        }
+      ]
+    },
+    {
+      "id": "payments",
+      "label": "payments",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (pay_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "checkout_id / booking_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "provider",
+          "type": "stripe|airline|…"
+        },
+        {
+          "name": "method",
+          "type": "card|airline_card|…"
+        },
+        {
+          "name": "status",
+          "type": "requires_payment_method … captured, canceled, failed"
+        },
+        {
+          "name": "amount / card_fee_amount",
+          "type": "numeric(12,2)"
+        },
+        {
+          "name": "card_brand / card_bin / card_last4",
+          "type": "text"
+        },
+        {
+          "name": "card_fee_lines",
+          "type": "jsonb"
+        }
+      ]
+    },
+    {
+      "id": "bookings",
+      "label": "bookings",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (bkg_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "reference",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "checkout_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text (NULL = guest)",
+          "key": "fk"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "status",
+          "type": "pending|confirmed|ticketed|partially_ticketed|cancelled|failed"
+        },
+        {
+          "name": "ticketing_status",
+          "type": "text"
+        },
+        {
+          "name": "record_locator",
+          "type": "text"
+        },
+        {
+          "name": "contact_email / lead_last_name",
+          "type": "text"
+        },
+        {
+          "name": "total_amount",
+          "type": "numeric(12,2)"
+        },
+        {
+          "name": "version",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "booking_access_tokens",
+      "label": "booking_access_tokens",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "booking_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "token_hash",
+          "type": "text"
+        },
+        {
+          "name": "issued_via",
+          "type": "booking_created|lookup|email_link|staff"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "use_count",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "booking_events",
+      "label": "booking_events",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "booking_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        },
+        {
+          "name": "summary",
+          "type": "text"
+        },
+        {
+          "name": "visible_to_customer",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "id": "notifications",
+      "label": "notifications",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "booking_id / customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "template_key",
+          "type": "text"
+        },
+        {
+          "name": "recipient",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "pending|sending|sent|…"
+        }
+      ]
+    },
+    {
+      "id": "idempotency_keys",
+      "label": "idempotency_keys",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "scope / key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "request_hash",
+          "type": "text"
+        },
+        {
+          "name": "response_status",
+          "type": "smallint"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "flight_searches",
+      "to": "flight_offers",
+      "label": "search_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "flight_offers",
+      "to": "priced_offers",
+      "label": "offer_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "priced_offers",
+      "to": "priced_offers",
+      "label": "parent_priced_offer_id (extras)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "priced_offers",
+      "to": "checkouts",
+      "label": "base_priced_offer_id / priced_offer_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "checkouts",
+      "to": "checkout_travelers",
+      "label": "checkout_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "checkouts",
+      "to": "checkout_contacts",
+      "label": "checkout_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "checkouts",
+      "to": "payments",
+      "label": "checkout_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "checkouts",
+      "to": "bookings",
+      "label": "checkout_id (one booking per checkout)",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "bookings",
+      "to": "payments",
+      "label": "booking_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "bookings",
+      "to": "booking_access_tokens",
+      "label": "booking_id (guest access)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "bookings",
+      "to": "booking_events",
+      "label": "booking_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "bookings",
+      "to": "notifications",
+      "label": "booking_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "storefront_assets",
+      "to": "storefront_settings",
+      "label": "logo_asset_id, favicon_asset_id",
+      "cardinality": "1-n"
+    }
+  ]
+}

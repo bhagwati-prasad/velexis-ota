@@ -1,0 +1,96 @@
+{
+  "id": "go-live-states",
+  "type": "state",
+  "title": "The go-live page",
+  "caption": "The page knows only what is certain before the switch; every answer of goLive then decides the six preconditions. tenants.storefront_environment moves from test to live.",
+  "states": [
+    {
+      "id": "test",
+      "label": "Test mode: checklist",
+      "kind": "initial",
+      "detail": "Two-factor from `getMe`; live Amadeus missing when `live_requested` is not done; the rest \"Checked when you go live\"."
+    },
+    {
+      "id": "confirm",
+      "label": "Confirm dialog",
+      "kind": "normal",
+      "detail": "\"Switch your storefront to live?\""
+    },
+    {
+      "id": "stepup",
+      "label": "Step-up dialog",
+      "kind": "normal",
+      "detail": "REAUTH_REQUIRED → \"Confirm it is you\"."
+    },
+    {
+      "id": "missing",
+      "label": "Requirements missing",
+      "kind": "error",
+      "detail": "422 LIVE_PRECONDITIONS_UNMET: `details.missing` marked Missing, others Done; nothing changed."
+    },
+    {
+      "id": "live",
+      "label": "Your storefront is live",
+      "kind": "final",
+      "detail": "Takes effect within 60 s; API keys page gets its Live keys tab."
+    },
+    {
+      "id": "off",
+      "label": "Live mode not open yet",
+      "kind": "final",
+      "detail": "`features.liveSwitch` off."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "test",
+      "to": "confirm",
+      "label": "Go live"
+    },
+    {
+      "from": "confirm",
+      "to": "test",
+      "label": "Cancel"
+    },
+    {
+      "from": "confirm",
+      "to": "stepup",
+      "label": "no TOTP in 15 min"
+    },
+    {
+      "from": "stepup",
+      "to": "test",
+      "label": "cancelled: nothing changed"
+    },
+    {
+      "from": "confirm",
+      "to": "missing",
+      "label": "preconditions unmet"
+    },
+    {
+      "from": "stepup",
+      "to": "missing",
+      "label": "preconditions unmet"
+    },
+    {
+      "from": "missing",
+      "to": "confirm",
+      "label": "fix and try again"
+    },
+    {
+      "from": "confirm",
+      "to": "live",
+      "label": "goLive 200"
+    },
+    {
+      "from": "stepup",
+      "to": "live",
+      "label": "goLive 200"
+    },
+    {
+      "from": "test",
+      "to": "off",
+      "label": "switch off"
+    }
+  ]
+}

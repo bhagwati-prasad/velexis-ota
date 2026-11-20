@@ -1,0 +1,62 @@
+{
+  "id": "payment-connection-states",
+  "type": "state",
+  "title": "Payment connection",
+  "caption": "`platform.payment_provider_connections` per tenant and environment. `account_mode` velexis | connect_standard | api_keys; status below. `error` is allowed by the CHECK but not written.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal",
+      "detail": "Connected account cannot charge yet."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal"
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "error",
+      "detail": "Admin switch, or Stripe deauthorisation (`disconnected_at`)."
+    },
+    {
+      "id": "error",
+      "label": "error (reserved)",
+      "kind": "error"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "active",
+      "label": "create_payment_connection (velexis, test) / goLive copies to live"
+    },
+    {
+      "from": "active",
+      "to": "pending",
+      "label": "completeStripeConnect: charges not enabled"
+    },
+    {
+      "from": "pending",
+      "to": "active",
+      "label": "account.updated: charges enabled"
+    },
+    {
+      "from": "active",
+      "to": "disabled",
+      "label": "account.application.deauthorized / adminSetConnectionStatus"
+    },
+    {
+      "from": "disabled",
+      "to": "active",
+      "label": "adminSetConnectionStatus / useVelexisPayments / reconnect"
+    }
+  ]
+}

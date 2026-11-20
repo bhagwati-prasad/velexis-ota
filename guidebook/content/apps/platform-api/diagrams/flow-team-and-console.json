@@ -1,0 +1,32 @@
+{
+  "id": "flow-team-and-console",
+  "type": "flow",
+  "title": "Invite a member and open the console",
+  "caption": "Invitations, roles and the single sign-on into the OTA admin.",
+  "steps": [
+    {
+      "title": "Invite",
+      "actor": "Owner",
+      "body": "`POST /v1/tenants/{tenantId}/invitations {email, role}` (admins may invite agent, finance, viewer only).",
+      "expect": "`201`; `team.invitation` e-mail with `/invitations/accept?token=…`; `409 ALREADY_MEMBER`, `409 INVITATION_PENDING`, `422 PLAN_LIMIT_REACHED` (staffSeats)."
+    },
+    {
+      "title": "Look up and accept",
+      "actor": "Invitee",
+      "body": "`POST /v1/invitations/lookup {token}` (public), then signed in with the invited, verified address `POST /v1/invitations/accept {token}`.",
+      "expect": "Membership created; invitation `accepted`; mismatching address `403 INVITATION_EMAIL_MISMATCH`; expired or used link `400 INVITATION_INVALID`."
+    },
+    {
+      "title": "Change a role",
+      "actor": "Owner",
+      "body": "`PATCH …/members/{memberId} {role}`; granting `owner` needs a step-up.",
+      "expect": "Demoting or removing the last owner `409 LAST_OWNER`; vx:invalidate membership."
+    },
+    {
+      "title": "Open console",
+      "actor": "Member",
+      "body": "`POST …/console-token`.",
+      "expect": "`{portalToken: ptk_…, expiresAt (+60 s), consoleSsoUrl}`; Redis key `ptk:<sha256>`; the OTA admin redeems it once."
+    }
+  ]
+}

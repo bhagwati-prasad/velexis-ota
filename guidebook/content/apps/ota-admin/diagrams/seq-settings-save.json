@@ -1,0 +1,61 @@
+{
+  "id": "seq-settings-save",
+  "type": "sequence",
+  "title": "Save one storefront section (offers per search)",
+  "caption": "settings/storefront/actions.ts saveSearch → ota/backend/src/settings/storefront-settings.service.ts. Every section is its own PATCH of that one section, complete, with If-Match and no idempotency key.",
+  "actors": [
+    { "id": "staff", "label": "Owner / admin", "kind": "user" },
+    { "id": "act", "label": "saveSearch", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" },
+    { "id": "redis", "label": "Redis", "kind": "cache" },
+    { "id": "sf", "label": "Storefront", "kind": "ui" }
+  ],
+  "steps": [
+    {
+      "from": "staff",
+      "to": "act",
+      "label": "Offers per search = 40, Save (hidden: version, shownMaxResults)",
+      "kind": "call"
+    },
+    {
+      "from": "act",
+      "to": "act",
+      "label": "requireStaff(\"settings:write\"); Zod 1-250 or empty; same as shown → \"Nothing to save\", no call",
+      "kind": "self"
+    },
+    {
+      "from": "act",
+      "to": "api",
+      "label": "PATCH /v1/console/settings/storefront — If-Match: version, {search: {maxResults: 40}}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "storefront_settings: version check (412), search_defaults.maxResults, version + 1; staff_actions settings.storefront.update",
+      "kind": "call",
+      "note": "422 at /search/maxResults shown at the field"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "DEL t:<tenantId>:<env>:sf:und and sf:<locale> for both environments",
+      "kind": "call"
+    },
+    { "from": "api", "to": "act", "label": "settings + warnings[]", "kind": "return" },
+    {
+      "from": "act",
+      "to": "staff",
+      "label": "\"Saved\"; revalidatePath → every form gets the new version",
+      "kind": "return"
+    },
+    {
+      "from": "sf",
+      "to": "api",
+      "label": "next search reads search_defaults (no cache): Amadeus max=40",
+      "kind": "async",
+      "note": "Branding and pages: the storefront tab keeps its own copy up to 5 minutes"
+    }
+  ]
+}

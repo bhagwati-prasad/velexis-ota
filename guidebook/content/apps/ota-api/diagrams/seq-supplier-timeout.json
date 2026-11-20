@@ -1,0 +1,84 @@
+{
+  "id": "seq-supplier-timeout",
+  "type": "sequence",
+  "title": "SUPPLIER_TIMEOUT: the order may exist, the reconciler decides",
+  "caption": "Flight Create Orders without a readable answer (timeout, Amadeus 5xx) never fails the booking blindly. The worker searches the OTA's booking queue for the remark VELEXIS <reference> for 15 minutes (ota/docs/architecture-booking.md §4, src/bookings/reconcile.service.ts, reconcile.processor.ts).",
+  "actors": [
+    { "id": "c", "label": "Storefront + SDK", "kind": "user" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" },
+    { "id": "w", "label": "OTA worker (ota-bookings)", "kind": "worker" },
+    { "id": "ama", "label": "Amadeus", "kind": "external" },
+    { "id": "stripe", "label": "Stripe", "kind": "external" }
+  ],
+  "steps": [
+    { "from": "c", "to": "api", "label": "checkout.complete (Idempotency-Key K)", "kind": "call" },
+    { "from": "api", "to": "pg", "label": "T1 booking pending, create_order_started_at", "kind": "call" },
+    { "from": "api", "to": "ama", "label": "Flight Create Orders", "kind": "call" },
+    { "from": "ama", "to": "api", "label": "no answer in 60 s / 5xx / unreadable", "kind": "return" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "reconcile_until = now + 15 min, booking_events booking.supplier_timeout",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "w",
+      "label": "booking.reconcile {tenantId, bookingId} (delay 30 s)",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "504 SUPPLIER_TIMEOUT {bookingId}; replays with K answer the same while undecided",
+      "kind": "return"
+    },
+    {
+      "from": "w",
+      "to": "ama",
+      "label": "every minute (bookings.reconcile_scan): Queue List of the booking queue (max 500)",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "ama",
+      "label": "by-reference GET of each candidate PNR (created −1…+5 min, lead last name), ≤ 50 per attempt",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "w",
+      "label": "match general remark VELEXIS <reference> (a name match alone never counts)",
+      "kind": "self"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "found: record the order, reconcile_outcome = found, checkout completed",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "stripe",
+      "label": "found: capture the booking's total, then issue per ticketing_policy",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "not found (complete search, Stripe): booking failed, checkout open again, booking.not_confirmed e-mail, staff alert",
+      "kind": "call"
+    },
+    { "from": "w", "to": "stripe", "label": "not found: payment.void on ota-payments", "kind": "async" },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "undecided at deadline or airline card: reconcile_outcome = manual_review, ticketing_status = manual_review, staff.manual_review e-mail",
+      "kind": "call",
+      "note": "Staff close it in the OTA admin: POST /v1/console/bookings/{id}/review-closure (order found / not booked)."
+    },
+    { "from": "c", "to": "api", "label": "retry with K", "kind": "call" },
+    { "from": "api", "to": "c", "label": "final 201 (found) or final error", "kind": "return" }
+  ]
+}

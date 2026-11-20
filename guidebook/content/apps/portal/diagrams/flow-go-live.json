@@ -1,0 +1,34 @@
+{
+  "id": "flow-go-live",
+  "type": "flow",
+  "title": "Switch the storefront to live",
+  "caption": "PF-14. Owners only; needs FEATURE_LIVE_SWITCH.",
+  "steps": [
+    {
+      "title": "Read the checklist",
+      "actor": "Owner",
+      "screen": "Go live",
+      "url": "http://localhost:3000/otas/<tenantId>/go-live",
+      "body": "\"What going live needs\": six items with links.",
+      "expect": "Two-factor sign-in Done (or Missing), live Amadeus Missing until requested, others \"Checked when you go live\"."
+    },
+    {
+      "title": "Try the switch",
+      "actor": "Owner",
+      "body": "**Go live** → \"Switch your storefront to live?\" → Confirm → step-up code.",
+      "expect": "Refused with \"N requirements are missing, so nothing has changed\" naming exactly `details.missing`; `tenants.storefront_environment` still `test`."
+    },
+    {
+      "title": "Meet the preconditions",
+      "actor": "Owner + platform admin",
+      "body": "Live Amadeus office assigned, live payments (Velexis + verified payout account, or Connect), plan with `liveMode`, current subscription (Stripe trialing/active or manual `active`), MFA on.",
+      "expect": "Each link leads to the page that completes it."
+    },
+    {
+      "title": "Go live",
+      "actor": "Owner",
+      "body": "**Go live** again.",
+      "expect": "\"Your storefront is live\", takes effect within 60 s; `storefront_environment = 'live'`, `live_enabled_at` set; API keys page shows a Live keys tab."
+    }
+  ]
+}

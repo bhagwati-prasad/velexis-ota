@@ -1,0 +1,38 @@
+{
+  "id": "flow-alert-triage",
+  "type": "flow",
+  "title": "Triage an alert e-mail",
+  "caption": "docs/mvp/deployment-single-vm.md §13 and §16. Subjects start with [velexis][<ALERT_HOST_LABEL>].",
+  "steps": [
+    {
+      "title": "Read the subject",
+      "actor": "Operator",
+      "body": "`health check failed: <check>` (velexis-healthcheck), a unit failure from `velexis-alert@` (start limit hit), `security alert: …` (velexis-logreview), or an uptime monitor notice (outside the VM).",
+      "expect": "You know which tool sent it."
+    },
+    {
+      "title": "Health check",
+      "actor": "Operator",
+      "body": "`sudo velexis-healthcheck --status`; `journalctl -u velexis-healthcheck -n 50`.",
+      "expect": "The failing check, since when and its first problem."
+    },
+    {
+      "title": "Unit",
+      "actor": "Operator",
+      "body": "`systemctl status velexis-<unit>`; `journalctl -u velexis-<unit> -n 100 -o cat | jq -cR 'fromjson? | select(.level >= 40)'`; `curl -s http://127.0.0.1:<port>/health/ready | jq`.",
+      "expect": "`checks.postgres`/`checks.redis` say which dependency is down."
+    },
+    {
+      "title": "Fix and confirm",
+      "actor": "Operator",
+      "body": "Restart or fix the cause (`systemctl restart`, free disk, fix `alert.env`); after a bad deploy `sudo velexis-deploy --rollback`.",
+      "expect": "Within 5 minutes one `health check recovered: <check>` e-mail."
+    },
+    {
+      "title": "Payment page alert",
+      "actor": "Operator",
+      "body": "Treat as possible compromise: compare files with `payment-page-inventory.json`, diff `/etc/caddy/Caddyfile` with `/var/lib/velexis/system/<sha>/Caddyfile`, run `aide --check`.",
+      "expect": "Either an explained change (re-deploy, then `--payment-pages`) or the incident response plan."
+    }
+  ]
+}

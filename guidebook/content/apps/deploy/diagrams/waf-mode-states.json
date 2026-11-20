@@ -1,0 +1,37 @@
+{
+  "id": "waf-mode-states",
+  "type": "state",
+  "title": "WAF engine on the blocking paths",
+  "caption": "Caddyfile: import waf ... {$VELEXIS_WAF_ENGINE:On} on api.ota.example.com and storefront /api/*, /checkout/*. Other hosts and paths are always DetectionOnly; Stripe webhooks detection only (rule 10001).",
+  "states": [
+    {
+      "id": "detect",
+      "label": "DetectionOnly (detection week)",
+      "kind": "initial",
+      "detail": "`VELEXIS_WAF_ENGINE=DetectionOnly` in /etc/velexis/caddy.env; matches are logged, requests pass."
+    },
+    {
+      "id": "on",
+      "label": "On (blocking)",
+      "kind": "normal",
+      "detail": "Line removed from caddy.env; one critical match (score 5) blocks with 403."
+    },
+    {
+      "id": "exclusion",
+      "label": "Exclusion added",
+      "kind": "normal",
+      "detail": "A legitimate match gets a narrow rule in exclusions.conf via PR and deploy."
+    }
+  ],
+  "transitions": [
+    { "from": "detect", "to": "exclusion", "label": "legitimate traffic matched" },
+    { "from": "exclusion", "to": "detect", "label": "deployed; keep reviewing" },
+    {
+      "from": "detect",
+      "to": "on",
+      "label": "a week without a new legitimate match; systemctl reload caddy"
+    },
+    { "from": "on", "to": "exclusion", "label": "false positive found later" },
+    { "from": "exclusion", "to": "on", "label": "deployed" }
+  ]
+}

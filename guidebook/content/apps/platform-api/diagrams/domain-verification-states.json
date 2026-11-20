@@ -1,0 +1,79 @@
+{
+  "id": "domain-verification-states",
+  "type": "state",
+  "title": "Custom domain verification",
+  "caption": "`platform.tenant_domains.verification_status`. Sub-domains `<key>.<STOREFRONT_BASE_DOMAIN>` are created `verified`.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal",
+      "detail": "72 h deadline; checked every 5 min and by checkDomain (1/min per domain)."
+    },
+    {
+      "id": "verified",
+      "label": "verified",
+      "kind": "normal",
+      "detail": "Served by the OTA backend once TLS is issued; can become primary."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Deleted by purge.daily 7 days after the failure (audit domain.removed)."
+    },
+    {
+      "id": "removed",
+      "label": "removed (row deleted)",
+      "kind": "final",
+      "detail": "removeDomain / adminRemoveDomain / purge."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending",
+      "label": "addDomain"
+    },
+    {
+      "from": "pending",
+      "to": "verified",
+      "label": "TXT _velexis + CNAME or A/AAAA found"
+    },
+    {
+      "from": "pending",
+      "to": "failed",
+      "label": "deadline passed"
+    },
+    {
+      "from": "verified",
+      "to": "failed",
+      "label": "3 failed daily re-checks (domains.recheck_verified)"
+    },
+    {
+      "from": "failed",
+      "to": "pending",
+      "label": "checkDomain restarts the window"
+    },
+    {
+      "from": "verified",
+      "to": "removed",
+      "label": "removeDomain / adminRemoveDomain"
+    },
+    {
+      "from": "pending",
+      "to": "removed",
+      "label": "removeDomain"
+    },
+    {
+      "from": "failed",
+      "to": "removed",
+      "label": "purge.daily after 7 days"
+    }
+  ]
+}

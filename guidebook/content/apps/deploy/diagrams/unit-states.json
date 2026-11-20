@@ -1,0 +1,48 @@
+{
+  "id": "unit-states",
+  "type": "state",
+  "title": "An app unit under systemd",
+  "caption": "deploy/systemd/velexis-*.service: Restart=always, RestartSec=3, RestartMode=direct, StartLimitBurst=10 in StartLimitIntervalSec=300, OnFailure=velexis-alert@%n.service.",
+  "states": [
+    {
+      "id": "inactive",
+      "label": "inactive / disabled",
+      "kind": "initial",
+      "detail": "Enabled by `velexis-deploy` once a release contains the app."
+    },
+    {
+      "id": "active",
+      "label": "active (running)",
+      "kind": "normal",
+      "detail": "`/health/ready` 200 on its loopback port."
+    },
+    {
+      "id": "restarting",
+      "label": "auto-restart",
+      "kind": "normal",
+      "detail": "A crash restarts after 3 s, silently (journal only)."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "10 starts in 5 minutes: start limit hit → `velexis-alert@<unit>.service` mails status + last 40 log lines."
+    },
+    {
+      "id": "masked",
+      "label": "masked (restore drill)",
+      "kind": "normal",
+      "detail": "Linked to /dev/null in /etc/systemd/system.control; deploy and health check skip it."
+    }
+  ],
+  "transitions": [
+    { "from": "inactive", "to": "active", "label": "systemctl enable + restart (deploy)" },
+    { "from": "active", "to": "restarting", "label": "process exits / OOM (MemoryMax)" },
+    { "from": "restarting", "to": "active", "label": "starts again" },
+    { "from": "restarting", "to": "failed", "label": "start limit reached" },
+    { "from": "failed", "to": "active", "label": "systemctl restart after the fix" },
+    { "from": "active", "to": "inactive", "label": "systemctl stop (no alert)" },
+    { "from": "inactive", "to": "masked", "label": "drill isolation" },
+    { "from": "masked", "to": "inactive", "label": "unmask + daemon-reload" }
+  ]
+}

@@ -1,0 +1,132 @@
+{
+  "id": "custom-domain-and-go-live",
+  "title": "Custom domain, TLS ask and go-live (M5 features)",
+  "summary": "With the milestone switches on, staff give an OTA a plan with live mode and a custom domain; the owner adds a domain and sees its DNS records and checks; Caddy's TLS ask is tried by hand; the go-live page lists the preconditions, which are met one by one until the OTA switches to live.",
+  "apps": ["portal", "platform-admin", "platform-api", "ota-api", "storefront", "deploy"],
+  "roles": ["OTA owner", "Velexis staff"],
+  "duration": "45 min",
+  "prerequisites": [
+    "In `platform/backend/.env.local`: `FEATURE_CUSTOM_DOMAINS=true`, `FEATURE_LIVE_SWITCH=true`, `FEATURE_SETTLEMENTS=true` (and `FEATURE_OWN_AMADEUS` stays false); restart the platform backend, portal and admin.",
+    "The owner has MFA on ([[journey:signup-and-provision]], step \"mfa\"); the platform admin is signed in.",
+    "DNS verification cannot succeed locally (the domain is not yours and the public resolvers do not know it): expect the domain to stay pending with a stored reason."
+  ],
+  "steps": [
+    {
+      "id": "plan",
+      "app": "platform-admin",
+      "title": "Give the OTA a plan with live mode and one custom domain",
+      "url": "http://localhost:3001/plans",
+      "actions": "On **Plans** create a non-public plan (for example code `live_test`, EUR, a monthly price, limits: custom domains 1, live mode on). On **Subscriptions** open the OTA's manual subscription and move it to that plan with status *active* and a reason.",
+      "expect": "The plan is listed with 0 OTAs, then 1. The subscription edit asks only for a reason (no step-up: `adminUpdateManualSubscription` is not a step-up operation), then shows the new plan and status *Active*.",
+      "data": "`platform.plans` new row (`limits` jsonb with `customDomains: 1`, `liveMode: true`); `platform.subscriptions` (`billing_provider = manual`, `active`); `platform.tenants.plan_code` updated; audit `plan.created`, `subscription.manually_updated`; `vx:invalidate {type: \"tenant\"}`.",
+      "code": [
+        "platform/admin/src/app/(app)/plans/page.tsx",
+        "platform/admin/src/app/(app)/subscriptions/[subscriptionId]/page.tsx",
+        "platform/backend/src/billing/plans.service.ts",
+        "platform/backend/src/billing/subscriptions.service.ts"
+      ]
+    },
+    {
+      "id": "add-domain",
+      "app": "portal",
+      "title": "Add a custom domain",
+      "url": "http://localhost:3000/otas/ten_…/domains",
+      "actions": "On **Domains** the Velexis address `<key>.ota.example.com` is listed. In **Add a custom domain** type `TRAVEL.EXAMPLE.NET` and press **Add domain**. Try `<other>.ota.example.com`, an IP address and `github.io` too.",
+      "expect": "*travel.example.net was added*: the domain is stored in lower case and shown pending with its DNS records: `TXT _velexis.travel.example.net = vx-verify-…` and either `CNAME travel.example.net → <key>.ota.example.com` or `A` to `STOREFRONT_IPV4` (`203.0.113.10` locally; also `AAAA` `2001:db8::10` while `STOREFRONT_IPV6` is set); a 72-hour deadline (*Verify by*) and **Check now**. Velexis hosts, IPs and shared suffixes are refused with *Enter a valid public domain name…*.",
+      "data": "`SELECT hostname, kind, verification_status, verification_token, is_primary FROM platform.tenant_domains WHERE tenant_id = 'ten_…';` → `custom`, `pending`.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/domains/page.tsx",
+        "platform/backend/src/domains/domains.service.ts",
+        "platform/backend/src/domains/hostname-rules.ts"
+      ]
+    },
+    {
+      "id": "check",
+      "app": "portal",
+      "title": "Check now (and the scheduled checks)",
+      "actions": "Press **Check now**; press it again at once; wait for the worker's 5-minute `domains.verify_pending` run.",
+      "expect": "The last check time and a short reason appear (for example a missing TXT record or a DNS timeout); the second click within a minute is limited. The domain stays *pending* until its deadline, then *failed* with an e-mail to the owners.",
+      "data": "`tenant_domains.verification_status`, plus the last check time and error columns; jobs on `vx:platform-domains:*`.",
+      "code": [
+        "platform/backend/src/domains/domain-checks.processor.ts",
+        "platform/backend/src/domains/dns.gateway.ts",
+        "platform/backend/src/domains/verify-pending.scheduler.ts"
+      ]
+    },
+    {
+      "id": "tls-ask",
+      "app": "platform-api",
+      "title": "Ask the TLS question Caddy asks",
+      "actions": "Run `curl -s -o /dev/null -w '%{http_code}\\n' 'http://127.0.0.1:3100/internal/tls/ask?domain=<key>.ota.example.com'`, then with `domain=travel.example.net` and with `domain=unknown.ota.example.com`.",
+      "expect": "`200` for the sub-domain of a provisioning, active or suspended OTA; `404` for the pending custom domain and for an unknown host. (On the VM Caddy asks this before obtaining a certificate; `/internal/*` is blocked publicly.)",
+      "data": "Redis `tlsask:<host>` caches a 200 for 60 s.",
+      "code": [
+        "platform/backend/src/domains/tls-ask.controller.ts",
+        "platform/backend/src/domains/tls-ask.service.ts",
+        "deploy/caddy/Caddyfile"
+      ]
+    },
+    {
+      "id": "admin-domains",
+      "app": "platform-admin",
+      "title": "Staff view of domains",
+      "url": "http://localhost:3001/domains",
+      "actions": "Open **Domains**; filter; press **Re-check** (confirm), then **Remove** with a reason.",
+      "expect": "The dashboard counts pending custom domains; Re-check queues the DNS check at once; Remove asks for a reason, removes the domain and e-mails the owners (\"`<host>` was removed from `<OTA>`\") without the reason.",
+      "code": [
+        "platform/admin/src/app/(app)/domains/page.tsx",
+        "platform/backend/src/domains/admin-domains.service.ts"
+      ]
+    },
+    {
+      "id": "go-live-page",
+      "app": "portal",
+      "title": "The go-live page lists what is missing",
+      "url": "http://localhost:3000/otas/ten_…/go-live",
+      "actions": "Open **Go live**. Press **Go live**, confirm *Switch your storefront to live?* with **Go live**, then the step-up (**Confirm it is you**, a TOTP code) if your last code is older than 15 minutes.",
+      "expect": "\"What going live needs\" lists six items with links: live Amadeus, live payments, payout account, plan with live mode, subscription, two-factor sign-in (Done from your account; the others *Checked when you go live* until tried). Going live with items missing shows *Your OTA cannot go live yet* and \"N requirements are missing, so nothing has changed\", marking exactly `details.missing` of `422 LIVE_PRECONDITIONS_UNMET` as *Missing*; nothing changes.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/go-live/page.tsx",
+        "platform/backend/src/provisioning/go-live.service.ts"
+      ]
+    },
+    {
+      "id": "payout",
+      "app": "portal",
+      "title": "Payout account (Velexis mode)",
+      "url": "http://localhost:3000/otas/ten_…/payments/payout-account",
+      "actions": "Enter a holder, the bank's country and currency and the IBAN registry's Norwegian example `NO93 8601 1117 947` with BIC `DNBANOKK` (not a real account); save and confirm the step-up. As platform admin, verify the payout account on the OTA's page.",
+      "expect": "Saved, shown masked (last 4 only) and *pending review*; after the admin's review, *verified*.",
+      "data": "`platform.tenant_payout_accounts` (`pending_review` → `verified`), bank identifiers encrypted only.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/payments/payout-account/page.tsx",
+        "platform/admin/src/app/(app)/tenants/[tenantId]/payout-account.tsx"
+      ]
+    },
+    {
+      "id": "live-amadeus",
+      "app": "platform-admin",
+      "title": "Live Amadeus access",
+      "actions": "As owner request live access on the portal's **Amadeus** page. As admin: enter the Velexis **live** Amadeus account on **Amadeus → Accounts** (the stub accepts any client id and secret, development only), add live offices to its pool, then assign one to the request from the dashboard.",
+      "expect": "The request appears on the admin dashboard; after assignment the OTA's live connection is active and the owner gets \"Live Amadeus access is ready for `<OTA>`\".",
+      "data": "`platform.amadeus_accounts` (`live`, `active`), `amadeus_offices` assigned, `supplier_connections` (`live`, `active`).",
+      "code": [
+        "platform/backend/src/supplier-connections/live-office.service.ts",
+        "platform/admin/src/app/(app)/amadeus/accounts/page.tsx"
+      ]
+    },
+    {
+      "id": "go-live",
+      "app": "portal",
+      "title": "Go live",
+      "actions": "Back on **Go live**, press **Go live**, confirm the dialog and the step-up.",
+      "expect": "*Your storefront is live* with *Live since* and the live storefront link. Within 60 seconds the storefront drops the *Test mode* note; the API keys page gains a *Live keys* tab; the console offers the TEST / LIVE switch to roles other than viewer (MFA required for a live OTA's console).",
+      "data": "`platform.tenants.storefront_environment = live`, `live_enabled_at` set; live payment connection copied in Velexis mode; audit row; `vx:invalidate {type: \"tenant\"}`.",
+      "code": [
+        "platform/backend/src/provisioning/go-live.service.ts",
+        "platform/backend/src/provisioning/go-live.repository.ts",
+        "ota/backend/src/storefront/storefront.service.ts"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "flow-roles",
+  "type": "flow",
+  "title": "Check what each role sees",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/roles.e2e.ts (OF-09 AC2). Invite the members on the portal's Team page; each opens the console from the portal.",
+  "steps": [
+    {
+      "title": "Viewer",
+      "actor": "Viewer",
+      "body": "Open console; open a booking in manual review.",
+      "expect": "TEST badge, no switch; no \"Booking actions\", no Issue, no Cancel; no Queues, Shopping or Supplier log in the navigation."
+    },
+    {
+      "title": "Agent",
+      "actor": "Agent",
+      "body": "Open console on a live OTA; open the same booking.",
+      "expect": "TEST / LIVE switch; Issue and Cancel offered; Capture but no Refund on payments."
+    },
+    {
+      "title": "Settings read only",
+      "actor": "Agent / finance / viewer",
+      "body": "Open markups, fees, storefront, assets, pages, templates.",
+      "expect": "\"New markup rule\" and \"New fee rule\" disabled with \"Needs the permission settings:write\"; rules without a form; storefront fields disabled, no Save; \"Upload an image\" disabled; \"New page\" disabled; templates with Preview only."
+    },
+    {
+      "title": "Forbidden pages",
+      "actor": "Agent",
+      "body": "Open `/settings/markups/new`, `/settings/fees/new`, `/settings/pages/new` by URL.",
+      "expect": "A state naming `settings:write`, no form; no settings row in `tenant_<key>.staff_actions`."
+    },
+    {
+      "title": "Finance",
+      "actor": "Finance",
+      "body": "Open a captured Stripe payment.",
+      "expect": "Refund offered; no booking actions; supplier log readable."
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "id": "settlement-states",
+  "type": "state",
+  "title": "Settlement statement",
+  "caption": "platform.settlements.status. CHECKs: paid needs paid_at, payout_reference and net > 0; carried_forward needs net ≤ 0; void needs voided_at and void_reason. The statement page offers exactly the actions of its status.",
+  "states": [
+    { "id": "start", "label": "month ended", "kind": "initial" },
+    {
+      "id": "draft",
+      "label": "draft",
+      "kind": "normal",
+      "detail": "**Add an adjustment** (reason), **Approve** (step-up, If-Match), **Void draft** (reason). Regenerating the month rebuilds drafts and drops their adjustments."
+    },
+    {
+      "id": "approved",
+      "label": "approved",
+      "kind": "normal",
+      "detail": "Net owed to the OTA. **Record the bank transfer** (step-up, If-Match)."
+    },
+    { "id": "paid", "label": "paid", "kind": "final", "detail": "Owners and finance members e-mailed." },
+    {
+      "id": "carried",
+      "label": "carried_forward",
+      "kind": "final",
+      "detail": "Net ≤ 0 carried into a later statement (`carried_to_id`)."
+    },
+    {
+      "id": "void",
+      "label": "void",
+      "kind": "final",
+      "detail": "Lines deleted so the transactions can be settled again."
+    }
+  ],
+  "transitions": [
+    { "from": "start", "to": "draft", "label": "monthly run / Generate drafts" },
+    { "from": "draft", "to": "draft", "label": "adjustment / regenerate" },
+    { "from": "draft", "to": "approved", "label": "Approve, net > 0 (verified payout account)" },
+    { "from": "draft", "to": "carried", "label": "Approve, net ≤ 0" },
+    { "from": "approved", "to": "paid", "label": "Mark paid (day, bank reference)" },
+    { "from": "draft", "to": "void", "label": "Void draft (reason)" }
+  ]
+}

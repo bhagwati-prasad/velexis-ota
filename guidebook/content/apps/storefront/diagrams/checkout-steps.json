@@ -1,0 +1,148 @@
+{
+  "id": "checkout-steps",
+  "type": "state",
+  "title": "Checkout steps on /checkout.html",
+  "caption": "`src/pages/checkout.js` with `components/stepper.js`. Each step is a history entry (`step=travellers|contacts|extras|payment`); a step opens only when the steps before it are complete. The server-side checkout status is a separate lifecycle (see the OTA API's checkout states).",
+  "states": [
+    {
+      "id": "price",
+      "label": "Price page",
+      "kind": "initial",
+      "detail": "Continue to checkout → `checkout.create` (sign-in first when guest checkout is off)."
+    },
+    {
+      "id": "travellers",
+      "label": "Travellers",
+      "kind": "normal",
+      "detail": "Fields from `requirements`; `setTravelers` with `ifMatch`. Stays here while `progress.missing` names its fields."
+    },
+    {
+      "id": "contacts",
+      "label": "Contact details",
+      "kind": "normal",
+      "detail": "Pre-filled from the first adult and the account; `setContacts`."
+    },
+    {
+      "id": "extras",
+      "label": "Extras",
+      "kind": "normal",
+      "detail": "Only with `features.ancillaries`: bags, services, special requests (≤ 5)."
+    },
+    {
+      "id": "payment",
+      "label": "Payment",
+      "kind": "normal",
+      "detail": "Methods of `config.payment.supportedMethods`, total, conditions, terms checkbox; `createPayment`."
+    },
+    {
+      "id": "paycard",
+      "label": "Pay by card page",
+      "kind": "final"
+    },
+    {
+      "id": "payairline",
+      "label": "Airline-card page",
+      "kind": "final"
+    },
+    {
+      "id": "confirmation",
+      "label": "Confirmation",
+      "kind": "final",
+      "detail": "`409 CHECKOUT_ALREADY_COMPLETED` / `CHECKOUT_BEING_COMPLETED` (pending=1)."
+    },
+    {
+      "id": "stale",
+      "label": "Updated in another tab",
+      "kind": "error",
+      "detail": "`412 PRECONDITION_FAILED`: reload, send the step once more on the new version; a second 412 offers Reload."
+    },
+    {
+      "id": "expired",
+      "label": "Your session expired",
+      "kind": "error",
+      "detail": "`410 CHECKOUT_EXPIRED` → back to the price page to re-price."
+    },
+    {
+      "id": "soldout",
+      "label": "This flight just sold out",
+      "kind": "error"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "price",
+      "to": "travellers",
+      "label": "checkout.create 201"
+    },
+    {
+      "from": "travellers",
+      "to": "travellers",
+      "label": "saved, details still missing"
+    },
+    {
+      "from": "travellers",
+      "to": "contacts",
+      "label": "travelersComplete"
+    },
+    {
+      "from": "contacts",
+      "to": "extras",
+      "label": "saved (ancillaries on)"
+    },
+    {
+      "from": "contacts",
+      "to": "payment",
+      "label": "saved (ancillaries off)"
+    },
+    {
+      "from": "extras",
+      "to": "extras",
+      "label": "409 PRICE_CHANGED: Confirm the new total"
+    },
+    {
+      "from": "extras",
+      "to": "payment",
+      "label": "Continue"
+    },
+    {
+      "from": "extras",
+      "to": "soldout",
+      "label": "409 SOLD_OUT"
+    },
+    {
+      "from": "payment",
+      "to": "paycard",
+      "label": "createPayment card"
+    },
+    {
+      "from": "payment",
+      "to": "payairline",
+      "label": "createPayment airline_card"
+    },
+    {
+      "from": "payment",
+      "to": "travellers",
+      "label": "422 CHECKOUT_INCOMPLETE → first incomplete step"
+    },
+    {
+      "from": "payment",
+      "to": "confirmation",
+      "label": "already completed"
+    },
+    {
+      "from": "contacts",
+      "to": "stale",
+      "label": "412"
+    },
+    {
+      "from": "stale",
+      "to": "contacts",
+      "label": "reloaded, re-applied"
+    },
+    {
+      "from": "payment",
+      "to": "expired",
+      "label": "410 CHECKOUT_EXPIRED"
+    }
+  ]
+}

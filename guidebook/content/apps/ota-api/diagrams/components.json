@@ -1,0 +1,181 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "NestJS modules of ota/backend/src",
+  "caption": "One folder per module under ota/backend/src. Arrows are module dependencies (who calls whom); only amadeus, payments, notifications and documents talk to the outside. Source: ota/docs/architecture.md §2 and the module files.",
+  "groups": [
+    { "id": "edge", "label": "HTTP edge (both processes)" },
+    { "id": "customer", "label": "Customer-facing domain" },
+    { "id": "console", "label": "Console (staff)" },
+    { "id": "integr", "label": "Integrations" },
+    { "id": "worker", "label": "Worker-only" }
+  ],
+  "nodes": [
+    {
+      "id": "common",
+      "label": "common",
+      "group": "edge",
+      "kind": "lib",
+      "detail": "`src/common`: guards (caller, tenant, scope, customer, staff, booking access, CSRF, permission), OpenAPI validation and idempotency interceptors, error filter, cookie writer, Redis keys (`redis.keys.ts`), queue names, Clock, ids."
+    },
+    {
+      "id": "tenancy",
+      "label": "tenancy",
+      "group": "edge",
+      "kind": "lib",
+      "detail": "`src/tenancy`: caller and tenant resolution (edge, `pk_`/`sk_` keys, service key), read-only platform repository + 60 s Redis caches, `vx:invalidate` subscriber, `TenantContext`, `tenantTx`.",
+      "term": "tenant-tx"
+    },
+    {
+      "id": "identity",
+      "label": "identity",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/identity`: customer sign-up, verification, sign-in, sessions (cookie and bearer), password reset, JWT keys; `identity/staff`: console sign-in by portal token, staff sessions in Redis."
+    },
+    {
+      "id": "account",
+      "label": "account",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/account`: profile, deletion, and the worker's hourly erasure (`customers.erase`)."
+    },
+    {
+      "id": "storefront",
+      "label": "storefront",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/storefront`: `storefront.get`, published content pages (Markdown subset → blocks), public images."
+    },
+    {
+      "id": "reference",
+      "label": "reference",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/reference`: locations, airports, airlines, countries, currencies from the `reference` schema."
+    },
+    {
+      "id": "shopping",
+      "label": "shopping",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/shopping`: searches, results with facets, offers, upsell, priced offers, ancillaries, fare rules, offers purge."
+    },
+    {
+      "id": "pricing",
+      "label": "pricing",
+      "group": "customer",
+      "kind": "lib",
+      "detail": "`src/pricing`: markup and fee engine (`pricing-engine.ts`, `rule-matcher.ts`), card fees; decimal.js money.",
+      "term": "markup-rule"
+    },
+    {
+      "id": "checkout",
+      "label": "checkout",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/checkout`: checkout aggregate (travellers with encrypted documents, contacts, ancillaries, remarks), totals, expiry job."
+    },
+    {
+      "id": "payments",
+      "label": "payments",
+      "group": "integr",
+      "kind": "api",
+      "detail": "`src/payments`: `PaymentGateway` (Stripe in three account modes, airline card), payments and refunds, webhooks, Stripe events, capture/void/refund jobs, authorisation watch."
+    },
+    {
+      "id": "bookings",
+      "label": "bookings",
+      "group": "customer",
+      "kind": "api",
+      "detail": "`src/bookings`: orchestration (claim → order → record → money → issue), ticketing, sync, reconciliation, change and cancel, my bookings, guest lookup."
+    },
+    {
+      "id": "documents",
+      "label": "documents",
+      "group": "integr",
+      "kind": "worker",
+      "detail": "`src/documents`: itinerary and e-ticket receipt PDFs (pdfmake), signed download URLs, `/v1/files/*`."
+    },
+    {
+      "id": "notifications",
+      "label": "notifications",
+      "group": "integr",
+      "kind": "worker",
+      "detail": "`src/notifications`: outbox, templates (tenant rows or code defaults), renderer, SMTP mailer, staff recipients.",
+      "term": "outbox"
+    },
+    {
+      "id": "amadeus",
+      "label": "amadeus",
+      "group": "integr",
+      "kind": "lib",
+      "detail": "`src/amadeus`: the only Amadeus caller: connection resolver, token provider, rate limiter, call context, error mapper, `supplier_requests` log."
+    },
+    {
+      "id": "console",
+      "label": "console",
+      "group": "console",
+      "kind": "api",
+      "detail": "`src/console`: console bookings, PNR lookup/import, queues, customers, supplier log, raw Amadeus reads, payments; `staff_actions` writer; review closure; queue poller."
+    },
+    {
+      "id": "settings",
+      "label": "settings",
+      "group": "console",
+      "kind": "api",
+      "detail": "`src/settings`: markup and fee rules, storefront settings, pages, asset uploads, notification templates."
+    },
+    {
+      "id": "provisioning",
+      "label": "provisioning",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`src/provisioning`: `ota-tenant-ops` consumer (provision, migrate, suspend, resume), seeds, `platform-tenant-events` producer, failure classifier."
+    },
+    {
+      "id": "jobs",
+      "label": "jobs",
+      "group": "worker",
+      "kind": "worker",
+      "detail": "`src/jobs`: schedulers (`OTA_SCHEDULES`), per-tenant fan-out on `ota-maintenance`, retention purges."
+    },
+    {
+      "id": "health",
+      "label": "health",
+      "group": "edge",
+      "kind": "api",
+      "detail": "`src/health`: `/health/live`, `/health/ready` (postgres, redis; the worker's adds queue ages)."
+    }
+  ],
+  "edges": [
+    { "from": "identity", "to": "tenancy", "label": "", "kind": "sync" },
+    { "from": "storefront", "to": "tenancy", "label": "", "kind": "sync" },
+    { "from": "storefront", "to": "payments", "label": "card methods", "kind": "sync" },
+    { "from": "shopping", "to": "amadeus", "label": "search/price", "kind": "sync" },
+    { "from": "shopping", "to": "pricing", "label": "selling prices", "kind": "sync" },
+    { "from": "checkout", "to": "shopping", "label": "priced offers", "kind": "sync" },
+    { "from": "checkout", "to": "pricing", "label": "", "kind": "sync" },
+    { "from": "payments", "to": "checkout", "label": "", "kind": "sync" },
+    { "from": "payments", "to": "amadeus", "label": "card fee re-quote", "kind": "sync" },
+    { "from": "bookings", "to": "checkout", "label": "claim", "kind": "sync" },
+    { "from": "bookings", "to": "payments", "label": "capture/void/refund", "kind": "sync" },
+    { "from": "bookings", "to": "amadeus", "label": "orders", "kind": "sync" },
+    { "from": "bookings", "to": "notifications", "label": "outbox rows", "kind": "async" },
+    { "from": "bookings", "to": "documents", "label": "document.render", "kind": "async" },
+    { "from": "console", "to": "bookings", "label": "", "kind": "sync" },
+    { "from": "console", "to": "payments", "label": "", "kind": "sync" },
+    { "from": "console", "to": "amadeus", "label": "raw reads", "kind": "sync" },
+    { "from": "settings", "to": "pricing", "label": "rules", "kind": "sync" },
+    { "from": "settings", "to": "storefront", "label": "cache deletes", "kind": "sync" },
+    { "from": "jobs", "to": "bookings", "label": "", "kind": "async" },
+    { "from": "jobs", "to": "checkout", "label": "", "kind": "async" },
+    { "from": "jobs", "to": "shopping", "label": "purge", "kind": "async" },
+    { "from": "jobs", "to": "notifications", "label": "sweep", "kind": "async" },
+    { "from": "jobs", "to": "console", "label": "queue poller", "kind": "async" },
+    { "from": "jobs", "to": "account", "label": "erasure", "kind": "async" },
+    { "from": "provisioning", "to": "tenancy", "label": "", "kind": "sync" },
+    { "from": "amadeus", "to": "tenancy", "label": "connections", "kind": "sync" },
+    { "from": "common", "to": "tenancy", "label": "guards", "kind": "sync" }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "id": "stripe-event-states",
+  "type": "state",
+  "title": "Stripe webhook inbox (stripe_events)",
+  "caption": "Both receivers (billing, connect_accounts) store before processing; `stripe_events.sweep` re-enqueues lost work every 5 min.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "received",
+      "label": "received",
+      "kind": "normal"
+    },
+    {
+      "id": "processing",
+      "label": "processing",
+      "kind": "normal"
+    },
+    {
+      "id": "processed",
+      "label": "processed",
+      "kind": "final",
+      "detail": "Purged after 90 days."
+    },
+    {
+      "id": "ignored",
+      "label": "ignored",
+      "kind": "final",
+      "detail": "Event type not handled, switch off, unknown account (UNKNOWN_ACCOUNT) or account unreachable."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "last_error; retried by BullMQ and the sweep; adminReprocessStripeEvent."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "received",
+      "label": "receiver INSERT (duplicate id ignored)"
+    },
+    {
+      "from": "received",
+      "to": "processing",
+      "label": "stripe.event job"
+    },
+    {
+      "from": "processing",
+      "to": "processed",
+      "label": "handler done"
+    },
+    {
+      "from": "processing",
+      "to": "ignored",
+      "label": "nothing to do"
+    },
+    {
+      "from": "processing",
+      "to": "failed",
+      "label": "error"
+    },
+    {
+      "from": "failed",
+      "to": "processing",
+      "label": "retry / sweep / adminReprocessStripeEvent"
+    },
+    {
+      "from": "ignored",
+      "to": "processing",
+      "label": "adminReprocessStripeEvent"
+    }
+  ]
+}

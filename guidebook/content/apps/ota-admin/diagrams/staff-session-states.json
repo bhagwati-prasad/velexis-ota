@@ -1,0 +1,60 @@
+{
+  "id": "staff-session-states",
+  "type": "state",
+  "title": "A staff session in the OTA admin",
+  "caption": "Cookies __Host-vx_staff_at (15 min) and __Host-vx_staff_rt (family, at most 12 h) on the admin; family staffsess:<familyId> in Redis. Code: lib/session.ts, middleware.ts, lib/refresh-dedup.ts.",
+  "states": [
+    {
+      "id": "none",
+      "label": "No session",
+      "kind": "initial",
+      "detail": "Any page → `303` to `PUBLIC_PORTAL_URL/console?tenant=<id>`."
+    },
+    {
+      "id": "active",
+      "label": "Active (access token valid)",
+      "kind": "normal",
+      "detail": "Pages and actions call the API with the access token only."
+    },
+    {
+      "id": "expiring",
+      "label": "Expiring (< 60 s left or gone)",
+      "kind": "normal",
+      "detail": "The middleware or `requireStaff` refreshes, de-duplicated per refresh token."
+    },
+    {
+      "id": "kept",
+      "label": "Refresh failed, may pass",
+      "kind": "normal",
+      "detail": "`429`, `503`, network: cookies kept; `/auth/refresh` answers a \"Try again\" page."
+    },
+    {
+      "id": "ended",
+      "label": "Ended",
+      "kind": "error",
+      "detail": "Refresh refused (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `STAFF_MEMBERSHIP_INACTIVE`, `TENANT_SUSPENDED`): access, refresh and env cookies cleared, sent to the portal."
+    },
+    {
+      "id": "signedOut",
+      "label": "Signed out",
+      "kind": "final",
+      "detail": "`POST /auth/sign-out` → `console.auth.signOut({scope: \"current\"})`, cookies cleared, `/signed-out`."
+    }
+  ],
+  "transitions": [
+    { "from": "none", "to": "active", "label": "POST /sso with a valid portal token" },
+    { "from": "active", "to": "expiring", "label": "15-minute access token nears its end" },
+    { "from": "expiring", "to": "active", "label": "console.auth.refresh: new tokens (family rotated once)" },
+    { "from": "expiring", "to": "kept", "label": "429 / 503 / network" },
+    { "from": "kept", "to": "expiring", "label": "next request tries again" },
+    { "from": "expiring", "to": "ended", "label": "refresh refused or family over 12 h" },
+    {
+      "from": "active",
+      "to": "ended",
+      "label": "staffdeny:* stamp (member removed, sign out everywhere) within 60 s"
+    },
+    { "from": "active", "to": "signedOut", "label": "Sign out" },
+    { "from": "ended", "to": "active", "label": "Open console again from the portal" },
+    { "from": "signedOut", "to": "active", "label": "Open console again from the portal" }
+  ]
+}

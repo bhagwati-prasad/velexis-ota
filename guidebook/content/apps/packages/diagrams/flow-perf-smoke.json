@@ -1,0 +1,38 @@
+{
+  "id": "flow-perf-smoke",
+  "type": "flow",
+  "title": "Run the platform performance smoke test",
+  "caption": "tools/perf/README.md 'Run it'. Scratch stack only, never the VM or the velexis database; nothing else may run (it measures this machine).",
+  "steps": [
+    {
+      "title": "Build and keys",
+      "actor": "Developer",
+      "body": "`pnpm build --filter=@velexis/platform-backend... --filter=@velexis/reference-data...`, `pnpm dev:keys`, `set -a; . ./.env.example; set +a`.",
+      "expect": ""
+    },
+    {
+      "title": "Scratch database and Redis",
+      "actor": "Developer",
+      "body": "Create `velexis_perf_<ts>` as `velexis_test_admin` with the bootstrap grants, `schemas.sql`, `pnpm db:migrate`, `pnpm db:seed:reference`; a private `redis-server --port 6390`.",
+      "expect": ""
+    },
+    {
+      "title": "Start API and worker like systemd",
+      "actor": "Developer",
+      "body": "Env file from `deploy/env/platform-backend.env.example` + local lines; `NODE_OPTIONS` from `node tools/perf/unit-node-options.mjs deploy/systemd/<unit>.service`; preload `tools/perf/gc-observer.cjs`.",
+      "expect": "`/health/ready` 200 on 3100 and 3101."
+    },
+    {
+      "title": "Measure",
+      "actor": "Developer",
+      "body": "`node tools/perf/platform-smoke.mjs --base http://127.0.0.1:3100 --duration 10` (or the 60 s recorded run with `--json` and the GC logs).",
+      "expect": "Exit 0: every p95 target met (reads < 300 ms, signIn < 800 ms, cached ask < 20 ms), RSS within MemoryMax with ≥ 64 MiB headroom, GC ≤ 5 %."
+    },
+    {
+      "title": "Clean up",
+      "actor": "Developer",
+      "body": "Stop the processes, `redis-cli -p 6390 -a dev_redis shutdown nosave`, `DROP DATABASE velexis_perf_<ts> WITH (FORCE)`.",
+      "expect": ""
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "id": "flow-account-security",
+  "type": "flow",
+  "title": "Profile, password, two-factor, sessions",
+  "caption": "PF-04, PF-06, PF-07. Every signed-in account.",
+  "steps": [
+    {
+      "title": "Profile",
+      "actor": "Member",
+      "screen": "Your profile",
+      "url": "http://localhost:3000/account",
+      "body": "Change the full name, language (en, en-GB, en-US) and time zone, **Save changes**.",
+      "expect": "\"Your profile is saved.\"; the shell shows the new name. A save from a stale second tab: PRECONDITION_FAILED with \"Reload the page\"."
+    },
+    {
+      "title": "Turn on two-factor",
+      "actor": "Member",
+      "screen": "Security",
+      "url": "http://localhost:3000/account/security",
+      "body": "**Set up two-factor authentication**, scan the QR code (or copy the key), type a code, **Turn on two-factor authentication**.",
+      "expect": "Ten recovery codes shown once (\"Your recovery codes\"); reload hides them; `accounts.mfa_enabled = true`, `mfa_enabled_at` set; ten rows in `account_recovery_codes`."
+    },
+    {
+      "title": "Change password",
+      "actor": "Member",
+      "body": "Current and new password.",
+      "expect": "\"every other session was signed out\"; the session list shrinks; OTA admin sessions end (`staffdeny:acct`); Mailpit: \"Your Velexis password was changed\"."
+    },
+    {
+      "title": "Sessions",
+      "actor": "Member",
+      "body": "Sign in from a second browser; **Revoke session** on it; then **Sign out everywhere**.",
+      "expect": "\"This browser\" has no Revoke; the revoked row disappears; Sign out everywhere ends this browser too (`/sign-in?signedOut=1`)."
+    },
+    {
+      "title": "Turn off two-factor",
+      "actor": "Member",
+      "body": "**Turn off two-factor authentication** (step-up).",
+      "expect": "Hidden for platform admins and for owners/admins of a live OTA (`mfa_mandatory`)."
+    }
+  ]
+}

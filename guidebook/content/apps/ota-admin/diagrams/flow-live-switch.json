@@ -1,0 +1,44 @@
+{
+  "id": "flow-live-switch",
+  "type": "flow",
+  "title": "Switch to LIVE and back",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/live-environment.e2e.ts. Needs a live OTA (go-live in the portal); live OTAs require MFA on the portal account.",
+  "steps": [
+    {
+      "title": "Open the console of a live OTA",
+      "actor": "Agent",
+      "body": "Open console from the portal.",
+      "expect": "TEST, with a TEST / LIVE switch (owner, admin, agent, finance)."
+    },
+    {
+      "title": "Switch to LIVE",
+      "actor": "Agent",
+      "body": "Choose **LIVE** in the switch.",
+      "expect": "Dashboard `/` of LIVE; amber shell with \"LIVE environment\"; only live bookings listed; a test booking's URL answers \"Booking not found\" naming LIVE."
+    },
+    {
+      "title": "Open a destructive dialog",
+      "actor": "Agent",
+      "body": "Open **Cancel the booking** on a live booking, do not confirm.",
+      "expect": "The environment badge, the live warning and \"… in LIVE\" on the button."
+    },
+    {
+      "title": "Back to TEST",
+      "actor": "Agent",
+      "body": "Choose **TEST**.",
+      "expect": "Test bookings again; `__Host-vx_env=test`."
+    },
+    {
+      "title": "As a viewer",
+      "actor": "Viewer",
+      "body": "Open console from the portal.",
+      "expect": "TEST badge only, no switch; forcing the cookie to `live` shows \"Live is not available for this OTA or role\" and falls back to test."
+    },
+    {
+      "title": "Billing notice",
+      "actor": "Finance / agent",
+      "body": "With the OTA `past_due` or `trial_ending` (set by the platform).",
+      "expect": "Every role sees the notice; owner and finance get \"Go to billing in the portal\", the others \"The OTA's owners and finance staff manage billing in the portal.\""
+    }
+  ]
+}

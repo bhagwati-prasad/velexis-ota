@@ -1,0 +1,67 @@
+{
+  "id": "seq-suspend-tenant",
+  "type": "sequence",
+  "title": "Suspend an OTA from the tenant page",
+  "caption": "The status change is the effect (storefront and OTA API answer TENANT_SUSPENDED within 60 s); the OTA worker only does housekeeping. Resume is the same path with tenant.resume. Code: (app)/tenants/[tenantId]/actions.ts suspendTenant.",
+  "actors": [
+    { "id": "ad", "label": "Admin (ReasonDialog)", "kind": "user" },
+    { "id": "sa", "label": "suspendTenant action", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" },
+    { "id": "r", "label": "Redis / BullMQ", "kind": "queue" },
+    { "id": "ow", "label": "OTA worker", "kind": "worker" },
+    { "id": "pw", "label": "Platform worker", "kind": "worker" }
+  ],
+  "steps": [
+    {
+      "from": "ad",
+      "to": "sa",
+      "label": "Suspend OTA: Kind of suspension abuse|request|admin + Reason (5-500)",
+      "kind": "call"
+    },
+    { "from": "sa", "to": "sa", "label": "Zod: tenantId pattern, kind, reason trimmed", "kind": "self" },
+    {
+      "from": "sa",
+      "to": "api",
+      "label": "POST /v1/admin/tenants/{tenantId}/suspend {suspensionReason, reason}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "tenants active → suspended (suspended_at, suspension_reason); provisioning_jobs suspend; audit tenant.suspended; email_outbox tenant.suspended",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "after commit: vx:invalidate tenant; ota-tenant-ops tenant.suspend (<jobId>-<attempt>)",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "sa",
+      "label": "202 {tenant, job} | 409 CONFLICT not_active",
+      "kind": "return"
+    },
+    {
+      "from": "sa",
+      "to": "ad",
+      "label": "'The OTA is suspended.' + Suspension job link; page revalidated, only Resume offered",
+      "kind": "return"
+    },
+    {
+      "from": "r",
+      "to": "ow",
+      "label": "housekeeping: expire open checkouts, void authorisations, deny staff refresh",
+      "kind": "async"
+    },
+    { "from": "ow", "to": "r", "label": "platform-tenant-events tenant.suspended", "kind": "async" },
+    {
+      "from": "r",
+      "to": "pw",
+      "label": "job succeeded ('Done' on /provisioning-jobs/<id>); e-mail '<name> has been suspended' sent",
+      "kind": "async"
+    }
+  ]
+}

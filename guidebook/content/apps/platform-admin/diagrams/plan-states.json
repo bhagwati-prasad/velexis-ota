@@ -1,0 +1,31 @@
+{
+  "id": "plan-states",
+  "type": "state",
+  "title": "Plan visibility",
+  "caption": "platform.plans.is_active and is_public. A plan is offered on the portal's pricing page only when public and active; retiring keeps its OTAs on it. Version for If-Match = updated_at in epoch ms (plans has no version column).",
+  "states": [
+    { "id": "new", "label": "New plan", "kind": "initial", "detail": "'Public' is not preselected." },
+    {
+      "id": "private",
+      "label": "Active, Not public",
+      "kind": "normal",
+      "detail": "Usable by admins (manual subscription form, create-OTA wizard)."
+    },
+    { "id": "public", "label": "Active, On the pricing page", "kind": "normal" },
+    {
+      "id": "retired",
+      "label": "Retired",
+      "kind": "normal",
+      "detail": "Not offered anywhere; **Make the plan active again**."
+    }
+  ],
+  "transitions": [
+    { "from": "new", "to": "private", "label": "Create (Public off)" },
+    { "from": "new", "to": "public", "label": "Create (Public on)" },
+    { "from": "private", "to": "public", "label": "Edit the plan: Public on" },
+    { "from": "public", "to": "private", "label": "Edit the plan: Public off" },
+    { "from": "public", "to": "retired", "label": "Retire plan (isActive false)" },
+    { "from": "private", "to": "retired", "label": "Retire plan" },
+    { "from": "retired", "to": "private", "label": "Make the plan active again" }
+  ]
+}

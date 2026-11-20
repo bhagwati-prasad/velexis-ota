@@ -1,0 +1,270 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "Inside the portal",
+  "caption": "Every request passes the middleware; pages and server actions use lib/api.ts, which reads the session cookie and adds the end-user headers. Client components never import lib/api.ts or lib/session.ts.",
+  "groups": [
+    {
+      "id": "edge",
+      "label": "Request entry"
+    },
+    {
+      "id": "routes",
+      "label": "src/app (routes)"
+    },
+    {
+      "id": "lib",
+      "label": "src/lib (server-only helpers)"
+    },
+    {
+      "id": "ui",
+      "label": "src/components"
+    },
+    {
+      "id": "ext",
+      "label": "Outside"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "mw",
+      "label": "middleware.ts",
+      "group": "edge",
+      "kind": "edge",
+      "detail": "Single-flight refresh, token links, `/sign-in?next=` and `/verify-pending` redirects, CSP nonce, `x-velexis-requested-page`."
+    },
+    {
+      "id": "marketing",
+      "label": "(marketing)",
+      "group": "routes",
+      "kind": "ui",
+      "detail": "`/`, `/pricing`, `/legal/*`."
+    },
+    {
+      "id": "auth",
+      "label": "(auth) pages + actions",
+      "group": "routes",
+      "kind": "ui",
+      "detail": "Sign-up, sign-in, MFA, reset, invitation, verify-pending, mfa-enrolment."
+    },
+    {
+      "id": "applayout",
+      "label": "(app)/layout.tsx",
+      "group": "routes",
+      "kind": "ui",
+      "detail": "`getMe` once; unverified → `/verify-pending`; `mfaEnrolmentRequired` → `/mfa-enrolment?next=`; renders `AppShell`."
+    },
+    {
+      "id": "otalayout",
+      "label": "otas/[tenantId]/layout.tsx",
+      "group": "routes",
+      "kind": "ui",
+      "detail": "`requireTenant` (cached `getTenant`), `TenantBanner`, not-found for non-members."
+    },
+    {
+      "id": "pages",
+      "label": "Pages + actions.ts",
+      "group": "routes",
+      "kind": "ui",
+      "detail": "Server components read; server actions validate with Zod, call the API, map `fieldErrors`, revalidate or redirect."
+    },
+    {
+      "id": "handlers",
+      "label": "Route handlers",
+      "group": "routes",
+      "kind": "api",
+      "detail": "`/sign-out`, `/verify-email`, `console/launch`, `connect/stripe/callback`, `lines.csv`, `/health/*`."
+    },
+    {
+      "id": "stepup",
+      "label": "(app)/step-up-actions.ts",
+      "group": "routes",
+      "kind": "ui",
+      "term": "step-up",
+      "detail": "`stepUp` server action: `POST /v1/auth/step-up`, new cookies, the form is re-sent."
+    },
+    {
+      "id": "api",
+      "label": "lib/api.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`platformApi()`: openapi-fetch, Bearer from `__Host-vxp_at`, `cache: no-store`, `redirect: manual`, error envelope → `{code,status,fieldErrors,details}`; leaves for MFA enrolment."
+    },
+    {
+      "id": "session",
+      "label": "lib/session.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Cookie names and attributes, `refresh()` single-flight map, `safeNextPath`, `prefillEmail`."
+    },
+    {
+      "id": "enduser",
+      "label": "lib/end-user.ts",
+      "group": "lib",
+      "kind": "lib",
+      "term": "bff-key",
+      "detail": "`X-Velexis-End-User-IP` (right-most XFF), `-Agent` (≤512), `X-Velexis-Bff-Key`."
+    },
+    {
+      "id": "csp",
+      "label": "lib/csp.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Per-request nonce policy; hand-off variant with `form-action` = OTA admin origin."
+    },
+    {
+      "id": "errors",
+      "label": "lib/errors.ts + lib/strings.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Error code → the portal's own message; every UI string (English)."
+    },
+    {
+      "id": "roles",
+      "label": "lib/roles.ts",
+      "group": "lib",
+      "kind": "lib",
+      "term": "tenant-role",
+      "detail": "Role matrix of scope §1.2 and the OTA navigation."
+    },
+    {
+      "id": "tenant",
+      "label": "lib/tenant.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`loadTenant` / `loadSubscription` (React `cache()`), `ifMatchOf`, `trialEndForBanner`."
+    },
+    {
+      "id": "config",
+      "label": "lib/config.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`getConfig()` validates env on first use (never at module scope)."
+    },
+    {
+      "id": "comp",
+      "label": "Components",
+      "group": "ui",
+      "kind": "ui",
+      "detail": "`AppShell`, `SideNav`, `TenantBanner`, `StepUpDialog`, `SecretRevealPanel`, `ProvisioningProgress`, `SubmissionStatus`, `DataTable`, `Money`, `DateTime`…"
+    },
+    {
+      "id": "papi",
+      "label": "Platform API",
+      "group": "ext",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "`PLATFORM_API_URL` (127.0.0.1:3100)."
+    }
+  ],
+  "edges": [
+    {
+      "from": "mw",
+      "to": "session",
+      "label": "refresh(), cookie writes",
+      "kind": "sync"
+    },
+    {
+      "from": "mw",
+      "to": "csp",
+      "label": "policy + nonce",
+      "kind": "sync"
+    },
+    {
+      "from": "mw",
+      "to": "papi",
+      "label": "POST /v1/auth/refresh",
+      "kind": "sync"
+    },
+    {
+      "from": "mw",
+      "to": "applayout",
+      "label": "request with fresh cookies",
+      "kind": "sync"
+    },
+    {
+      "from": "applayout",
+      "to": "otalayout",
+      "label": "wraps",
+      "kind": "sync"
+    },
+    {
+      "from": "otalayout",
+      "to": "pages",
+      "label": "wraps",
+      "kind": "sync"
+    },
+    {
+      "from": "pages",
+      "to": "tenant",
+      "label": "requireTenant",
+      "kind": "sync"
+    },
+    {
+      "from": "pages",
+      "to": "roles",
+      "label": "can(role, action)",
+      "kind": "sync"
+    },
+    {
+      "from": "pages",
+      "to": "api",
+      "label": "reads and mutations",
+      "kind": "sync"
+    },
+    {
+      "from": "auth",
+      "to": "api",
+      "label": "public operations",
+      "kind": "sync"
+    },
+    {
+      "from": "handlers",
+      "to": "api",
+      "label": "createPlatformApi / platformApi",
+      "kind": "sync"
+    },
+    {
+      "from": "stepup",
+      "to": "api",
+      "label": "POST /v1/auth/step-up",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "enduser",
+      "label": "adds headers",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "errors",
+      "label": "leaveForMfaEnrolment",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "papi",
+      "label": "HTTP",
+      "kind": "sync"
+    },
+    {
+      "from": "pages",
+      "to": "comp",
+      "label": "render",
+      "kind": "sync"
+    },
+    {
+      "from": "comp",
+      "to": "stepup",
+      "label": "StepUpDialog",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "config",
+      "label": "PLATFORM_API_URL, BFF key",
+      "kind": "data"
+    }
+  ]
+}

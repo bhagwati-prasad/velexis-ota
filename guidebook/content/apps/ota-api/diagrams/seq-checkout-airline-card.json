@@ -1,0 +1,156 @@
+{
+  "id": "seq-checkout-airline-card",
+  "type": "sequence",
+  "title": "Airline-card booking (the PCI path)",
+  "caption": "checkout.createPayment {method: airline_card} → updatePayment (card fee) → completeWithAirlineCard, storefront edge only (ota/docs/flows/checkout-airline-card.md, src/payments/airline-card). The card exists only in memory as a SensitiveCard for the length of one request; only brand, BIN and last 4 are ever stored.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Storefront card page",
+      "kind": "user"
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy",
+      "kind": "edge"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "pg",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus",
+      "kind": "external"
+    },
+    {
+      "id": "w",
+      "label": "OTA worker",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "caddy",
+      "label": "POST /api/v1/checkouts/{id}/payments {method: airline_card}",
+      "kind": "call"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "edge headers",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "checkout pricing_mode = net (no markup, no OTA fees); payments (provider airline, method airline_card)",
+      "kind": "call",
+      "note": "Refused 403 FEATURE_DISABLED when AIRLINE_CARD_ENABLED is false, airline_card_enabled_<env> is off or the method is suspended."
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "PATCH /v1/payments/{id} {card: {brand, bin}} (six digits typed)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Offers Price include=credit-card-fees (brand, binNumber)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "totals with the airline's card fee (payments.card_fee_amount, card_fee_lines)",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "caddy",
+      "label": "POST /api/v1/checkouts/{id}/airline-card-completion {card: number, securityCode, holder, expiry} + CSRF + Idempotency-Key",
+      "kind": "call"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "body ≤ 10 KB, not logged",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "rl:ota_airline_card_ip (5/min), rl:ota_airline_card_tenant (60/h), t:…:ac:chk:<chk> (3 per checkout), t:…:ac:suspended",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "Luhn, expiry, brand ∈ accepted_card_brands; wrap in SensitiveCard (toJSON = \"[redacted card]\")",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "T1 idempotency (hash without the card), lock checkout, booking pending",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "limits checked again (beforeSend); payment processing with card_brand, card_bin, card_last4",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Create Orders issue=true, formOfPayments.creditCard (60 s)",
+      "kind": "call"
+    },
+    {
+      "from": "ama",
+      "to": "api",
+      "label": "order + tickets",
+      "kind": "return",
+      "note": "Declined: booking failed, payment failed, 402 PAYMENT_DECLINED; 3rd decline 403 PAYMENT_ATTEMPTS_EXCEEDED; 20 declines/hour suspend the method for the tenant."
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "T2 booking ticketed, payment captured (airline.charged) only when every ticket came back; otherwise payment stays processing, ticketing manual_review, 201 with warning TICKETING_MANUAL_REVIEW",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "api",
+      "label": "finally: card reference cleared",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "201 CheckoutCompletion (Set-Cookie __Host-vx_bt)",
+      "kind": "return",
+      "note": "No answer / 5xx: 504 SUPPLIER_TIMEOUT {bookingId}; the reconciler finds the order or hands the booking to staff (manual_review), never failed automatically."
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "notify: booking.confirmed / booking.ticketed e-mails; document.render: itinerary + e-ticket receipts",
+      "kind": "async"
+    }
+  ]
+}

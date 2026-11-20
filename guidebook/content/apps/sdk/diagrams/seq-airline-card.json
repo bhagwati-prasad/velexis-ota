@@ -1,0 +1,65 @@
+{
+  "id": "seq-airline-card",
+  "type": "sequence",
+  "title": "checkout.completeWithAirlineCard: sent once, never echoed",
+  "caption": "The hosted storefront's card form (cookie mode). The route table marks the operation retry: never with a 90 s timeout; the session does not resend it after TOKEN_EXPIRED or CSRF_TOKEN_INVALID; an error is rebuilt without any card value (namespaces/checkout.js withoutCard). Key callers get 403 SCOPE_NOT_ALLOWED (edge_only).",
+  "actors": [
+    { "id": "page", "label": "checkout-pay-airline page", "kind": "ui" },
+    { "id": "ns", "label": "checkout namespace", "kind": "lib" },
+    { "id": "sess", "label": "session (cookie)", "kind": "lib" },
+    { "id": "api", "label": "OTA API (edge)", "kind": "api" },
+    { "id": "ama", "label": "Amadeus (stub)", "kind": "external" }
+  ],
+  "steps": [
+    {
+      "from": "page",
+      "to": "ns",
+      "label": "completeWithAirlineCard({ checkoutId, paymentId, expectedTotal, card })",
+      "kind": "call"
+    },
+    {
+      "from": "ns",
+      "to": "sess",
+      "label": "core.call(op.checkout_completeWithAirlineCard) — new Idempotency-Key, timeout 90 s, maxRetries forced to 0",
+      "kind": "call"
+    },
+    {
+      "from": "sess",
+      "to": "api",
+      "label": "POST /api/v1/checkouts/{id}/airline-card-completion + X-CSRF-Token",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Create Orders with the card as form of payment, issue = true",
+      "kind": "call"
+    },
+    { "from": "ama", "to": "api", "label": "order + tickets (or a decline)", "kind": "return" },
+    {
+      "from": "api",
+      "to": "sess",
+      "label": "201 CheckoutCompletion (bookingToken: null) — or 402 PAYMENT_DECLINED",
+      "kind": "return"
+    },
+    {
+      "from": "sess",
+      "to": "ns",
+      "label": "on 401 TOKEN_EXPIRED: refresh for the NEXT submit, then throw (mayResend = false)",
+      "kind": "return"
+    },
+    {
+      "from": "ns",
+      "to": "ns",
+      "label": "withoutCard(error): drop card-named fields from details/supplier, redact number, last 12 digits, CVC, holder name; drop a cause that holds any of them",
+      "kind": "self"
+    },
+    {
+      "from": "ns",
+      "to": "page",
+      "label": "result, or the scrubbed error (same class, code, status, requestId)",
+      "kind": "return",
+      "note": "After 504 SUPPLIER_TIMEOUT, a timeout or a network error the order may exist: show the pending booking (details.bookingId), never send the card again."
+    }
+  ]
+}

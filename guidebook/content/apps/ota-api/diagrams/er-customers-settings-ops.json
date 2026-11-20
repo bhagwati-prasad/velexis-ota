@@ -1,0 +1,289 @@
+{
+  "id": "er-customers-settings-ops",
+  "type": "er",
+  "title": "Tenant schema: customers, settings, outbox and audit, plus what is read from platform and Redis",
+  "caption": "Customer identity tables, the OTA's settings (one storefront_settings row 'sfs_default'), the e-mail outbox, the console audit and the idempotency records of tenant_<key>; the platform rows the OTA backend only reads (cached 60 s); and the main Redis keys. Never written by this app: platform.* (except the development-only dev:seed).",
+  "entities": [
+    {
+      "id": "customers",
+      "label": "customers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (cus_)", "type": "text", "key": "pk" },
+        { "name": "email", "type": "lower(email) unique", "key": "uk" },
+        { "name": "email_verified_at", "type": "timestamptz" },
+        { "name": "pending_email", "type": "text" },
+        { "name": "status", "type": "pending_verification|active|disabled|deleted" },
+        { "name": "deleted_at", "type": "timestamptz (erasure after 30 d)" },
+        { "name": "version", "type": "int" }
+      ]
+    },
+    {
+      "id": "customer_identities",
+      "label": "customer_identities",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (cid_)", "type": "text", "key": "pk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "provider / provider_subject", "type": "password, e-mail", "key": "uk" },
+        { "name": "password_hash", "type": "argon2id" },
+        { "name": "verification_token_hash / verification_expires_at", "type": "text" },
+        { "name": "failed_attempts / locked_until", "type": "int, timestamptz" }
+      ]
+    },
+    {
+      "id": "customer_sessions",
+      "label": "customer_sessions",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (ses_)", "type": "text", "key": "pk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "refresh_token_hash", "type": "sha256" },
+        { "name": "family_id / replaced_by_id", "type": "rotation family" },
+        { "name": "remember_me / family_expires_at", "type": "12 h or 30 d" },
+        { "name": "revoked_at / revoke_reason", "type": "timestamptz, text" }
+      ]
+    },
+    {
+      "id": "customer_password_resets",
+      "label": "customer_password_resets (+ consents, preferences, data exports, saved travellers)",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (pwr_)", "type": "text", "key": "pk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "token_hash", "type": "sha256" },
+        { "name": "expires_at / used_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "storefront_settings",
+      "label": "storefront_settings (one row 'sfs_default')",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "'sfs_default'", "key": "pk" },
+        { "name": "brand_name, primary_color, theme", "type": "text" },
+        { "name": "default_currency / supported_currencies", "type": "char(3)" },
+        { "name": "ticketing_policy", "type": "issue_after_payment|issue_at_booking|manual_review" },
+        {
+          "name": "guest_checkout_enabled / customer_accounts_enabled / require_email_verification",
+          "type": "bool"
+        },
+        { "name": "offer_ttl_minutes / checkout_ttl_minutes", "type": "int" },
+        { "name": "search_defaults / features", "type": "jsonb" },
+        {
+          "name": "time_zone, airline_card_enabled_test|live, booking_queue_number|category, ops_alert_email",
+          "type": "0002"
+        },
+        { "name": "logo_asset_id … og_image_asset_id", "type": "text (RESTRICT)", "key": "fk" },
+        { "name": "version", "type": "int" }
+      ]
+    },
+    {
+      "id": "storefront_assets",
+      "label": "storefront_assets",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (ast_)", "type": "text", "key": "pk" },
+        { "name": "kind", "type": "logo|logo_dark|logo_square|favicon|og_image|page_image" },
+        { "name": "size_bytes", "type": "≤ 1 MiB" },
+        { "name": "storage_key", "type": "text", "key": "uk" }
+      ]
+    },
+    {
+      "id": "storefront_pages",
+      "label": "storefront_pages",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (stp_)", "type": "text", "key": "pk" },
+        { "name": "slug + locale", "type": "kebab-case ≤ 64" },
+        { "name": "kind", "type": "content|terms|privacy|…" },
+        { "name": "body_markdown", "type": "≤ 50 000 chars" },
+        { "name": "is_published / show_in_footer", "type": "bool" },
+        { "name": "version", "type": "int" }
+      ]
+    },
+    {
+      "id": "markup_rules",
+      "label": "markup_rules",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (mkr_)", "type": "text", "key": "pk" },
+        { "name": "scope", "type": "jsonb (routes, carriers, cabins, …)" },
+        { "name": "calculation", "type": "percentage|fixed|percentage_plus_fixed" },
+        { "name": "percentage / fixed_amount", "type": "numeric" },
+        { "name": "priority", "type": "int (default rule 1000)" },
+        { "name": "is_default / is_active / stackable", "type": "bool" },
+        { "name": "active_from / active_until", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "fee_rules",
+      "label": "fee_rules",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (fee_)", "type": "text", "key": "pk" },
+        { "name": "fee_type / label", "type": "text" },
+        { "name": "calculation, applies_per", "type": "text" },
+        { "name": "refundable", "type": "bool (kept on cancellation when false)" },
+        { "name": "is_active, priority", "type": "bool, int" }
+      ]
+    },
+    {
+      "id": "notification_templates",
+      "label": "notification_templates",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (ntt_)", "type": "text", "key": "pk" },
+        { "name": "key / channel / locale", "type": "auth.verify_email, email, en", "key": "uk" },
+        { "name": "subject / body_html / body_text", "type": "Handlebars subset" },
+        { "name": "is_active", "type": "bool" }
+      ]
+    },
+    {
+      "id": "notifications",
+      "label": "notifications (outbox)",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (ntf_)", "type": "text", "key": "pk" },
+        { "name": "template_key", "type": "booking.confirmed, …" },
+        { "name": "recipient / recipient_type", "type": "customer|guest|staff" },
+        { "name": "booking_id / customer_id", "type": "text", "key": "fk" },
+        { "name": "status", "type": "pending|sent|failed|cancelled" },
+        { "name": "next_attempt_at", "type": "lease / retry" },
+        { "name": "secret_payload_ciphertext", "type": "bytea (purged when final)" },
+        { "name": "dedupe_key", "type": "text", "key": "uk" },
+        { "name": "attachments", "type": "jsonb doc ids" }
+      ]
+    },
+    {
+      "id": "staff_actions",
+      "label": "staff_actions (console audit)",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (sact_)", "type": "text", "key": "pk" },
+        { "name": "actor_type / actor_id / staff_id", "type": "staff|api_key|system" },
+        { "name": "staff_role", "type": "owner…viewer" },
+        { "name": "action", "type": "booking.cancel, staff.sign_in, …" },
+        { "name": "target_type / target_id / booking_id", "type": "text" },
+        { "name": "outcome", "type": "succeeded|failed|denied" },
+        { "name": "before / after", "type": "jsonb (redacted)" },
+        { "name": "ip_address / user_agent / request_id", "type": "inet, text" }
+      ]
+    },
+    {
+      "id": "idempotency_keys",
+      "label": "idempotency_keys",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (idk_)", "type": "text", "key": "pk" },
+        { "name": "scope + key", "type": "principal:env:operation + header" },
+        { "name": "request_hash", "type": "sha256 (other body → 409 IDEMPOTENCY_KEY_REUSED)" },
+        { "name": "status", "type": "processing|completed|failed" },
+        { "name": "response_body / response_ciphertext", "type": "redacted / encrypted" },
+        { "name": "expires_at", "type": "24 h" }
+      ]
+    },
+    {
+      "id": "queue_snapshots",
+      "label": "queue_snapshots",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (qsn_)", "type": "text", "key": "pk" },
+        { "name": "office_id / queue_id / category", "type": "text, int" },
+        { "name": "item_count", "type": "int" },
+        { "name": "fetched_by_staff_id", "type": "NULL = poller" },
+        { "name": "supplier_request_id", "type": "text", "key": "fk" }
+      ]
+    },
+    {
+      "id": "p_tenants",
+      "label": "platform.tenants (+ tenant_domains, api_keys, tenant_memberships, accounts)",
+      "schema": "platform",
+      "fields": [
+        { "name": "id (ten_)", "type": "text", "key": "pk" },
+        { "name": "key / schema_name", "type": "demo / tenant_demo", "key": "uk" },
+        { "name": "status", "type": "provisioning|active|suspended|…" },
+        { "name": "storefront_environment", "type": "test|live" },
+        { "name": "billing_notice", "type": "past_due|trial_ending|null" }
+      ]
+    },
+    {
+      "id": "p_connections",
+      "label": "platform.supplier_connections, amadeus_accounts, amadeus_offices, payment_provider_connections",
+      "schema": "platform",
+      "fields": [
+        { "name": "id (sc_ / ppc_)", "type": "text", "key": "pk" },
+        { "name": "tenant_id / environment", "type": "text" },
+        { "name": "status", "type": "active|…" },
+        { "name": "credentials_ciphertext", "type": "decrypted only in amadeus / payments" },
+        { "name": "monitored_queues", "type": "jsonb (queue poller)" }
+      ]
+    },
+    {
+      "id": "redis_keys",
+      "label": "Redis keys (TTL always set)",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "tenant:<id>, tenantkey:<key>, host:<host>, apikey:<prefix>, member:<acc>:<ten>",
+          "type": "60 s caches"
+        },
+        { "name": "t:<tenantId>:<env>:sf:<locale> / pages:<locale>", "type": "5 min storefront caches" },
+        { "name": "t:<tenantId>:<env>:search:<sha256>", "type": "30 s single flight" },
+        { "name": "t:<tenantId>:<env>:cxq:<bookingId>", "type": "10 min cancellation quote" },
+        {
+          "name": "t:<tenantId>:<env>:ac:chk:<chk> / ac:declines / ac:suspended",
+          "type": "airline-card limits"
+        },
+        { "name": "t:<tenantId>:<env>:authfail:<sha256(email)>", "type": "15 min lockout" },
+        { "name": "staffsess:<familyId>, staffdeny:*", "type": "staff sessions and cut-offs" },
+        { "name": "ptk:<sha256>", "type": "60 s portal token (GETDEL)" },
+        {
+          "name": "amadeus:token:<credId>:<env>, rl:amadeus:*, rl:ota_*",
+          "type": "tokens, buckets, throttler"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "customers",
+      "to": "customer_identities",
+      "label": "customer_id (CASCADE)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customers",
+      "to": "customer_sessions",
+      "label": "customer_id (CASCADE)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customers",
+      "to": "customer_password_resets",
+      "label": "customer_id (CASCADE)",
+      "cardinality": "1-n"
+    },
+    { "from": "customers", "to": "notifications", "label": "customer_id (SET NULL)", "cardinality": "1-n" },
+    {
+      "from": "storefront_assets",
+      "to": "storefront_settings",
+      "label": "logo_*_asset_id (RESTRICT)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "notification_templates",
+      "to": "notifications",
+      "label": "template_id (SET NULL)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "p_tenants",
+      "to": "storefront_settings",
+      "label": "one schema tenant_<key> per tenant (by name, no FK)",
+      "cardinality": "1-1"
+    },
+    { "from": "p_tenants", "to": "p_connections", "label": "tenant_id", "cardinality": "1-n" },
+    { "from": "p_tenants", "to": "redis_keys", "label": "cached as tenant:<id>", "cardinality": "1-n" }
+  ]
+}

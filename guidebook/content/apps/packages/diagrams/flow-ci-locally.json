@@ -1,0 +1,38 @@
+{
+  "id": "flow-ci-locally",
+  "type": "flow",
+  "title": "Run CI's own checks locally",
+  "caption": "tools/ci/README.md 'Run it locally'; tools/plan-lint/README.md.",
+  "steps": [
+    {
+      "title": "Plans",
+      "actor": "Developer",
+      "body": "`pnpm plan:lint` and `node tools/plan-lint/plan-lint.mjs --remaining`.",
+      "expect": "`ERRORS: 0`; the ready tasks of the lowest open milestone."
+    },
+    {
+      "title": "package.json and workflow pins",
+      "actor": "Developer",
+      "body": "`node tools/ci/check-package-json.mjs`.",
+      "expect": "Silent, exit 0. A `^1.0.0` range, `@velexis/testing` in `dependencies` or an unpinned `uses:` prints one line each and exits 1."
+    },
+    {
+      "title": "No hard-coded hosts",
+      "actor": "Developer",
+      "body": "`node tools/ci/check-no-hardcoded-hosts.mjs` (after `pnpm install`).",
+      "expect": "Exit 0; otherwise file:line:column of each `localhost`, `127.0.0.1`, `:5432`, `:6379` in app/package code."
+    },
+    {
+      "title": "Tests of the tools",
+      "actor": "Developer",
+      "body": "`pnpm exec eslint tools/ci tools/perf guidebook && node --test tools/ci/*.test.mjs tools/perf/*.test.mjs guidebook/tools/guidebook.test.mjs tools/dev/dev-keys.test.mjs` and `node --test tools/plan-lint/test/` (CI's build-test runs the lint and the first three test sets in its step \"Lint and test the CI checks, tools/perf and the guidebook\"; its dev-setup job runs `tools/dev/dev-keys.test.mjs`).",
+      "expect": "All pass; they write only to the system temporary folder."
+    },
+    {
+      "title": "PCI references (on demand)",
+      "actor": "Developer",
+      "body": "`node tools/ci/check-pci-refs.mjs` then, if needed, `node tools/ci/fix-pci-refs.mjs --dry-run`.",
+      "expect": "`N references checked, 0 problems`."
+    }
+  ]
+}

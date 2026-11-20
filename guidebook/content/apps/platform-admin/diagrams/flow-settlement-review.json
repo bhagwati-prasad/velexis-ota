@@ -1,0 +1,30 @@
+{
+  "id": "flow-settlement-review",
+  "type": "flow",
+  "title": "Review a settlement from draft to paid",
+  "caption": "Needs FEATURE_SETTLEMENTS. Mirrors admin-settlements.e2e.ts (which seeds a draft with insertDraftSettlement).",
+  "steps": [
+    {
+      "title": "Open the drafts",
+      "screen": "/",
+      "body": "**To review** → 'draft settlements to review' (→ `/settlements?status=draft`), open the statement.",
+      "expect": "Totals (payments, refunds, disputes, Stripe fees, Velexis fee with rate, adjustments, net), lines with CSV link, payout account status."
+    },
+    {
+      "title": "Add an adjustment",
+      "screen": "/settlements/[settlementId]",
+      "body": "**Add an adjustment**: signed amount in the statement currency, description (the OTA sees it), reason → **Add adjustment**.",
+      "expect": "A new `adjustment` line; totals recomputed. `1500.5` on a JPY statement is refused at the field (0 decimals)."
+    },
+    {
+      "title": "Approve",
+      "body": "**Approve** → **Approve statement** → code in 'Confirm with your authenticator app' if asked.",
+      "expect": "Net > 0 → approved (needs a verified payout account: else `PAYOUT_ACCOUNT_REQUIRED`); net ≤ 0 → carried_forward."
+    },
+    {
+      "title": "Pay and record",
+      "body": "Reveal the bank details on the OTA's payout account, pay outside Velexis, then **Record the bank transfer** (day, bank reference) → **Mark paid** (+ code).",
+      "expect": "Status paid; owners get 'Velexis paid the <month> settlement of <OTA>'; the portal shows the statement paid with its CSV."
+    }
+  ]
+}

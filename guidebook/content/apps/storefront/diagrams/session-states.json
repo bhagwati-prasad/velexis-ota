@@ -1,0 +1,80 @@
+{
+  "id": "session-states",
+  "type": "state",
+  "title": "A traveller's access in the browser",
+  "caption": "Cookies set only by the OTA API (`common/http/cookie-writer.ts`); the page learns the state from `auth.getSession` (`401` = signed out). Only `__Host-vx_csrf` is readable by JavaScript.",
+  "states": [
+    {
+      "id": "visitor",
+      "label": "Visitor",
+      "kind": "initial",
+      "detail": "Only `__Host-vx_csrf` (30 days)."
+    },
+    {
+      "id": "guest",
+      "label": "Guest",
+      "kind": "normal",
+      "detail": "`__Host-vx_bt`: up to 5 `bkg_<id>.<token>` entries, 30 days, newest first."
+    },
+    {
+      "id": "customer",
+      "label": "Signed-in customer",
+      "kind": "normal",
+      "detail": "`__Host-vx_at` (900 s) + `__Host-vx_rt` (family: 12 h, or 30 days with remember me)."
+    },
+    {
+      "id": "expired",
+      "label": "Access cookie gone",
+      "kind": "normal",
+      "detail": "Only `__Host-vx_rt`: the API answers `401 TOKEN_EXPIRED`, the SDK refreshes once."
+    },
+    {
+      "id": "revoked",
+      "label": "Signed out by the server",
+      "kind": "error",
+      "detail": "Refresh reused (`REFRESH_TOKEN_REUSED`), family expired, account deleted: cookies cleared."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "visitor",
+      "to": "customer",
+      "label": "sign in / sign up"
+    },
+    {
+      "from": "visitor",
+      "to": "guest",
+      "label": "guest booking or lookup"
+    },
+    {
+      "from": "guest",
+      "to": "customer",
+      "label": "sign in (guest cookie kept)"
+    },
+    {
+      "from": "customer",
+      "to": "expired",
+      "label": "15 minutes"
+    },
+    {
+      "from": "expired",
+      "to": "customer",
+      "label": "auth.refresh (rotation)"
+    },
+    {
+      "from": "expired",
+      "to": "revoked",
+      "label": "refresh refused"
+    },
+    {
+      "from": "customer",
+      "to": "visitor",
+      "label": "Sign out / delete account"
+    },
+    {
+      "from": "revoked",
+      "to": "visitor",
+      "label": "next page"
+    }
+  ]
+}

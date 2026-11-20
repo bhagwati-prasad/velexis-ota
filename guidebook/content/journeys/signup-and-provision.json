@@ -1,0 +1,149 @@
+{
+  "id": "signup-and-provision",
+  "title": "Sign up and create an OTA until it is provisioned",
+  "summary": "A new owner signs up, verifies the address, turns on two-factor sign-in, creates an OTA in the wizard and watches the platform and OTA workers provision it; then reveals the test keys and opens the new storefront.",
+  "apps": ["portal", "platform-api", "ota-api", "storefront"],
+  "roles": ["OTA owner"],
+  "duration": "20 min",
+  "prerequisites": [
+    "[[journey:run-the-stack]] done: both backends (API and worker), the portal, Mailpit and the stub are running.",
+    "Pick a fresh e-mail address such as `owner1@example.com` and an OTA key such as `acme1` (3 to 30 lower-case letters and digits, starting with a letter)."
+  ],
+  "steps": [
+    {
+      "id": "sign-up",
+      "app": "portal",
+      "title": "Sign up (and see the password rule)",
+      "url": "http://localhost:3000/sign-up",
+      "actions": "Fill **Full name**, **E-mail address**, **Password** `Too-short-1`, tick *I accept the terms of service* and press **Create account**. Then type a password of 12+ characters with a letter and a digit and press **Create account** again.",
+      "expect": "The short password is refused at the field (the e-mail stays filled in). The valid one lands on `/sign-up/check-email`.",
+      "data": "`SELECT status, email_verified_at FROM platform.accounts WHERE email = 'owner1@example.com';` → `pending_verification`, null. `SELECT template, status FROM platform.email_outbox ORDER BY created_at DESC LIMIT 1;` → `auth.verify_email`, `sent` once the worker ran. Mailpit: \"Confirm your e-mail address for Velexis\".",
+      "code": [
+        "platform/frontend/src/app/(auth)/sign-up/page.tsx",
+        "platform/backend/src/auth/sign-up.service.ts",
+        "platform/backend/src/auth/password-policy.ts",
+        "platform/backend/src/notifications/email.processor.ts"
+      ]
+    },
+    {
+      "id": "duplicate",
+      "app": "portal",
+      "title": "Sign up again with the same address",
+      "url": "http://localhost:3000/sign-up",
+      "actions": "Sign up once more with the same address and another name and password.",
+      "expect": "The same `/sign-up/check-email` page (nothing reveals that the address exists). Mailpit gets \"You already have a Velexis account\" instead of a second verification link.",
+      "data": "Still one row in `platform.accounts` for the address; `email_outbox` has an `auth.account_exists` row.",
+      "code": ["platform/backend/src/auth/sign-up.service.ts"]
+    },
+    {
+      "id": "verify",
+      "app": "portal",
+      "title": "Verify the address through the Mailpit link",
+      "actions": "In Mailpit open the verification e-mail and click its link (it points at `http://localhost:3000/verify-email?token=…`). Click the same link a second time.",
+      "expect": "First click: `/sign-in?verified=1` with *Your e-mail address is verified. Sign in to continue.*; the token is gone from the address bar. Second click: `/verify-pending?error=token` with *This verification link has expired or was already used* (single use).",
+      "data": "`platform.accounts.status` → `active`, `email_verified_at` set; the `account_tokens` row consumed; audit `account.email_verified`.",
+      "code": [
+        "platform/frontend/src/app/verify-email/route.ts",
+        "platform/backend/src/auth/account-tokens.repository.ts"
+      ]
+    },
+    {
+      "id": "sign-in",
+      "app": "portal",
+      "title": "Sign in",
+      "url": "http://localhost:3000/sign-in",
+      "actions": "Sign in with the address and password.",
+      "expect": "`/dashboard` (\"My OTAs\") with the empty state \"You have no OTA yet\" and the **Create an OTA** button at the top. Cookies `__Host-vxp_at` and `__Host-vxp_rt` are httpOnly.",
+      "code": [
+        "platform/frontend/src/app/(app)/dashboard/page.tsx",
+        "platform/backend/src/auth/sign-in.service.ts"
+      ]
+    },
+    {
+      "id": "mfa",
+      "app": "portal",
+      "title": "Turn on two-factor sign-in",
+      "url": "http://localhost:3000/account/security",
+      "actions": "Press **Set up two-factor authentication**, add the key shown as *Or enter this key in the app* to your authenticator, type a code in **Authentication code** and press **Turn on two-factor authentication**. Save the recovery codes. Sign out, then sign in again.",
+      "expect": "Ten recovery codes are shown once; after a reload the set-up key is gone. The next sign-in asks for a code on `/sign-in/mfa` (**Verify and sign in**) before `/dashboard`.",
+      "data": "`SELECT count(*) FROM platform.account_recovery_codes WHERE account_id = 'acc_…';` → 10. The account's MFA secret column holds ciphertext only.",
+      "code": [
+        "platform/frontend/src/app/(app)/account/security/page.tsx",
+        "platform/backend/src/accounts/mfa.service.ts",
+        "platform/backend/src/auth/mfa-challenge.store.ts"
+      ]
+    },
+    {
+      "id": "wizard",
+      "app": "portal",
+      "title": "Create the OTA in the wizard",
+      "url": "http://localhost:3000/otas/new",
+      "actions": "Press **Create an OTA**. Type **OTA name**, then **OTA key**: try `demo`, `admin` and `1abc` first, then your key. Choose **Country** and **Default currency** (time zone is prefilled). **Continue** → Plan (early access) → **Continue** → Review → **Create OTA**. Double-click the last button on purpose.",
+      "expect": "Reserved and malformed keys are refused as you type (*This key is reserved by Velexis…*, *Use 3 to 30 lower-case letters…*; upper-case letters are lower-cased as you type); a free key shows *This key is available.* and *Storefront address: `<key>`.ota.example.com*. The plan step says every new OTA starts on the early access plan. After **Create OTA** you land on `/otas/ten_…/setup` with **Set-up steps**; the double click creates one OTA (Idempotency-Key).",
+      "data": "One transaction: `platform.tenants` (`provisioning`, `storefront_environment = test`), `tenant_memberships` (`owner`), `subscriptions` (manual trial of `early_access`), `tenant_domains` (`<key>.ota.example.com`, verified, primary), `provisioning_jobs` (`kind = provision`), audit `tenant.created`. Redis: a job in `vx:ota-tenant-ops:*` with id `job_…-1`.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/new/page.tsx",
+        "platform/backend/src/tenants/tenants.service.ts",
+        "platform/backend/src/tenants/tenant-key.ts",
+        "platform/backend/src/provisioning/lifecycle.service.ts",
+        "platform/backend/src/provisioning/dispatcher.ts"
+      ]
+    },
+    {
+      "id": "provisioned",
+      "app": "ota-api",
+      "title": "Watch the set-up finish",
+      "url": "http://localhost:3000/otas/ten_…/setup",
+      "actions": "Stay on the set-up page (it polls every 2 seconds). Watch the OTA worker's and platform worker's terminals.",
+      "expect": "Within about a minute the heading becomes **Your OTA is ready** and the `activate` step shows *Done*. No error lines in either worker.",
+      "data": "`SELECT status, step, attempt, steps FROM platform.provisioning_jobs WHERE tenant_id = 'ten_…';` → `succeeded` with `record_migrations`, `assign_amadeus_office`, `create_payment_connection`, `issue_api_keys`, `activate`, `notify` all succeeded. `platform.tenants.status` → `active`, `schema_version` set. `\\dt tenant_<key>.*` lists the tenant tables. `platform.supplier_connections` (test, `active`, one `DEV1A…` office), `platform.payment_provider_connections` (stripe, test, `velexis`, `active`), two `platform.api_keys`. In the tenant: `storefront_settings`, the default `markup_rules` row and `notification_templates` are seeded.",
+      "code": [
+        "ota/backend/src/provisioning/tenant-ops.processor.ts",
+        "ota/backend/src/provisioning/provisioning.service.ts",
+        "platform/backend/src/provisioning/tenant-events.processor.ts",
+        "platform/backend/src/provisioning/post-steps/post-steps.runner.ts",
+        "platform/backend/src/provisioning/post-steps/assign-amadeus-office.step.ts"
+      ]
+    },
+    {
+      "id": "reveal",
+      "app": "portal",
+      "title": "Reveal the test keys once",
+      "url": "http://localhost:3000/otas/ten_…/setup",
+      "actions": "Press **Reveal the test keys**. Copy both. Reload the page.",
+      "expect": "**Your test API keys** shows *Publishable test key* `pk_test_` + 40 characters and *Secret test key* `sk_test_` + 40 characters; the button disappears. After the reload: *The initial keys were already shown* and no key anywhere in the page source.",
+      "data": "The provisioning job's reveal ciphertext is erased and `revealed_at` set in the same update; keys never appear in logs (search the platform API log for `sk_test_`: nothing).",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/setup/page.tsx",
+        "platform/backend/src/provisioning/post-steps/issue-api-keys.step.ts"
+      ]
+    },
+    {
+      "id": "checklist",
+      "app": "portal",
+      "title": "See the onboarding checklist and the welcome e-mail",
+      "url": "http://localhost:3000/otas/ten_…",
+      "actions": "Press **Go to the OTA dashboard**. Look at the region **Get your OTA ready**. Check Mailpit.",
+      "expect": "Items: Verify your e-mail *Done*, Turn on two-factor sign-in *Done*, OTA set up *Done*, Get your API keys *Done*, Open your storefront *Done*, Amadeus test office active *Done*, Invite your team *To do* (a link to `/otas/ten_…/team`); the progress line reads \"6 of 7 done\". Mailpit: \"`<OTA name>` is ready on Velexis\".",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/page.tsx",
+        "platform/backend/src/provisioning/onboarding.service.ts",
+        "platform/backend/src/provisioning/post-steps/notify.step.ts"
+      ]
+    },
+    {
+      "id": "own-storefront",
+      "app": "storefront",
+      "title": "Open the new OTA's storefront locally",
+      "url": "http://localhost:5173",
+      "actions": "Create `ota/frontend/.env.local` with `STOREFRONT_DEV_HOST=<key>.ota.example.com` and restart `pnpm --filter @velexis/ota-frontend dev`. Open the home page and search MAD → PAR.",
+      "expect": "The header shows your OTA's name and the \"Test mode\" note; the search lists the stub's 5 flights priced with the seeded default markup (0 %).",
+      "data": "`SELECT count(*) FROM tenant_<key>.flight_searches;` grows; `tenant_demo` does not change (isolation).",
+      "code": [
+        "ota/frontend/vite.config.js",
+        "ota/backend/src/tenancy/tenant-resolver.ts",
+        "ota/backend/src/storefront/storefront.service.ts"
+      ]
+    }
+  ]
+}

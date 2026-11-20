@@ -1,0 +1,392 @@
+{
+  "id": "components-packages",
+  "type": "component",
+  "title": "Inside the shared packages (packages/*)",
+  "caption": "One group per package; nodes are the source files that matter when you fix something. `src/generated/` files are written by generators, never by hand.",
+  "groups": [
+    {
+      "id": "config",
+      "label": "@velexis/config"
+    },
+    {
+      "id": "logger",
+      "label": "@velexis/logger"
+    },
+    {
+      "id": "crypto",
+      "label": "@velexis/crypto"
+    },
+    {
+      "id": "db",
+      "label": "@velexis/db"
+    },
+    {
+      "id": "errors",
+      "label": "@velexis/errors"
+    },
+    {
+      "id": "api",
+      "label": "@velexis/api-types"
+    },
+    {
+      "id": "testing",
+      "label": "@velexis/testing (dev only)"
+    },
+    {
+      "id": "ext",
+      "label": "Outside"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "defineConfig",
+      "label": "define-config.ts / env.ts",
+      "group": "config",
+      "kind": "lib",
+      "term": "define-config",
+      "detail": "Reads `process.env` once, validates every builder, throws one `ConfigError` listing variable names, never values."
+    },
+    {
+      "id": "keyFiles",
+      "label": "key-files.ts",
+      "group": "config",
+      "kind": "lib",
+      "term": "key-file",
+      "detail": "`readKeyFile`: regular file, mode without group/other bits, base64 or PEM, minimum bytes."
+    },
+    {
+      "id": "devEnv",
+      "label": "dev-env-files.ts",
+      "group": "config",
+      "kind": "lib",
+      "detail": "`loadDevEnvFiles`: `<app>/.env.local` then root `.env.local`, only unset variables; no-op when `APP_ENV` or `NODE_ENV` is production."
+    },
+    {
+      "id": "createLogger",
+      "label": "create-logger.ts",
+      "group": "logger",
+      "kind": "lib",
+      "detail": "pino with `app`, `env`, ISO time, the `err` serializer (no bodies)."
+    },
+    {
+      "id": "http",
+      "label": "http.ts (pinoHttpOptions)",
+      "group": "logger",
+      "kind": "lib",
+      "term": "request-id",
+      "detail": "Keeps a valid `X-Request-Id` (`^[A-Za-z0-9._-]{8,128}$`) or makes a UUID; one line per request; skips `/health*`."
+    },
+    {
+      "id": "redactPaths",
+      "label": "redact-paths.ts",
+      "group": "logger",
+      "kind": "lib",
+      "term": "redact-paths",
+      "detail": "The single redaction list, shallow to deep; card objects censored to depth 8."
+    },
+    {
+      "id": "redactPayload",
+      "label": "redact-payload.ts / mask.ts",
+      "group": "logger",
+      "kind": "lib",
+      "term": "redact-payload",
+      "detail": "Deep copy for persisted payloads: card number → last 4, CVC dropped, tokens `[REDACTED]`; `maskPan` keeps BIN + last 4."
+    },
+    {
+      "id": "envelope",
+      "label": "envelope.ts",
+      "group": "crypto",
+      "kind": "lib",
+      "term": "envelope-encryption",
+      "detail": "AES-256-GCM value + wrapped DEK; version byte 1; 98 bytes overhead for `local:v1`."
+    },
+    {
+      "id": "kp",
+      "label": "local-file-key-provider.ts",
+      "group": "crypto",
+      "kind": "lib",
+      "term": "kek",
+      "detail": "Loads every `master-v<N>.key` as KEK `local:v<N>`; refuses loose modes and wrong lengths."
+    },
+    {
+      "id": "aad",
+      "label": "aad.ts",
+      "group": "crypto",
+      "kind": "lib",
+      "term": "associated-data",
+      "detail": "`<schema>.<table>.<column>:<rowId>`."
+    },
+    {
+      "id": "rewrap",
+      "label": "rewrap-batch.ts",
+      "group": "crypto",
+      "kind": "lib",
+      "term": "kek-rotation",
+      "detail": "Keyset-paged re-wrap with an optimistic update per row; reports `remainingByKekId`."
+    },
+    {
+      "id": "tokens",
+      "label": "tokens.ts / hash.ts / signed-url.ts / ids.ts",
+      "group": "crypto",
+      "kind": "lib",
+      "term": "signed-url",
+      "detail": "`generateToken`, `sha256Hex`, `hashApiKey` (pepper), `signUrl`/`verifySignedUrl`, `newId` (ULID, never monotonic)."
+    },
+    {
+      "id": "pool",
+      "label": "pool.ts / type-parsers.ts",
+      "group": "db",
+      "kind": "lib",
+      "term": "type-parsers",
+      "detail": "`createPool`: 10 connections, 30 s session statement_timeout; numeric/int8 as strings, timestamptz as Date."
+    },
+    {
+      "id": "platformDb",
+      "label": "platform-db.ts",
+      "group": "db",
+      "kind": "lib",
+      "term": "platform-db",
+      "detail": "Kysely over `platform.*` and `reference.*` by qualified name."
+    },
+    {
+      "id": "tenantDb",
+      "label": "tenant-db.ts / tenant-schema.ts",
+      "group": "db",
+      "kind": "lib",
+      "term": "tenant-tx",
+      "detail": "`tenantTx`: validate schema name, leak guard, `set_config('search_path', '<schema>, reference', true)`, timeout 5 s."
+    },
+    {
+      "id": "migrate",
+      "label": "migrate/*.ts + cli/migrate.ts",
+      "group": "db",
+      "kind": "lib",
+      "term": "migration-runner",
+      "detail": "Files, ledger, repeatable grants, tenant schema runner, fan-out; exit codes 0/1/2/3."
+    },
+    {
+      "id": "storage",
+      "label": "storage/local-disk-storage.ts",
+      "group": "db",
+      "kind": "lib",
+      "term": "storage-adapter",
+      "detail": "Atomic writes, mode 0600, key rules `tenant_<key>/…` or `platform/…`; `s3` not implemented."
+    },
+    {
+      "id": "generatedDb",
+      "label": "src/generated/{platform,reference,tenant}.ts",
+      "group": "db",
+      "kind": "lib",
+      "term": "table-types-codegen",
+      "detail": "Kysely table types from `pnpm db:codegen`."
+    },
+    {
+      "id": "appError",
+      "label": "app-error.ts / envelope.ts",
+      "group": "errors",
+      "kind": "lib",
+      "term": "app-error",
+      "detail": "`AppError(code)`, `toErrorEnvelope`, `FIELD_ERROR_CODES`."
+    },
+    {
+      "id": "catalogue",
+      "label": "src/generated/catalogue.ts",
+      "group": "errors",
+      "kind": "lib",
+      "term": "error-catalogue",
+      "detail": "Generated from both documents' `x-error-catalogue`."
+    },
+    {
+      "id": "apiGen",
+      "label": "src/generated/{ota,platform,operations}.ts",
+      "group": "api",
+      "kind": "lib",
+      "term": "operations-index",
+      "detail": "openapi-typescript 7 output and the operations index."
+    },
+    {
+      "id": "jobs",
+      "label": "src/jobs/*.ts",
+      "group": "api",
+      "kind": "lib",
+      "term": "job-envelope",
+      "detail": "Queue names, `tenant.*` messages, `vx:invalidate` events, `validateJob`, `validateInvalidation`."
+    },
+    {
+      "id": "scripts",
+      "label": "scripts/generate.mjs, contracts-lint.mjs",
+      "group": "api",
+      "kind": "lib",
+      "term": "contracts-generate",
+      "detail": "`pnpm contracts:generate` and `pnpm contracts:lint`."
+    },
+    {
+      "id": "tdb",
+      "label": "test-database.ts / vitest-global-setup.ts",
+      "group": "testing",
+      "kind": "lib",
+      "term": "test-template-database",
+      "detail": "Template per run, clone per file, forced drop."
+    },
+    {
+      "id": "tother",
+      "label": "redis.ts, clock.ts, builders.ts, openapi-response.ts",
+      "group": "testing",
+      "kind": "lib",
+      "term": "expect-response-to-match",
+      "detail": "`useRedis` (DB 1–15), `FakeClock`, `defineBuilder`, Ajv response check."
+    },
+    {
+      "id": "tmail",
+      "label": "mailpit.ts, amadeus.ts, stripe.ts",
+      "group": "testing",
+      "kind": "lib",
+      "term": "mailpit",
+      "detail": "`waitForMessage`, `startAmadeusStub`, `signedStripeEvent`."
+    },
+    {
+      "id": "env",
+      "label": "process.env + .env.local",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Systemd env files on the VM; `.env.local` locally."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL 16",
+      "group": "ext",
+      "kind": "db",
+      "detail": "Roles `velexis_migrator`, `velexis_provisioner`, `velexis_platform_app`, `velexis_ota_app` (+ `velexis_test_admin` locally/CI)."
+    },
+    {
+      "id": "yaml",
+      "label": "OpenAPI documents",
+      "group": "ext",
+      "kind": "external",
+      "detail": "`ota/backend/openapi/…`, `platform/backend/openapi/…`"
+    },
+    {
+      "id": "keys",
+      "label": "Key files",
+      "group": "ext",
+      "kind": "external",
+      "detail": "`/etc/velexis/keys/<zone>/` (VM) or `.local/keys/` (dev)."
+    }
+  ],
+  "edges": [
+    {
+      "from": "defineConfig",
+      "to": "env",
+      "label": "reads once",
+      "kind": "data"
+    },
+    {
+      "from": "defineConfig",
+      "to": "keyFiles",
+      "label": "env.secretFile",
+      "kind": "sync"
+    },
+    {
+      "from": "kp",
+      "to": "keys",
+      "label": "master-v<N>.key",
+      "kind": "data"
+    },
+    {
+      "from": "envelope",
+      "to": "kp",
+      "label": "wrap / unwrap DEK",
+      "kind": "sync"
+    },
+    {
+      "from": "envelope",
+      "to": "aad",
+      "label": "AAD",
+      "kind": "sync"
+    },
+    {
+      "from": "rewrap",
+      "to": "envelope",
+      "label": "rewrapValue",
+      "kind": "sync"
+    },
+    {
+      "from": "createLogger",
+      "to": "redactPaths",
+      "label": "redact",
+      "kind": "sync"
+    },
+    {
+      "from": "http",
+      "to": "createLogger",
+      "label": "child logger",
+      "kind": "sync"
+    },
+    {
+      "from": "tenantDb",
+      "to": "pool",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "platformDb",
+      "to": "pool",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "pool",
+      "to": "pg",
+      "label": "app role",
+      "kind": "sync"
+    },
+    {
+      "from": "migrate",
+      "to": "pg",
+      "label": "migrator / provisioner",
+      "kind": "sync"
+    },
+    {
+      "from": "generatedDb",
+      "to": "tenantDb",
+      "label": "default DB types",
+      "kind": "data"
+    },
+    {
+      "from": "appError",
+      "to": "catalogue",
+      "label": "status, message",
+      "kind": "data"
+    },
+    {
+      "from": "scripts",
+      "to": "yaml",
+      "label": "parse",
+      "kind": "data"
+    },
+    {
+      "from": "scripts",
+      "to": "apiGen",
+      "label": "writes",
+      "kind": "data"
+    },
+    {
+      "from": "catalogue",
+      "to": "yaml",
+      "label": "generated from",
+      "kind": "data"
+    },
+    {
+      "from": "tdb",
+      "to": "migrate",
+      "label": "runMigrations, migrateTenantSchema",
+      "kind": "sync"
+    },
+    {
+      "from": "tother",
+      "to": "yaml",
+      "label": "response schemas",
+      "kind": "data"
+    }
+  ]
+}

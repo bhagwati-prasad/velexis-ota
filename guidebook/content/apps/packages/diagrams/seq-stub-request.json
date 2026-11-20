@@ -1,0 +1,96 @@
+{
+  "id": "seq-stub-request",
+  "type": "sequence",
+  "title": "How the Amadeus stub answers a request",
+  "caption": "tools/amadeus-stub/src/server.ts. Authentication and validation come before the scenario, so a request without a token or with a malformed body fails whatever the scenario says.",
+  "actors": [
+    {
+      "id": "client",
+      "label": "OTA backend AmadeusClient / curl",
+      "kind": "api"
+    },
+    {
+      "id": "srv",
+      "label": "server.ts",
+      "kind": "api"
+    },
+    {
+      "id": "auth",
+      "label": "oauth.ts TokenStore",
+      "kind": "lib"
+    },
+    {
+      "id": "val",
+      "label": "validate.ts (Ajv)",
+      "kind": "lib"
+    },
+    {
+      "id": "h",
+      "label": "handler (routes/handlers)",
+      "kind": "lib"
+    }
+  ],
+  "steps": [
+    {
+      "from": "client",
+      "to": "srv",
+      "label": "POST /v1/security/oauth2/token grant_type=client_credentials",
+      "kind": "call"
+    },
+    {
+      "from": "srv",
+      "to": "auth",
+      "label": "check grant + credentials",
+      "kind": "call"
+    },
+    {
+      "from": "srv",
+      "to": "client",
+      "label": "200 { access_token, expires_in: 1799 }  (400 38187 / 401 invalid_client)",
+      "kind": "return"
+    },
+    {
+      "from": "client",
+      "to": "srv",
+      "label": "GET /v2/shopping/flight-offers?… Authorization: Bearer …, X-Stub-Scenario?",
+      "kind": "call"
+    },
+    {
+      "from": "srv",
+      "to": "srv",
+      "label": "route (404 38196 if none); scenario name known? (400 90001)",
+      "kind": "self"
+    },
+    {
+      "from": "srv",
+      "to": "auth",
+      "label": "bearer check: 401 38191 / 38190 / 38192",
+      "kind": "call"
+    },
+    {
+      "from": "srv",
+      "to": "val",
+      "label": "query/path/headers/body vs specification",
+      "kind": "call",
+      "note": "400 with 32171 / 477 / 572 / 4926 naming the parameter, never the value."
+    },
+    {
+      "from": "srv",
+      "to": "srv",
+      "label": "generic scenario: server-error 500 141, rate-limited 429 38194, timeout hold 30 s → 504",
+      "kind": "self"
+    },
+    {
+      "from": "srv",
+      "to": "h",
+      "label": "handler with query, body, scenario, orders, now",
+      "kind": "call"
+    },
+    {
+      "from": "h",
+      "to": "client",
+      "label": "fixture / order answer, or operation scenario (sold-out, price-changed, …)",
+      "kind": "return"
+    }
+  ]
+}

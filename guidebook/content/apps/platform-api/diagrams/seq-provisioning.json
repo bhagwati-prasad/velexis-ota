@@ -1,0 +1,108 @@
+{
+  "id": "seq-provisioning",
+  "type": "sequence",
+  "title": "Provisioning: OTA worker answer and platform post-steps",
+  "caption": "The OTA worker creates the tenant schema; the platform worker mirrors the ledger and runs six idempotent post-steps, each in its own transaction.",
+  "actors": [
+    {
+      "id": "r",
+      "label": "Redis / BullMQ",
+      "kind": "queue"
+    },
+    {
+      "id": "ow",
+      "label": "OTA worker",
+      "kind": "worker"
+    },
+    {
+      "id": "pw",
+      "label": "Platform worker",
+      "kind": "worker"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "mail",
+      "label": "Mailpit / SMTP",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "r",
+      "to": "ow",
+      "label": "ota-tenant-ops tenant.provision {v, jobId, tenantId}",
+      "kind": "async"
+    },
+    {
+      "from": "ow",
+      "to": "ow",
+      "label": "create_schema, run_migrations, seed_defaults as velexis_provisioner (one transaction)",
+      "kind": "self"
+    },
+    {
+      "from": "ow",
+      "to": "r",
+      "label": "platform-tenant-events tenant.provisioned {schemaName, schemaVersion, migrations[], steps[]}",
+      "kind": "async"
+    },
+    {
+      "from": "r",
+      "to": "pw",
+      "label": "tenant-events processor (concurrency 4)",
+      "kind": "async"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "record_migrations → tenant_schema_migrations, tenants.schema_version",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "assign_amadeus_office → oldest available test office assigned, supplier_connections velexis/active",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "create_payment_connection → payment_provider_connections test, account_mode velexis",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "issue_api_keys → pk_test + sk_test (scope storefront), raw keys encrypted in provisioning_jobs.reveal_ciphertext",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "activate → tenants.status active, job succeeded, audit tenant.activated",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "r",
+      "label": "notify → vx:invalidate tenant + connection; email.send tenant.welcome",
+      "kind": "async"
+    },
+    {
+      "from": "pw",
+      "to": "mail",
+      "label": "tenant.welcome to every active owner",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pw",
+      "label": "on tenant.provision_failed or a lost lease: failure handler retries with backoff (30 s × 2^attempt) or fails the job and the tenant",
+      "kind": "self",
+      "note": "Failed provision: tenants.status failed, tenant.provisioning_failed e-mail, ops.alert."
+    }
+  ]
+}

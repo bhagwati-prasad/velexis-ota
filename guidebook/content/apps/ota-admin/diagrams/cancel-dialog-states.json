@@ -1,0 +1,61 @@
+{
+  "id": "cancel-dialog-states",
+  "type": "state",
+  "title": "The cancel dialog and what the API does",
+  "caption": "bookings/[bookingId]/cancel-dialog.tsx, action-rules.ts cancelPlanOf; the step is the API's cancellationMode (console.bookings.get), decided in storefront_settings.time_zone. FIX-W35/36/37-OTA.",
+  "states": [
+    {
+      "id": "open",
+      "label": "Dialog open",
+      "kind": "initial",
+      "detail": "Reason category, reason, money, \"E-mail the cancellation to the traveller\" (on)."
+    },
+    {
+      "id": "release",
+      "label": "Release",
+      "kind": "normal",
+      "detail": "Nothing ticketed: Amadeus DELETE releases the seats. Refund modes of the payment (none / full / amount)."
+    },
+    {
+      "id": "void",
+      "label": "Void",
+      "kind": "normal",
+      "detail": "Every ticket issued today in the OTA's time zone: DELETE voids them. Airline card: only \"No refund from the console\"."
+    },
+    {
+      "id": "request",
+      "label": "Request to the airline",
+      "kind": "normal",
+      "detail": "A ticket of an earlier day: no DELETE, no refund choice (`refund.mode = none`), no money moves."
+    },
+    {
+      "id": "cancelled",
+      "label": "Booking cancelled",
+      "kind": "final",
+      "detail": "`status = cancelled`, `cancelled_by = staff`, `cancel_reason = '<code>: <reason>'`, refund queued, `booking.cancelled` e-mail."
+    },
+    {
+      "id": "requested",
+      "label": "Cancellation requested",
+      "kind": "final",
+      "detail": "Booking unchanged with a pending staff cancellation, `booking.cancellation_requested` e-mail; Cancel hidden afterwards (canCancel `pending`). Finish with the airline, then Resync, then Refund."
+    },
+    {
+      "id": "stale",
+      "label": "refund_not_available",
+      "kind": "error",
+      "detail": "The page showed release/void but the API found an older ticket: the dialog switches to the request form with a new key."
+    }
+  ],
+  "transitions": [
+    { "from": "open", "to": "release", "label": "cancellationMode = release" },
+    { "from": "open", "to": "void", "label": "cancellationMode = void" },
+    { "from": "open", "to": "request", "label": "cancellationMode = request_only" },
+    { "from": "release", "to": "cancelled", "label": "Confirm" },
+    { "from": "void", "to": "cancelled", "label": "Confirm" },
+    { "from": "void", "to": "stale", "label": "422 refund_not_available" },
+    { "from": "release", "to": "stale", "label": "422 refund_not_available" },
+    { "from": "stale", "to": "request", "label": "form switches" },
+    { "from": "request", "to": "requested", "label": "Confirm" }
+  ]
+}

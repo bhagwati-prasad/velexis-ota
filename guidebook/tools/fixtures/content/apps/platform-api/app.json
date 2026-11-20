@@ -1,0 +1,76 @@
+{
+  "id": "platform-api",
+  "name": "Platform API",
+  "kind": "backend",
+  "product": "platform",
+  "summary": "NestJS API and worker for accounts, tenants, billing and provisioning.",
+  "audience": ["Portal", "Platform admin"],
+  "repoPath": "platform/backend",
+  "package": "@velexis/platform-backend",
+  "stack": ["NestJS", "Kysely", "PostgreSQL", "BullMQ on Redis"],
+  "local": {
+    "url": "http://localhost:3100",
+    "port": 3100,
+    "command": "pnpm --filter @velexis/platform-backend dev",
+    "notes": "Runs the API and the worker."
+  },
+  "dependsOn": [],
+  "talksTo": [],
+  "data": ["platform.accounts", "platform.tenants", "platform.account_sessions"],
+  "docs": ["platform/docs/api-inventory.md"],
+  "adrs": ["docs/mvp/adr/0006-contract-first-openapi.md"],
+  "roles": [],
+  "screens": [],
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-up",
+      "operationId": "signUp",
+      "tag": "auth",
+      "purpose": "Create an account and send the verification e-mail."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/verify-email",
+      "operationId": "verifyEmail",
+      "tag": "auth",
+      "purpose": "Confirm the e-mail address with the token from the e-mail."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/sign-in",
+      "operationId": "signIn",
+      "tag": "auth",
+      "purpose": "Exchange e-mail and password for a session."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/auth/refresh",
+      "operationId": "refreshSession",
+      "tag": "auth",
+      "purpose": "Rotate the refresh token."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/me",
+      "operationId": "getMe",
+      "tag": "accounts",
+      "purpose": "The signed-in account."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/tenants",
+      "operationId": "listTenants",
+      "tag": "tenants",
+      "purpose": "OTAs the account belongs to."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/tenants",
+      "operationId": "createTenant",
+      "tag": "tenants",
+      "purpose": "Create an OTA and queue its provisioning."
+    }
+  ],
+  "tags": ["nestjs", "api"]
+}

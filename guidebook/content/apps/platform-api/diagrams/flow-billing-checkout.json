@@ -1,0 +1,32 @@
+{
+  "id": "flow-billing-checkout",
+  "type": "flow",
+  "title": "Choose a plan with Stripe Checkout (M5)",
+  "caption": "FEATURE_STRIPE_BILLING=true, a test STRIPE_SECRET_KEY and STRIPE_BILLING_WEBHOOK_SECRET, a public plan with a Stripe test Price (platform admin, Billing → Plans; otherwise `422 PLAN_NOT_AVAILABLE`), and `bash tools/dev/stripe-listen.sh --only billing` (forwards to localhost:3100/webhooks/stripe/billing).",
+  "steps": [
+    {
+      "title": "Create with a plan",
+      "actor": "Owner",
+      "body": "`POST /v1/tenants` with `planCode` (and `billingInterval`).",
+      "expect": "`checkoutUrl` returned; subscription `incomplete`; job `queued` (gate closed)."
+    },
+    {
+      "title": "Pay in Checkout",
+      "actor": "Owner",
+      "body": "Use a Stripe test card in the Checkout page.",
+      "expect": "Webhook `checkout.session.completed` stored in `stripe_events`; worker re-fetches; subscription `trialing`/`active`; job dispatched; OTA becomes active."
+    },
+    {
+      "title": "Customer Portal",
+      "actor": "Owner",
+      "body": "`POST …/billing/portal-session`.",
+      "expect": "Stripe portal URL; plan changes come back as webhooks and change `tenants.plan_code`."
+    },
+    {
+      "title": "Failure paths",
+      "actor": "Tester",
+      "body": "Never pay, or fail a renewal.",
+      "expect": "After 48 h `billing.abandoned_checkouts` fails the OTA; `past_due` shows `billing_notice`; `canceled`/`unpaid` suspends with reason `billing`."
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "id": "seq-job-message",
+  "type": "sequence",
+  "title": "Cross-backend messages: job envelope and vx:invalidate",
+  "caption": "packages/api-types/src/jobs/*. Producers validate before queue.add/publish, consumers when they take the message; an invalid message is a bug of the other side and is not retried.",
+  "actors": [
+    {
+      "id": "pw",
+      "label": "Platform (dispatcher / publisher)",
+      "kind": "worker"
+    },
+    {
+      "id": "redis",
+      "label": "Redis (BullMQ prefix vx)",
+      "kind": "queue"
+    },
+    {
+      "id": "ow",
+      "label": "OTA worker / API subscriber",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "pw",
+      "to": "pw",
+      "label": "validateJob('tenant.provision', { v:1, name, jobId, tenantId, requestedAt, requestId, payload: {} })",
+      "kind": "self"
+    },
+    {
+      "from": "pw",
+      "to": "redis",
+      "label": "queue ota-tenant-ops .add(name, msg, { jobId: bullmqJobId(job.id, attempt) })  → 'job_…-2'",
+      "kind": "async"
+    },
+    {
+      "from": "ow",
+      "to": "redis",
+      "label": "take the job",
+      "kind": "call"
+    },
+    {
+      "from": "ow",
+      "to": "ow",
+      "label": "validateJob(job.name, job.data); MessageValidationError → UnrecoverableError (no retry)",
+      "kind": "self"
+    },
+    {
+      "from": "ow",
+      "to": "redis",
+      "label": "platform-tenant-events: tenant.provisioned { schemaName, schemaVersion, migrations[], steps[] }",
+      "kind": "async"
+    },
+    {
+      "from": "pw",
+      "to": "pw",
+      "label": "after a commit: validateInvalidation({ v:1, type:'tenant', id })",
+      "kind": "self"
+    },
+    {
+      "from": "pw",
+      "to": "redis",
+      "label": "PUBLISH vx:invalidate",
+      "kind": "async"
+    },
+    {
+      "from": "ow",
+      "to": "ow",
+      "label": "subscriber validates and drops the cached row",
+      "kind": "self"
+    }
+  ]
+}

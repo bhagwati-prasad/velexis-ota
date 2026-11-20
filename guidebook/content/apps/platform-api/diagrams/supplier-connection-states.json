@@ -1,0 +1,72 @@
+{
+  "id": "supplier-connection-states",
+  "type": "state",
+  "title": "Amadeus (supplier) connection",
+  "caption": "`platform.supplier_connections.status` per tenant and environment; `credential_source` velexis or tenant.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending_verification",
+      "label": "pending_verification",
+      "kind": "normal",
+      "detail": "e.g. live request waiting for an office."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal"
+    },
+    {
+      "id": "invalid_credentials",
+      "label": "invalid_credentials",
+      "kind": "error"
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "error",
+      "detail": "Admin switch; re-enable needs an office (409 no_office)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "active",
+      "label": "assign_amadeus_office (test office available)"
+    },
+    {
+      "from": "start",
+      "to": "pending_verification",
+      "label": "no office free / requestLiveAmadeus"
+    },
+    {
+      "from": "pending_verification",
+      "to": "active",
+      "label": "adminAssignAmadeusOffice"
+    },
+    {
+      "from": "active",
+      "to": "active",
+      "label": "own credentials applied (credential_source tenant)"
+    },
+    {
+      "from": "active",
+      "to": "disabled",
+      "label": "adminSetConnectionStatus disabled"
+    },
+    {
+      "from": "disabled",
+      "to": "active",
+      "label": "adminSetConnectionStatus active"
+    },
+    {
+      "from": "active",
+      "to": "invalid_credentials",
+      "label": "credentials refused"
+    }
+  ]
+}

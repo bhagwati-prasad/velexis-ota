@@ -1,0 +1,67 @@
+{
+  "id": "token-session-states",
+  "type": "state",
+  "title": "A client's session in token and server mode",
+  "caption": "What a client holds and when it refreshes (internal/session.js). Tokens live only in the client's memory and in what the integrator stores through onSessionRefreshed. The API side of the same story is customer_sessions (rotated_at, replaced_by_id, revoked_at, revoke_reason) for customers and staffsess:<familyId> in Redis for staff.",
+  "states": [
+    {
+      "id": "anon",
+      "label": "no tokens (key only)",
+      "kind": "initial",
+      "detail": "`accessToken` and `refreshToken` absent, `null` or `\"\"`. Session results are reported to the hook but never kept: a server's shared anonymous client holds nobody's session."
+    },
+    {
+      "id": "accessonly",
+      "label": "access token only",
+      "kind": "normal",
+      "detail": "Non-empty string `accessToken`, no refresh token: never refreshes; adopts its own `auth.signIn` / `auth.refresh` / `auth.changePassword` results (lead decision 22g). The OTA admin's staff clients are this kind."
+    },
+    {
+      "id": "holding",
+      "label": "holding A + R",
+      "kind": "normal",
+      "detail": "Sends `Authorization: Bearer A`. A string `R` it held before a rotation leads to the newest pair forever; any other value only within 10 s (`ROTATION_WINDOW_MS`)."
+    },
+    {
+      "id": "refreshing",
+      "label": "refresh in flight (family-wide per R)",
+      "kind": "normal",
+      "detail": "`POST /v1/auth/refresh` (or `/v1/console/auth/refresh` with `sessionKind: staff`) with `{ refreshToken: R }` and the API key only."
+    },
+    {
+      "id": "rotated",
+      "label": "holding A' + R' (R recorded as replaced)",
+      "kind": "normal",
+      "detail": "`family.replaced` keeps the last 512 rotated refresh tokens; `onSessionRefreshed` (then `onStaffSessionRefreshed`) got the newest pair."
+    },
+    {
+      "id": "expired",
+      "label": "session expired / revoked",
+      "kind": "error",
+      "detail": "Refresh refused with 401 (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`): `onSessionExpired` once, every waiting call rejects with the `AuthenticationError`. Reuse revokes the whole family on the API."
+    }
+  ],
+  "transitions": [
+    { "from": "anon", "to": "holding", "label": "withOptions({ accessToken, refreshToken })" },
+    { "from": "anon", "to": "accessonly", "label": "withOptions({ accessToken })" },
+    { "from": "accessonly", "to": "accessonly", "label": "own session result adopted" },
+    {
+      "from": "holding",
+      "to": "refreshing",
+      "label": "401 TOKEN_EXPIRED on a call that sent the session's token"
+    },
+    { "from": "refreshing", "to": "rotated", "label": "200 new pair" },
+    { "from": "refreshing", "to": "expired", "label": "401 refused" },
+    {
+      "from": "holding",
+      "to": "rotated",
+      "label": "auth.signIn / auth.refresh / auth.changePassword result adopted, or a family rotation it follows"
+    },
+    { "from": "rotated", "to": "refreshing", "label": "next TOKEN_EXPIRED (with R')" },
+    {
+      "from": "rotated",
+      "to": "expired",
+      "label": "someone presents R after the window → REFRESH_TOKEN_REUSED"
+    }
+  ]
+}

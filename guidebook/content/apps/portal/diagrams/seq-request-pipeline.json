@@ -1,0 +1,109 @@
+{
+  "id": "seq-request-pipeline",
+  "type": "sequence",
+  "title": "One signed-in page request",
+  "caption": "How a page under /otas renders: the middleware renews an expiring access token first (once per refresh token), then the layouts and the page call the API with the new token.",
+  "actors": [
+    {
+      "id": "b",
+      "label": "Browser",
+      "kind": "user"
+    },
+    {
+      "id": "c",
+      "label": "Caddy",
+      "kind": "edge"
+    },
+    {
+      "id": "mw",
+      "label": "middleware.ts",
+      "kind": "edge"
+    },
+    {
+      "id": "pg",
+      "label": "Layouts + page",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "c",
+      "label": "GET /otas/ten_…/team (cookies __Host-vxp_at, __Host-vxp_rt)",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "mw",
+      "label": "proxy, X-Request-Id, X-Forwarded-For",
+      "kind": "call"
+    },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "read exp/ev of the JWT (no signature check)",
+      "kind": "self",
+      "note": "Fresh = more than 30 s left."
+    },
+    {
+      "from": "mw",
+      "to": "api",
+      "label": "POST /v1/auth/refresh (only if stale; single-flight per SHA-256 of the refresh token)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "mw",
+      "label": "PortalSession (new access + refresh token)",
+      "kind": "return"
+    },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "no session → 303 /sign-in?next=…; ev false → 303 /verify-pending",
+      "kind": "self"
+    },
+    {
+      "from": "mw",
+      "to": "pg",
+      "label": "request with rewritten Cookie header, CSP nonce, x-velexis-requested-page",
+      "kind": "call"
+    },
+    {
+      "from": "pg",
+      "to": "api",
+      "label": "GET /v1/me ((app) layout)",
+      "kind": "call",
+      "note": "mfaEnrolmentRequired → /mfa-enrolment?next="
+    },
+    {
+      "from": "pg",
+      "to": "api",
+      "label": "GET /v1/tenants/{id} (OTA layout, cached for the page)",
+      "kind": "call"
+    },
+    {
+      "from": "pg",
+      "to": "api",
+      "label": "GET …/members, /v1/me, …/invitations (page)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "data or error envelope (code only is kept)",
+      "kind": "return"
+    },
+    {
+      "from": "pg",
+      "to": "b",
+      "label": "HTML + Set-Cookie (new tokens) + Content-Security-Policy",
+      "kind": "return"
+    }
+  ]
+}

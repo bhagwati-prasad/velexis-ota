@@ -1,0 +1,169 @@
+{
+  "classes": [
+    { "id": "Actor", "label": "Actor", "description": "Anything that acts in the system." },
+    {
+      "id": "Account",
+      "label": "Account",
+      "parent": "Actor",
+      "description": "A portal user ([[account]]).",
+      "examples": ["acc_01J..."]
+    },
+    { "id": "Organisation", "label": "Organisation", "description": "A business." },
+    {
+      "id": "Tenant",
+      "label": "Tenant",
+      "parent": "Organisation",
+      "description": "An OTA on the platform ([[tenant]]).",
+      "examples": ["ten_01J..."]
+    },
+    { "id": "Membership", "label": "Membership", "description": "Account-in-tenant link with a role." },
+    { "id": "Role", "label": "Role", "description": "A set of permissions." },
+    { "id": "Application", "label": "Application", "description": "A deployable component." },
+    { "id": "Frontend", "label": "Frontend", "parent": "Application", "description": "A UI application." },
+    { "id": "Backend", "label": "Backend", "parent": "Application", "description": "An API or worker." },
+    { "id": "DataStore", "label": "Data store", "description": "Where data lives." },
+    { "id": "Schema", "label": "Schema", "parent": "DataStore", "description": "A PostgreSQL schema." },
+    { "id": "Table", "label": "Table", "parent": "DataStore", "description": "A database table." },
+    { "id": "Subscription", "label": "Subscription", "description": "A paid plan." },
+    { "id": "Booking", "label": "Booking", "description": "A sale of a flight." },
+    { "id": "ExternalService", "label": "External service", "description": "A third-party system." }
+  ],
+  "properties": [
+    {
+      "id": "ownsTenant",
+      "label": "owns",
+      "domain": "Account",
+      "range": "Tenant",
+      "cardinality": "0..n",
+      "description": "The founder of an OTA."
+    },
+    {
+      "id": "hasMembership",
+      "label": "has membership",
+      "domain": "Account",
+      "range": "Membership",
+      "cardinality": "0..n",
+      "description": "Account's memberships."
+    },
+    {
+      "id": "memberOf",
+      "label": "member of",
+      "domain": "Membership",
+      "range": "Tenant",
+      "cardinality": "1",
+      "description": "The tenant of a membership."
+    },
+    {
+      "id": "hasRole",
+      "label": "has role",
+      "domain": "Membership",
+      "range": "Role",
+      "cardinality": "1",
+      "description": "The membership's role."
+    },
+    {
+      "id": "hasSchema",
+      "label": "has schema",
+      "domain": "Tenant",
+      "range": "Schema",
+      "cardinality": "1",
+      "description": "tenant_<key>."
+    },
+    {
+      "id": "callsApi",
+      "label": "calls",
+      "domain": "Frontend",
+      "range": "Backend",
+      "cardinality": "0..n",
+      "description": "Server-side API calls."
+    },
+    {
+      "id": "writesTable",
+      "label": "writes",
+      "domain": "Backend",
+      "range": "Table",
+      "cardinality": "0..n",
+      "description": "Tables a backend writes."
+    },
+    {
+      "id": "hasSubscription",
+      "label": "has subscription",
+      "domain": "Tenant",
+      "range": "Subscription",
+      "cardinality": "0..1",
+      "description": "Current plan."
+    },
+    {
+      "id": "billedBy",
+      "label": "billed by",
+      "domain": "Subscription",
+      "range": "ExternalService",
+      "cardinality": "1",
+      "description": "Payment provider."
+    },
+    {
+      "id": "dependsOn",
+      "label": "depends on",
+      "domain": "Application",
+      "range": "Application",
+      "cardinality": "0..n",
+      "description": "Runtime dependency.",
+      "inverse": "usedBy"
+    },
+    {
+      "id": "usedBy",
+      "label": "used by",
+      "domain": "Application",
+      "range": "Application",
+      "cardinality": "0..n",
+      "description": "Inverse of dependsOn.",
+      "inverse": "dependsOn"
+    },
+    {
+      "id": "bookedIn",
+      "label": "booked in",
+      "domain": "Booking",
+      "range": "Tenant",
+      "cardinality": "1",
+      "description": "Bookings live in one tenant schema."
+    }
+  ],
+  "individuals": [
+    { "id": "portal-app", "label": "Portal", "class": "Frontend", "app": "portal" },
+    { "id": "platform-api-app", "label": "Platform API", "class": "Backend", "app": "platform-api" },
+    {
+      "id": "accounts-table",
+      "label": "platform.accounts",
+      "class": "Table",
+      "app": "platform-api",
+      "term": "account"
+    },
+    {
+      "id": "tenants-table",
+      "label": "platform.tenants",
+      "class": "Table",
+      "app": "platform-api",
+      "term": "tenant"
+    },
+    { "id": "demo-schema", "label": "tenant_demo", "class": "Schema", "term": "tenant-schema" },
+    { "id": "demo-owner", "label": "Demo owner", "class": "Account", "term": "account" },
+    { "id": "demo-tenant", "label": "Demo OTA", "class": "Tenant", "term": "tenant" },
+    { "id": "owner-membership", "label": "Founder membership", "class": "Membership", "term": "membership" },
+    { "id": "owner-role", "label": "owner", "class": "Role", "term": "role" },
+    { "id": "demo-subscription", "label": "Starter plan", "class": "Subscription", "term": "subscription" },
+    { "id": "stripe-service", "label": "Stripe", "class": "ExternalService", "term": "stripe" }
+  ],
+  "assertions": [
+    { "subject": "portal-app", "property": "callsApi", "object": "platform-api-app" },
+    { "subject": "portal-app", "property": "dependsOn", "object": "platform-api-app" },
+    { "subject": "platform-api-app", "property": "writesTable", "object": "accounts-table" },
+    { "subject": "platform-api-app", "property": "writesTable", "object": "tenants-table" },
+    { "subject": "demo-owner", "property": "ownsTenant", "object": "demo-tenant" },
+    { "subject": "demo-owner", "property": "hasMembership", "object": "owner-membership" },
+    { "subject": "owner-membership", "property": "memberOf", "object": "demo-tenant" },
+    { "subject": "owner-membership", "property": "hasRole", "object": "owner-role" },
+    { "subject": "demo-tenant", "property": "hasSchema", "object": "demo-schema" },
+    { "subject": "demo-tenant", "property": "hasSubscription", "object": "demo-subscription" },
+    { "subject": "demo-subscription", "property": "billedBy", "object": "stripe-service" }
+  ]
+}

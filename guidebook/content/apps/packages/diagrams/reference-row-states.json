@@ -1,0 +1,74 @@
+{
+  "id": "reference-row-states",
+  "type": "state",
+  "title": "A reference row (airport, airline, currency…)",
+  "caption": "tools/reference-data/src/load.ts. Tenant rows reference codes by value, so a code is never deleted.",
+  "states": [
+    {
+      "id": "absent",
+      "label": "Not in reference.*",
+      "kind": "initial"
+    },
+    {
+      "id": "active",
+      "label": "Inserted / up to date",
+      "kind": "normal",
+      "detail": "`updated_at` changes only when a value changed."
+    },
+    {
+      "id": "overridden",
+      "label": "Value from overrides.csv",
+      "kind": "normal",
+      "detail": "The override wins in the upserted row; removing it restores the file's value at the next load."
+    },
+    {
+      "id": "inactive",
+      "label": "is_active = false",
+      "kind": "normal",
+      "detail": "Currencies, airports, airlines whose code left the snapshot (or closed locations)."
+    },
+    {
+      "id": "stale",
+      "label": "Kept as is",
+      "kind": "final",
+      "detail": "Countries, time zones, cities, aircraft whose code left the snapshot: neither updated nor deactivated."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "absent",
+      "to": "active",
+      "label": "load: inserted"
+    },
+    {
+      "from": "active",
+      "to": "active",
+      "label": "load: updated (values changed)"
+    },
+    {
+      "from": "active",
+      "to": "overridden",
+      "label": "line added to overrides.csv"
+    },
+    {
+      "from": "overridden",
+      "to": "active",
+      "label": "line removed"
+    },
+    {
+      "from": "active",
+      "to": "inactive",
+      "label": "code missing from the file"
+    },
+    {
+      "from": "inactive",
+      "to": "active",
+      "label": "code back in a later snapshot"
+    },
+    {
+      "from": "active",
+      "to": "stale",
+      "label": "code missing (table without is_active)"
+    }
+  ]
+}

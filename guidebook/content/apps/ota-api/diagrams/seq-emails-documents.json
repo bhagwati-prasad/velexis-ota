@@ -1,0 +1,90 @@
+{
+  "id": "seq-emails-documents",
+  "type": "sequence",
+  "title": "E-mails (outbox) and booking PDFs, then a signed download",
+  "caption": "Use cases write notifications rows inside their tenantTx and ask for documents; the worker renders and sends outside any transaction (src/notifications, src/documents; OADR-0013). Mailpit shows every local e-mail at http://127.0.0.1:8025.",
+  "actors": [
+    { "id": "api", "label": "OTA API (use case)", "kind": "api" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" },
+    { "id": "q", "label": "ota-notifications / ota-documents", "kind": "queue" },
+    { "id": "w", "label": "OTA worker", "kind": "worker" },
+    { "id": "st", "label": "Storage STORAGE_DIR", "kind": "db" },
+    { "id": "smtp", "label": "SMTP (Mailpit)", "kind": "external" },
+    { "id": "c", "label": "Traveller", "kind": "user" }
+  ],
+  "steps": [
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "OutboxService.enqueue in the business transaction: notifications (pending, dedupe_key, secrets encrypted)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "q",
+      "label": "after commit: notify {tenantId}; document.render {tenantId, bookingId, kind, bookingVersion[, ticketId]}",
+      "kind": "async"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "documents: read booking (travellers' document type + last 4 only), brand, square logo, reference names",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "st",
+      "label": "pdfmake → tenant_<key>/… PDF (itinerary, e-ticket receipt)",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "booking_documents ready (older version superseded); failure → failed row, BullMQ retries",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "notify: claim ≤ 100 due rows FOR UPDATE SKIP LOCKED (5-min lease on next_attempt_at), commit",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "w",
+      "label": "template: tenant notification_templates row (locale) else code default templates/<key>.*.hbs; brand.*, storefront URL, links from secrets",
+      "kind": "self"
+    },
+    {
+      "from": "w",
+      "to": "smtp",
+      "label": "From \"<brand>\" <MAIL_FROM>, Reply-To support e-mail, attachments (ready itinerary / receipts)",
+      "kind": "call"
+    },
+    {
+      "from": "w",
+      "to": "pg",
+      "label": "sent (secret_payload_ciphertext purged, secrets_purged_at) | retry later | failed",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "GET /v1/bookings/{id}/documents/{docId}/download-url",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "url /v1/files/{storageKey}?exp=…&sig=… (HMAC, valid 5 min)",
+      "kind": "return"
+    },
+    { "from": "c", "to": "api", "label": "GET /v1/files/… (no credentials; 120/min per IP)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "st",
+      "label": "verify signature in constant time, stream the PDF (403 FORBIDDEN when expired or altered)",
+      "kind": "call"
+    }
+  ]
+}

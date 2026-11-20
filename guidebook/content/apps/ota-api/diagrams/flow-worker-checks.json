@@ -1,0 +1,39 @@
+{
+  "id": "flow-worker-checks",
+  "type": "flow",
+  "title": "Check the worker: queues, schedules, e-mails, documents",
+  "caption": "What to look at while testing anything asynchronous. Redis password and DSN are the development values of .env.example (development only).",
+  "steps": [
+    {
+      "title": "Worker health",
+      "actor": "Tester",
+      "url": "http://127.0.0.1:4001/health/ready",
+      "body": "`curl -s 127.0.0.1:4001/health/ready | jq`",
+      "expect": "`postgres` and `redis` ok; `queues.<name>.waiting`, `oldestWaitingSeconds`, `failedLastHour` for the eight OTA queues (old jobs never make it 503)."
+    },
+    {
+      "title": "Queue contents",
+      "actor": "Tester",
+      "body": "`redis-cli -a dev_redis --scan --pattern 'vx:ota-*:*' | head`; `redis-cli -a dev_redis llen vx:ota-notifications:wait`; failed jobs: `redis-cli -a dev_redis zrange vx:ota-ticketing:failed 0 -1`.",
+      "expect": "BullMQ keys under prefix `vx`; failed jobs kept 30 days, completed 1 day (ota-maintenance 1 hour)."
+    },
+    {
+      "title": "Schedulers",
+      "actor": "Tester",
+      "body": "`redis-cli -a dev_redis --scan --pattern 'vx:ota-maintenance:repeat*'` after the worker started.",
+      "expect": "One scheduler per entry of `OTA_SCHEDULES` (offers.purge, notifications.sweep, payments.authorisation_watch, ticketing.scan, bookings.reconcile_scan, bookings.sync_scan, refunds.sweep, checkouts.expire, retention.daily, queues.poll, customers.erase); log line `scheduler.registered`."
+    },
+    {
+      "title": "E-mail outbox",
+      "actor": "Tester",
+      "body": "`SELECT template_key, recipient, status, attempts, next_attempt_at, last_error FROM tenant_demo.notifications ORDER BY created_at DESC LIMIT 20;`",
+      "expect": "`sent` rows with `secrets_purged_at` set and `secret_payload_ciphertext` NULL; the same e-mails in Mailpit."
+    },
+    {
+      "title": "Documents",
+      "actor": "Tester",
+      "body": "`SELECT booking_id, kind, status, storage_key, size_bytes FROM tenant_demo.booking_documents ORDER BY created_at DESC;` and look under `.local/storage/tenant_demo/`.",
+      "expect": "`ready` itinerary and receipts; older versions `superseded`; a `failed` row only with nothing stored."
+    }
+  ]
+}

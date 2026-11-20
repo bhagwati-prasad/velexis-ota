@@ -1,0 +1,44 @@
+{
+  "id": "flow-api-keys",
+  "type": "flow",
+  "title": "Manage API keys",
+  "caption": "Owners and admins of an active OTA; full keys are shown once.",
+  "steps": [
+    {
+      "title": "List",
+      "actor": "Owner",
+      "body": "`GET /v1/tenants/{tenantId}/api-keys`.",
+      "expect": "Prefix, last4, kind, environment, scopes, origins, last use; never the key."
+    },
+    {
+      "title": "Create",
+      "actor": "Owner",
+      "body": "`POST …/api-keys {name, kind: publishable|secret, environment: test, allowedOrigins?, scopes?}`.",
+      "expect": "`201` with the full key, `Cache-Control: no-store`. Over `plans.limits.apiKeys` → `422 PLAN_LIMIT_REACHED`; live key before go-live → `422 LIVE_MODE_NOT_ENABLED`; live secret key needs a step-up."
+    },
+    {
+      "title": "Edit",
+      "actor": "Owner",
+      "body": "`PATCH …/api-keys/{keyId}` (name, origins of a publishable key).",
+      "expect": "Origins change publishes `vx:invalidate api_key`."
+    },
+    {
+      "title": "Roll",
+      "actor": "Owner",
+      "body": "`POST …/{keyId}/roll {expireOldIn: now|1h|24h|7d}`.",
+      "expect": "New key shown once; old key gets `expires_at`."
+    },
+    {
+      "title": "Revoke",
+      "actor": "Owner",
+      "body": "`POST …/{keyId}/revoke`.",
+      "expect": "`revoked_at` set; the OTA API refuses the key within 60 s; a second revoke `409 CONFLICT` (revoked)."
+    },
+    {
+      "title": "Usage",
+      "actor": "Tester",
+      "body": "Use the key against the OTA API, wait for `api_keys.flush_usage` (every 5 min).",
+      "expect": "`api_keys.last_used_at` / `last_used_ip` updated from Redis `apikey:used:<keyId>`."
+    }
+  ]
+}

@@ -1,0 +1,434 @@
+{
+  "id": "portal",
+  "name": "Portal",
+  "kind": "frontend",
+  "product": "platform",
+  "summary": "The Next.js 15 portal where people sign up, create and pay for an OTA, manage its keys, domains, connections, team and billing, go live and open the OTA admin; a backend-for-frontend of the platform API.",
+  "audience": [
+    "Prospective OTA owner (visitor)",
+    "OTA owner",
+    "OTA admin",
+    "OTA agent",
+    "OTA finance member",
+    "OTA viewer",
+    "Invited person"
+  ],
+  "repoPath": "platform/frontend",
+  "package": "@velexis/platform-frontend",
+  "stack": [
+    "Next.js 15.5 App Router (standalone output)",
+    "React 19",
+    "TypeScript 5.6 strict",
+    "Tailwind CSS 4 + shadcn/ui (Radix)",
+    "openapi-fetch typed by @velexis/api-types/platform",
+    "Zod 4 (forms only)",
+    "TanStack Table",
+    "qrcode (server only)",
+    "lucide-react, sonner",
+    "Vitest 4 + Testing Library (happy-dom)",
+    "Playwright journeys in tools/e2e"
+  ],
+  "local": {
+    "url": "http://localhost:3000",
+    "port": 3000,
+    "command": "pnpm --filter @velexis/platform-frontend dev",
+    "notes": "Binds 127.0.0.1:3000. Needs the platform API on 127.0.0.1:3100 (and its worker), Mailpit on :8025 for e-mail links, and for provisioning the OTA worker and the Amadeus stub. Configuration comes from the root .env.local (or platform/frontend/.env.local)."
+  },
+  "production": {
+    "host": "platform.example.com"
+  },
+  "dependsOn": ["platform-api", "packages"],
+  "talksTo": [
+    {
+      "app": "platform-api",
+      "how": "Server-side REST calls to PLATFORM_API_URL /v1 (Bearer from the __Host-vxp_at cookie, X-Velexis-End-User-IP/-Agent and X-Velexis-Bff-Key)"
+    },
+    {
+      "app": "ota-admin",
+      "how": "Open console: the hand-off page posts a one-time portalToken (ptk_) to PUBLIC_OTA_ADMIN_URL/sso; the OTA admin sends people without a session to /console?tenant="
+    },
+    {
+      "app": "storefront",
+      "how": "Links only: the dashboard links https://<key>.<STOREFRONT_BASE_DOMAIN>/, the OTA overview and set-up page https://<primaryHost>/"
+    },
+    {
+      "app": "deploy",
+      "how": "Caddy proxies platform.example.com to 127.0.0.1:3000; systemd unit velexis-portal.service; deploy.sh polls /health/ready"
+    },
+    {
+      "app": "packages",
+      "how": "@velexis/api-types (platform document types), @velexis/config, @velexis/errors"
+    }
+  ],
+  "data": [
+    "platform.accounts",
+    "platform.account_sessions",
+    "platform.account_tokens",
+    "platform.account_recovery_codes",
+    "platform.tenants",
+    "platform.tenant_memberships",
+    "platform.tenant_invitations",
+    "platform.tenant_domains",
+    "platform.plans",
+    "platform.subscriptions",
+    "platform.invoices",
+    "platform.api_keys",
+    "platform.provisioning_jobs",
+    "platform.supplier_connections",
+    "platform.credential_submissions",
+    "platform.payment_provider_connections",
+    "platform.tenant_payout_accounts",
+    "platform.settlements",
+    "platform.settlement_lines",
+    "platform.email_outbox",
+    "platform.platform_audit_log",
+    "redis mfach:*, ptk:*, stripe:oauth:*, vx:idem:* (via the API)"
+  ],
+  "docs": [
+    "platform/frontend/README.md",
+    "platform/docs/scope.md",
+    "platform/docs/api-inventory.md",
+    "platform/docs/flows/signup-and-create-ota.md",
+    "platform/docs/flows/provisioning.md",
+    "platform/docs/flows/api-keys.md",
+    "platform/docs/flows/team-and-ota-admin-sso.md",
+    "platform/docs/flows/custom-domains.md",
+    "platform/docs/flows/amadeus-connection.md",
+    "platform/docs/flows/stripe-payments-account.md",
+    "platform/docs/flows/subscription-billing.md",
+    "docs/mvp/local-development.md",
+    "tools/e2e/README.md"
+  ],
+  "adrs": [
+    "docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md",
+    "docs/mvp/adr/0008-identity-accounts-customers-sessions.md",
+    "platform/docs/adr/0007-portal-to-ota-admin-sso-token.md",
+    "platform/docs/adr/0008-email-verification-and-mfa-policy.md",
+    "platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md",
+    "platform/docs/adr/0015-milestone-feature-switches.md",
+    "platform/docs/adr/0018-onboarding-checklist-computation.md",
+    "platform/docs/adr/0014-tenant-suspension-and-resume.md",
+    "platform/docs/adr/0005-api-key-format-and-hashing.md"
+  ],
+  "roles": [
+    {
+      "name": "Visitor (no session)",
+      "can": "Public pages, sign up, sign in, password reset, look up an invitation"
+    },
+    {
+      "name": "Unverified account",
+      "can": "Only /verify-pending (resend the link) and sign out"
+    },
+    {
+      "name": "Verified account",
+      "can": "My OTAs, create an OTA (up to MAX_TENANTS_PER_ACCOUNT), profile, security, accept invitations"
+    },
+    {
+      "name": "Owner",
+      "can": "Everything of the OTA: keys, domains, connections, team incl. owners/admins, billing, payout account, go live, retry set-up, reveal test keys"
+    },
+    {
+      "name": "Admin",
+      "can": "Profile, API keys, domains, Amadeus and payment settings, team (agents, finance, viewers); no billing, payout, settlements or go-live"
+    },
+    {
+      "name": "Agent",
+      "can": "Overview, domains (read), team (read), Open console"
+    },
+    {
+      "name": "Finance",
+      "can": "Overview, domains, Amadeus and payments (read), billing (read), payout account and settlements (read)"
+    },
+    {
+      "name": "Viewer",
+      "can": "Overview, domains (read), team (read), Open console"
+    }
+  ],
+  "screens": [
+    {
+      "route": "/",
+      "title": "Home",
+      "purpose": "Marketing landing with calls to sign up and pricing; no API call",
+      "code": "platform/frontend/src/app/(marketing)/page.tsx"
+    },
+    {
+      "route": "/pricing",
+      "title": "Pricing",
+      "purpose": "Public plans from listPlans; Start links to /sign-up?plan=<code> (sign-up ignores plan)",
+      "code": "platform/frontend/src/app/(marketing)/pricing/page.tsx"
+    },
+    {
+      "route": "/legal/terms",
+      "title": "Terms of service",
+      "purpose": "Placeholder terms under termsVersion",
+      "code": "platform/frontend/src/app/(marketing)/legal/terms/page.tsx"
+    },
+    {
+      "route": "/legal/privacy",
+      "title": "Privacy notice",
+      "purpose": "Placeholder privacy notice",
+      "code": "platform/frontend/src/app/(marketing)/legal/privacy/page.tsx"
+    },
+    {
+      "route": "/sign-up",
+      "title": "Sign up",
+      "purpose": "Name, e-mail, password (12+ with letter and digit), terms; signUp",
+      "code": "platform/frontend/src/app/(auth)/sign-up/page.tsx"
+    },
+    {
+      "route": "/sign-up/check-email",
+      "title": "Check your e-mail",
+      "purpose": "Same answer for new and existing addresses; resend link",
+      "code": "platform/frontend/src/app/(auth)/sign-up/check-email/page.tsx"
+    },
+    {
+      "route": "/verify-email",
+      "title": "Verify e-mail (route handler)",
+      "purpose": "GET consumes ?token= (verifyEmail), 303 to /sign-in?verified=1 or /dashboard",
+      "code": "platform/frontend/src/app/verify-email/route.ts"
+    },
+    {
+      "route": "/verify-pending",
+      "title": "Verify your e-mail address",
+      "purpose": "Only page for signed-in unverified accounts; resend; ?error=token|unavailable",
+      "code": "platform/frontend/src/app/(auth)/verify-pending/page.tsx"
+    },
+    {
+      "route": "/sign-in",
+      "title": "Sign in",
+      "purpose": "E-mail and password; safe next; notices verified, reset, signedOut, mfa=expired",
+      "code": "platform/frontend/src/app/(auth)/sign-in/page.tsx"
+    },
+    {
+      "route": "/sign-in/mfa",
+      "title": "Two-factor authentication",
+      "purpose": "TOTP code or recovery code against the challenge cookie",
+      "code": "platform/frontend/src/app/(auth)/sign-in/mfa/page.tsx"
+    },
+    {
+      "route": "/forgot-password",
+      "title": "Reset your password",
+      "purpose": "Request a reset link; same confirmation for every address",
+      "code": "platform/frontend/src/app/(auth)/forgot-password/page.tsx"
+    },
+    {
+      "route": "/reset-password",
+      "title": "Choose a new password",
+      "purpose": "Token moved into __Host-vxp_reset by the middleware; new password form",
+      "code": "platform/frontend/src/app/(auth)/reset-password/page.tsx"
+    },
+    {
+      "route": "/invitations/accept",
+      "title": "Your invitation",
+      "purpose": "Token moved into __Host-vxp_invite; lookup, sign in/up, accept",
+      "code": "platform/frontend/src/app/(auth)/invitations/accept/page.tsx"
+    },
+    {
+      "route": "/mfa-enrolment",
+      "title": "Set up two-factor authentication",
+      "purpose": "Mandatory MFA set-up for an owner/admin of a live OTA, then next",
+      "code": "platform/frontend/src/app/(auth)/mfa-enrolment/page.tsx"
+    },
+    {
+      "route": "/sign-out",
+      "title": "Sign out (route handler)",
+      "purpose": "POST only, Origin check, signOut, cookies cleared, 303 /sign-in?signedOut=1",
+      "code": "platform/frontend/src/app/sign-out/route.ts"
+    },
+    {
+      "route": "/dashboard",
+      "title": "My OTAs",
+      "purpose": "OTAs of the account with status, plan, role, storefront link (<key>.<STOREFRONT_BASE_DOMAIN>), Open console; Create an OTA",
+      "code": "platform/frontend/src/app/(app)/dashboard/page.tsx"
+    },
+    {
+      "route": "/otas/new",
+      "title": "Create an OTA",
+      "purpose": "Wizard: details (live key check), plan, review; one Idempotency-Key",
+      "code": "platform/frontend/src/app/(app)/otas/new/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]",
+      "title": "Overview",
+      "purpose": "Status, storefront, key, role, onboarding checklist, Open console",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/setup",
+      "title": "OTA set-up",
+      "purpose": "Provisioning progress (2 s polling), retry, payment hand-off, test keys reveal",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/setup/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/settings",
+      "title": "OTA settings",
+      "purpose": "Profile: name, legal name, support e-mail, country, time zone (If-Match)",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/settings/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/api-keys",
+      "title": "API keys",
+      "purpose": "Test and live tabs; create (shown once), edit origins, roll, revoke",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/api-keys/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/domains",
+      "title": "Domains",
+      "purpose": "Velexis sub-domain; custom domains with DNS records, check, primary, remove",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/domains/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/amadeus",
+      "title": "Amadeus",
+      "purpose": "Connections per environment, settings, live access request, own credentials",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/amadeus/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/payments",
+      "title": "Payments",
+      "purpose": "Stripe connections, statement suffix, Stripe Connect, own keys, back to Velexis",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/payments/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/payments/payout-account",
+      "title": "Payout account",
+      "purpose": "Masked bank account and review status; owners edit with step-up",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/payments/payout-account/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/payments/settlements",
+      "title": "Settlements",
+      "purpose": "Approved, paid and carried-forward monthly statements",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/payments/settlements/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/payments/settlements/[settlementId]",
+      "title": "Statement",
+      "purpose": "Totals, formula, notes, CSV download link",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/payments/settlements/[settlementId]/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/payments/settlements/[settlementId]/lines.csv",
+      "title": "Statement lines CSV (route handler)",
+      "purpose": "Streams downloadSettlementLines as an attachment",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/payments/settlements/[settlementId]/lines.csv/route.ts"
+    },
+    {
+      "route": "/otas/[tenantId]/team",
+      "title": "Team",
+      "purpose": "Members, roles, remove, leave; invitations, resend, revoke; invite (every role may open it; only owners and admins have it in the navigation)",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/team/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/billing",
+      "title": "Billing",
+      "purpose": "Plan, status, choose plan (Checkout), Manage in Stripe, invoices",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/billing/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/go-live",
+      "title": "Go live",
+      "purpose": "Six live preconditions and the switch (confirm + step-up)",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/go-live/page.tsx"
+    },
+    {
+      "route": "/otas/[tenantId]/console/launch",
+      "title": "Open console hand-off (route handler)",
+      "purpose": "POST: Origin check, createConsoleToken, auto-submitting form to the OTA admin /sso",
+      "code": "platform/frontend/src/app/(app)/otas/[tenantId]/console/launch/route.ts"
+    },
+    {
+      "route": "/console",
+      "title": "Open the OTA admin",
+      "purpose": "OTA picker for the OTA admin's no-session redirect (?tenant=)",
+      "code": "platform/frontend/src/app/(app)/console/page.tsx"
+    },
+    {
+      "route": "/account",
+      "title": "Your profile",
+      "purpose": "Full name, language, time zone (If-Match); e-mail read-only",
+      "code": "platform/frontend/src/app/(app)/account/page.tsx"
+    },
+    {
+      "route": "/account/security",
+      "title": "Security",
+      "purpose": "Password, two-factor set-up and recovery codes, sessions, sign out everywhere",
+      "code": "platform/frontend/src/app/(app)/account/security/page.tsx"
+    },
+    {
+      "route": "/connect/stripe/callback",
+      "title": "Stripe Connect return (route handler)",
+      "purpose": "GET from Stripe: completeStripeConnect, 303 to payments ?stripeConnect=",
+      "code": "platform/frontend/src/app/connect/stripe/callback/route.ts"
+    },
+    {
+      "route": "/health/live",
+      "title": "Health live (route handler)",
+      "purpose": "200 {status: ok} while the process serves",
+      "code": "platform/frontend/src/app/health/live/route.ts"
+    },
+    {
+      "route": "/health/ready",
+      "title": "Health ready (route handler)",
+      "purpose": "200 when PLATFORM_API_URL/health/live answers within 2 s, else 503",
+      "code": "platform/frontend/src/app/health/ready/route.ts"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/verify-email?token=",
+      "operationId": "verifyEmail (route handler)",
+      "purpose": "Consume the e-mail link; 303 without the token; HEAD answers 204 without a call"
+    },
+    {
+      "method": "POST",
+      "path": "/sign-out",
+      "operationId": "signOut (route handler)",
+      "purpose": "Origin-checked sign-out; 303 /sign-in?signedOut=1"
+    },
+    {
+      "method": "POST",
+      "path": "/otas/{tenantId}/console/launch",
+      "operationId": "createConsoleToken (route handler)",
+      "purpose": "Hand-off page to the OTA admin; GET only 303s to /console?tenant="
+    },
+    {
+      "method": "GET",
+      "path": "/connect/stripe/callback",
+      "operationId": "completeStripeConnect (route handler)",
+      "purpose": "Stripe Connect return; HEAD 405"
+    },
+    {
+      "method": "GET",
+      "path": "/otas/{tenantId}/payments/settlements/{settlementId}/lines.csv",
+      "operationId": "downloadSettlementLines (route handler)",
+      "purpose": "CSV attachment, no-store; HEAD 405"
+    },
+    {
+      "method": "GET",
+      "path": "/health/live",
+      "operationId": "health (route handler)",
+      "purpose": "Liveness"
+    },
+    {
+      "method": "GET",
+      "path": "/health/ready",
+      "operationId": "health (route handler)",
+      "purpose": "Readiness: the platform API answers"
+    }
+  ],
+  "tags": [
+    "frontend",
+    "bff",
+    "nextjs",
+    "onboarding",
+    "billing",
+    "mfa",
+    "sso",
+    "stripe",
+    "amadeus",
+    "api-keys",
+    "team"
+  ]
+}

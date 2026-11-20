@@ -1,0 +1,96 @@
+{
+  "id": "seq-token-link",
+  "type": "sequence",
+  "title": "A reset or invitation link moves its token into a cookie",
+  "caption": "The middleware answers the link itself with a script-free refresh page, so the token never stays in the URL, the history or a Referer, and the SameSite=Strict cookie is sent with the next navigation.",
+  "actors": [
+    {
+      "id": "mail",
+      "label": "Web mail / Mailpit",
+      "kind": "external"
+    },
+    {
+      "id": "b",
+      "label": "Browser",
+      "kind": "user"
+    },
+    {
+      "id": "mw",
+      "label": "middleware.ts",
+      "kind": "edge"
+    },
+    {
+      "id": "pg",
+      "label": "Page + action",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    }
+  ],
+  "steps": [
+    {
+      "from": "mail",
+      "to": "b",
+      "label": "click /reset-password?token=… (or /invitations/accept?token=…)",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "mw",
+      "label": "GET with ?token=",
+      "kind": "call"
+    },
+    {
+      "from": "mw",
+      "to": "b",
+      "label": "200 refresh page, Set-Cookie __Host-vxp_reset (Strict, 15 min), Referrer-Policy no-referrer, no-store",
+      "kind": "return",
+      "note": "Empty or >512-char token deletes an older cookie instead."
+    },
+    {
+      "from": "b",
+      "to": "mw",
+      "label": "meta refresh → GET /reset-password (clean URL)",
+      "kind": "call"
+    },
+    {
+      "from": "mw",
+      "to": "pg",
+      "label": "pass through (cookie present)",
+      "kind": "call"
+    },
+    {
+      "from": "pg",
+      "to": "b",
+      "label": "new-password form (no token in markup)",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "pg",
+      "label": "POST new password",
+      "kind": "call"
+    },
+    {
+      "from": "pg",
+      "to": "api",
+      "label": "POST /v1/auth/password-reset/confirm {token from cookie, password}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "204 (every session revoked, staffdeny:acct set)",
+      "kind": "return"
+    },
+    {
+      "from": "pg",
+      "to": "b",
+      "label": "delete reset + session cookies; 303 /sign-in?reset=1",
+      "kind": "return"
+    }
+  ]
+}

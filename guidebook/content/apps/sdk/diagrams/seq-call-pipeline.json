@@ -1,0 +1,88 @@
+{
+  "id": "seq-call-pipeline",
+  "type": "sequence",
+  "title": "One SDK call, end to end (client.flights.search)",
+  "caption": "Every method follows this path: namespace → core.call (client.js) → session.send (session.js) → http.send (http.js) → fetch. A 503 is retried with the same Idempotency-Key; a 4xx is mapped to its error class and thrown at once.",
+  "actors": [
+    { "id": "app", "label": "Caller code", "kind": "user" },
+    { "id": "ns", "label": "flights namespace", "kind": "lib" },
+    { "id": "core", "label": "core.call (client.js)", "kind": "lib" },
+    { "id": "sess", "label": "session.js", "kind": "lib" },
+    { "id": "http", "label": "http.js", "kind": "lib" },
+    { "id": "api", "label": "OTA API :4000", "kind": "api" }
+  ],
+  "steps": [
+    {
+      "from": "app",
+      "to": "ns",
+      "label": "flights.search({ mode, originLocationCode, …, currencyCode }, { signal })",
+      "kind": "call"
+    },
+    {
+      "from": "ns",
+      "to": "core",
+      "label": "core.call(op.flights_search, params, live(options))",
+      "kind": "call",
+      "note": "`live()` adds `cache: \"no-store\"` unless the call set `cache` or `next`."
+    },
+    {
+      "from": "core",
+      "to": "core",
+      "label": "validateRequestOptions → TypeError on an unknown option (before any request)",
+      "kind": "self"
+    },
+    {
+      "from": "core",
+      "to": "core",
+      "label": "fillPath / encodeQuery / headerParams (ifMatch → If-Match) / rest → JSON body",
+      "kind": "self"
+    },
+    {
+      "from": "core",
+      "to": "sess",
+      "label": "session.send({ method: POST, path: /v1/flight-searches, idempotency: required, retry: idempotent, timeoutMs: 60000 })",
+      "kind": "call"
+    },
+    {
+      "from": "sess",
+      "to": "sess",
+      "label": "withFixedIdempotencyKey: one UUID v4 for the whole call",
+      "kind": "self"
+    },
+    {
+      "from": "sess",
+      "to": "http",
+      "label": "send(config, request) with credentials(): X-Api-Key, Authorization, X-Booking-Token",
+      "kind": "call"
+    },
+    {
+      "from": "http",
+      "to": "api",
+      "label": "fetch POST /v1/flight-searches (Accept, Content-Type, Idempotency-Key, Accept-Language, X-Currency, X-Velexis-End-User-*)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "http", "label": "503 SERVICE_UNAVAILABLE + Retry-After: 2", "kind": "return" },
+    {
+      "from": "http",
+      "to": "http",
+      "label": "retry 1 of maxRetries (2): wait Retry-After (2 s); > 30 s would throw at once",
+      "kind": "self"
+    },
+    { "from": "http", "to": "api", "label": "fetch again, same Idempotency-Key", "kind": "call" },
+    { "from": "api", "to": "http", "label": "201 FlightSearch + X-Request-Id", "kind": "return" },
+    {
+      "from": "http",
+      "to": "app",
+      "label": "onResponse({ method, path, status, requestId, durationMs }) per attempt",
+      "kind": "async"
+    },
+    { "from": "http", "to": "core", "label": "parsed JSON body", "kind": "return" },
+    {
+      "from": "core",
+      "to": "app",
+      "label": "result (a Page<T> when the operation has a cursor query param)",
+      "kind": "return",
+      "note": "On a non-2xx answer errors.js builds the class from status and code (400/422 ValidationError … 409 PRICE_CHANGED → PriceChangedError) and the call rejects with it."
+    }
+  ]
+}

@@ -1,0 +1,216 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "The portal and its neighbours",
+  "caption": "The browser only ever talks to the portal (and, by navigation, to Stripe and the OTA admin). Every platform API call happens on the portal server; tokens never reach browser JavaScript.",
+  "groups": [
+    {
+      "id": "people",
+      "label": "People"
+    },
+    {
+      "id": "edge",
+      "label": "Edge"
+    },
+    {
+      "id": "portal",
+      "label": "Portal (this app)"
+    },
+    {
+      "id": "platform",
+      "label": "Platform API side"
+    },
+    {
+      "id": "ota",
+      "label": "OTA side"
+    },
+    {
+      "id": "ext",
+      "label": "External services"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "person",
+      "label": "Visitor / OTA member",
+      "group": "people",
+      "kind": "user",
+      "detail": "Signs up, manages an OTA, opens e-mail links from Mailpit (locally)."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy (platform.example.com)",
+      "group": "edge",
+      "kind": "edge",
+      "app": "deploy",
+      "term": "caddy",
+      "detail": "TLS, HSTS, `X-Frame-Options: DENY`, sets `X-Request-Id` and the right-most `X-Forwarded-For`. Answers 404 for `/health/*` on the public host."
+    },
+    {
+      "id": "portal",
+      "label": "Portal server :3000",
+      "group": "portal",
+      "kind": "ui",
+      "app": "portal",
+      "term": "bff",
+      "detail": "Next.js 15 standalone server (`velexis-portal.service`). Middleware refreshes tokens; pages and server actions call the API."
+    },
+    {
+      "id": "api",
+      "label": "Platform API :3100",
+      "group": "platform",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "`/v1/**` operations of `velexis-platform-api.openapi.yaml`. Honours the end-user headers only with the BFF key."
+    },
+    {
+      "id": "worker",
+      "label": "Platform worker",
+      "group": "platform",
+      "kind": "worker",
+      "app": "platform-api",
+      "term": "platform-worker",
+      "detail": "Sends e-mails from the outbox, follows Stripe events, verifies credentials and domains."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL (platform schema)",
+      "group": "platform",
+      "kind": "db",
+      "detail": "`platform.*` tables written by the API, never by the portal."
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "platform",
+      "kind": "cache",
+      "detail": "`mfach:*`, `ptk:*`, `stripe:oauth:*`, `vx:idem:*`, rate limits."
+    },
+    {
+      "id": "otaadmin",
+      "label": "OTA admin (admin.ota.example.com)",
+      "group": "ota",
+      "kind": "ui",
+      "app": "ota-admin",
+      "term": "sso",
+      "detail": "Receives the hand-off `POST /sso` with `portalToken`; sends people without a session to `/console?tenant=`."
+    },
+    {
+      "id": "otaworker",
+      "label": "OTA worker",
+      "group": "ota",
+      "kind": "worker",
+      "app": "ota-api",
+      "detail": "Builds the tenant schema during provisioning (the set-up page waits for it)."
+    },
+    {
+      "id": "store",
+      "label": "Storefront",
+      "group": "ota",
+      "kind": "ui",
+      "app": "storefront",
+      "detail": "Linked from the dashboard and overview (`https://<primaryHost>/`)."
+    },
+    {
+      "id": "smtp",
+      "label": "SMTP / Mailpit",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Verification, reset, invitation and welcome e-mails with links back to the portal."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "group": "ext",
+      "kind": "external",
+      "term": "stripe",
+      "detail": "Checkout, Customer Portal and Connect authorize pages, reached by top-level navigation only."
+    }
+  ],
+  "edges": [
+    {
+      "from": "person",
+      "to": "caddy",
+      "label": "HTTPS",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "portal",
+      "label": "reverse proxy to 127.0.0.1:3000",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "api",
+      "label": "REST /v1, Bearer from cookie, BFF headers",
+      "kind": "sync"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "reads/writes platform.*",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "challenges, tokens, idempotency",
+      "kind": "data"
+    },
+    {
+      "from": "api",
+      "to": "worker",
+      "label": "BullMQ jobs",
+      "kind": "async"
+    },
+    {
+      "from": "worker",
+      "to": "smtp",
+      "label": "e-mails",
+      "kind": "async"
+    },
+    {
+      "from": "smtp",
+      "to": "person",
+      "label": "links to /verify-email, /reset-password, /invitations/accept",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "otaworker",
+      "label": "ota-tenant-ops tenant.provision",
+      "kind": "async"
+    },
+    {
+      "from": "portal",
+      "to": "otaadmin",
+      "label": "hand-off form POST /sso (browser)",
+      "kind": "sync"
+    },
+    {
+      "from": "otaadmin",
+      "to": "portal",
+      "label": "no session: /console?tenant=",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "stripe",
+      "label": "303 to Checkout / Customer Portal / Connect",
+      "kind": "sync"
+    },
+    {
+      "from": "stripe",
+      "to": "portal",
+      "label": "back: /setup?checkout=success, /billing?checkout=canceled, /connect/stripe/callback",
+      "kind": "sync"
+    },
+    {
+      "from": "person",
+      "to": "store",
+      "label": "storefront links",
+      "kind": "sync"
+    }
+  ]
+}

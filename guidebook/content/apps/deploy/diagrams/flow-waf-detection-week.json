@@ -1,0 +1,32 @@
+{
+  "id": "flow-waf-detection-week",
+  "type": "flow",
+  "title": "Detection week, then switch the WAF to blocking",
+  "caption": "docs/mvp/deployment-single-vm.md §6 (human step of X-039); deploy/caddy/waf/exclusions.conf.",
+  "steps": [
+    {
+      "title": "Start in detection",
+      "actor": "Developer",
+      "body": "`VELEXIS_WAF_ENGINE=DetectionOnly` in `/etc/velexis/caddy.env` before the first deploy with the WAF, or `sudo systemctl reload caddy` after setting it.",
+      "expect": "Requests that match rules still pass."
+    },
+    {
+      "title": "Review daily",
+      "actor": "Developer",
+      "body": "`journalctl -u caddy -o cat | jq -r 'select(.logger == \"http.handlers.waf\") | .msg'` and the daily `security log review` summary (WAF matches by rule).",
+      "expect": "Each line names the rule id and the variable (`ARGS:json.travellers.0.lastName`), never a value."
+    },
+    {
+      "title": "Exclude false positives",
+      "actor": "Developer",
+      "body": "Narrow rule in `exclusions.conf` (one rule, one argument, one path, with its reason) + the request in `caddy-smoke.sh`; PR and deploy.",
+      "expect": "The legitimate request no longer matches."
+    },
+    {
+      "title": "Switch to blocking",
+      "actor": "Developer",
+      "body": "After a week without a new legitimate match remove the line from `caddy.env`; `sudo systemctl reload caddy`.",
+      "expect": "An attack-shaped request to `https://api.ota.example.com/v1/...` answers 403 `FORBIDDEN` with a request id."
+    }
+  ]
+}

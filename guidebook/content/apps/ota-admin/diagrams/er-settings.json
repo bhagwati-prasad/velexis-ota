@@ -1,0 +1,127 @@
+{
+  "id": "er-settings",
+  "type": "er",
+  "title": "Tenant tables behind the settings pages",
+  "caption": "Every settings change bumps version (If-Match), writes a settings.* staff action and, for the storefront and pages, deletes the API's Redis caches. Rules, pages and templates are shared by TEST and LIVE.",
+  "entities": [
+    {
+      "id": "markup",
+      "label": "markup_rules",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text mkr_…", "key": "pk" },
+        { "name": "name / description", "type": "text" },
+        { "name": "scope", "type": "jsonb {origins, destinations, carriers, cabins, …, minNet, maxNet}" },
+        { "name": "calculation", "type": "percentage|fixed|percentage_plus_fixed" },
+        {
+          "name": "percentage / fixed_amount / fixed_currency",
+          "type": "numeric(7,4) / numeric(12,2) / char(3)"
+        },
+        { "name": "applies_per / min_amount / max_amount", "type": "booking|traveler|segment / caps" },
+        {
+          "name": "priority / stackable / is_default",
+          "type": "integer (default rule 1000) / boolean / boolean"
+        },
+        { "name": "is_active / active_from / active_until", "type": "boolean / window" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "fee",
+      "label": "fee_rules",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text fee_…", "key": "pk" },
+        {
+          "name": "fee_type",
+          "type": "booking_service|payment_card|ticketing|change|cancellation|ancillary_service"
+        },
+        { "name": "label", "type": "text shown to travellers" },
+        { "name": "calculation / percentage / fixed_amount / currency", "type": "0-100 % / ≥ 0" },
+        { "name": "refundable / priority / is_active", "type": "boolean / integer / boolean" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "settings",
+      "label": "storefront_settings",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "'sfs_default' (one row)", "key": "pk" },
+        { "name": "brand_name / legal_name / time_zone", "type": "text" },
+        { "name": "primary_color / secondary_color / theme", "type": "#RRGGBB / jsonb (fonts, radius)" },
+        { "name": "default_locale / supported_locales / markets", "type": "text / text[] / jsonb" },
+        { "name": "ticketing_policy", "type": "issue_at_booking|issue_after_payment|manual_review" },
+        { "name": "require_3ds / accepted_card_brands", "type": "boolean / text[]" },
+        { "name": "search_defaults", "type": "jsonb {maxResults 1-250}" },
+        { "name": "airline_card_enabled_test / _live", "type": "boolean" },
+        { "name": "booking_queue_number / ops_alert_email", "type": "0-99 / text" },
+        { "name": "logo_asset_id, favicon_asset_id, og_image_asset_id…", "type": "text ast_…", "key": "fk" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "assets",
+      "label": "storefront_assets",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text ast_…", "key": "pk" },
+        { "name": "kind", "type": "logo|logo_dark|logo_square|favicon|og_image|page_image" },
+        { "name": "content_type", "type": "image/png|jpeg|webp|x-icon (sniffed)" },
+        { "name": "size_bytes / width / height", "type": "≤ 1048576 / px" },
+        { "name": "storage_key", "type": "tenant_<key>/assets/<sha256>.<ext>", "key": "uk" }
+      ]
+    },
+    {
+      "id": "pages",
+      "label": "storefront_pages",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text stp_…", "key": "pk" },
+        { "name": "slug + locale", "type": "text", "key": "uk" },
+        { "name": "kind", "type": "content|terms|privacy|cookies|refund_policy|imprint|faq|about" },
+        { "name": "title / body_markdown", "type": "≤ 120 / ≤ 50000 chars" },
+        {
+          "name": "is_published / published_at / show_in_footer / sort_order",
+          "type": "boolean / timestamptz / boolean / integer"
+        },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "templates",
+      "label": "notification_templates",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text ntt_…", "key": "pk" },
+        { "name": "key + channel + locale", "type": "booking.confirmed / email / en", "key": "uk" },
+        { "name": "subject / body_html / body_text", "type": "text (Handlebars subset)" },
+        { "name": "is_system / is_active", "type": "boolean" },
+        { "name": "version", "type": "integer" }
+      ]
+    },
+    {
+      "id": "cache",
+      "label": "Redis: storefront caches",
+      "schema": "redis",
+      "fields": [
+        { "name": "t:<tenantId>:<env>:sf:und", "type": "storefront.get", "key": "pk" },
+        { "name": "t:<tenantId>:<env>:sf:<locale>", "type": "storefront.get per locale" },
+        { "name": "t:<tenantId>:<env>:pages:<locale>", "type": "published pages" }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "assets",
+      "to": "settings",
+      "label": "logo / favicon / og image (ON DELETE RESTRICT)",
+      "cardinality": "1-n"
+    },
+    { "from": "assets", "to": "pages", "label": "page images by ast_ id", "cardinality": "n-n" },
+    { "from": "pages", "to": "settings", "label": "legal links point to /p/<slug>", "cardinality": "n-n" },
+    { "from": "settings", "to": "cache", "label": "deleted on save", "cardinality": "1-n" },
+    { "from": "pages", "to": "cache", "label": "deleted on change", "cardinality": "1-n" },
+    { "from": "markup", "to": "fee", "label": "applied together at pricing", "cardinality": "n-n" }
+  ]
+}

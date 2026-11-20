@@ -1,0 +1,1343 @@
+{
+  "id": "platform-er",
+  "type": "er",
+  "title": "The platform schema",
+  "caption": "Tables of schema `platform` (migrations 0001-0004 under platform/backend/migrations/platform). Only the key and status columns are shown; see packages/db/src/generated/platform.ts for every column. The OTA role reads tenants, tenant_domains, api_keys, api_key_tenant_grants, tenant_memberships, plans, supplier_connections, payment_provider_connections, amadeus_accounts, amadeus_offices and some columns of accounts.",
+  "entities": [
+    {
+      "id": "accounts",
+      "label": "platform.accounts",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text acc_…",
+          "key": "pk"
+        },
+        {
+          "name": "email",
+          "type": "text (unique, case-insensitive)",
+          "key": "uk"
+        },
+        {
+          "name": "status",
+          "type": "pending_verification|active|locked|disabled|deleted"
+        },
+        {
+          "name": "email_verified_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "password_hash",
+          "type": "text (Argon2id)"
+        },
+        {
+          "name": "mfa_enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "mfa_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "is_platform_admin",
+          "type": "boolean"
+        },
+        {
+          "name": "failed_login_count",
+          "type": "int"
+        },
+        {
+          "name": "locked_until",
+          "type": "timestamptz"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "account_sessions",
+      "label": "platform.account_sessions",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "family_id",
+          "type": "text"
+        },
+        {
+          "name": "audience",
+          "type": "portal|platform_admin"
+        },
+        {
+          "name": "refresh_token_hash",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "family_expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "mfa_verified_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "rotated_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "account_tokens",
+      "label": "platform.account_tokens",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text atk_…",
+          "key": "pk"
+        },
+        {
+          "name": "account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "purpose",
+          "type": "email_verification|password_reset"
+        },
+        {
+          "name": "token_hash",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "account_recovery_codes",
+      "label": "platform.account_recovery_codes",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "code_hash",
+          "type": "text"
+        },
+        {
+          "name": "used_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ten_…",
+          "key": "pk"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "provisioning|active|suspended|deprovisioning|deleted|failed"
+        },
+        {
+          "name": "plan_code",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "storefront_environment",
+          "type": "test|live"
+        },
+        {
+          "name": "live_enabled_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "suspension_reason",
+          "type": "billing|abuse|request|admin"
+        },
+        {
+          "name": "billing_notice",
+          "type": "past_due|trial_ending"
+        },
+        {
+          "name": "schema_name",
+          "type": "text"
+        },
+        {
+          "name": "schema_version",
+          "type": "text"
+        },
+        {
+          "name": "created_by_account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "tenant_memberships",
+      "label": "platform.tenant_memberships",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "role",
+          "type": "owner|admin|agent|finance|viewer"
+        },
+        {
+          "name": "status",
+          "type": "active|suspended|removed"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "tenant_invitations",
+      "label": "platform.tenant_invitations",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "email",
+          "type": "text"
+        },
+        {
+          "name": "role",
+          "type": "owner|admin|agent|finance|viewer"
+        },
+        {
+          "name": "status",
+          "type": "pending|accepted|revoked|expired"
+        },
+        {
+          "name": "token_hash",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "accepted_account_id",
+          "type": "text",
+          "key": "fk"
+        }
+      ]
+    },
+    {
+      "id": "tenant_domains",
+      "label": "platform.tenant_domains",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "hostname",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "kind",
+          "type": "subdomain|custom"
+        },
+        {
+          "name": "purpose",
+          "type": "storefront|api|console"
+        },
+        {
+          "name": "is_primary",
+          "type": "boolean"
+        },
+        {
+          "name": "verification_status",
+          "type": "pending|verified|failed"
+        },
+        {
+          "name": "verification_token",
+          "type": "text"
+        },
+        {
+          "name": "verification_deadline_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "check_failures",
+          "type": "int"
+        },
+        {
+          "name": "tls_status",
+          "type": "pending|issued|failed|expired"
+        }
+      ]
+    },
+    {
+      "id": "api_keys",
+      "label": "platform.api_keys",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text key_…",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "kind",
+          "type": "publishable|secret|hosting"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "prefix",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "key_hash",
+          "type": "text (HMAC-SHA-256)"
+        },
+        {
+          "name": "last4",
+          "type": "char(4)"
+        },
+        {
+          "name": "scopes",
+          "type": "text[]"
+        },
+        {
+          "name": "allowed_origins",
+          "type": "text[]"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "last_used_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "api_key_tenant_grants",
+      "label": "platform.api_key_tenant_grants",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "api_key_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        }
+      ]
+    },
+    {
+      "id": "plans",
+      "label": "platform.plans",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "code",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "monthly_price",
+          "type": "numeric(12,2)"
+        },
+        {
+          "name": "currency",
+          "type": "char(3)"
+        },
+        {
+          "name": "trial_days",
+          "type": "int"
+        },
+        {
+          "name": "limits",
+          "type": "jsonb"
+        },
+        {
+          "name": "features",
+          "type": "jsonb"
+        },
+        {
+          "name": "settlement_fee_bps",
+          "type": "int"
+        },
+        {
+          "name": "stripe_price_id_month",
+          "type": "text"
+        },
+        {
+          "name": "stripe_price_id_year",
+          "type": "text"
+        },
+        {
+          "name": "price_warnings",
+          "type": "jsonb"
+        },
+        {
+          "name": "is_public",
+          "type": "boolean"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "id": "subscriptions",
+      "label": "platform.subscriptions",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "plan_code",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "status",
+          "type": "trialing|active|past_due|paused|canceled|incomplete|incomplete_expired|unpaid"
+        },
+        {
+          "name": "billing_provider",
+          "type": "manual|stripe"
+        },
+        {
+          "name": "billing_interval",
+          "type": "month|year"
+        },
+        {
+          "name": "provider_subscription_id",
+          "type": "text"
+        },
+        {
+          "name": "checkout_session_id",
+          "type": "text"
+        },
+        {
+          "name": "trial_ends_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "billing_customers",
+      "label": "platform.billing_customers",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "provider_customer_id",
+          "type": "text cus_…",
+          "key": "uk"
+        },
+        {
+          "name": "livemode",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "id": "billing_customer_attempts",
+      "label": "platform.billing_customer_attempts",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "attempt",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "invoices",
+      "label": "platform.invoices",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "subscription_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "provider_invoice_id",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "draft|open|paid|void|uncollectible"
+        },
+        {
+          "name": "total",
+          "type": "numeric"
+        },
+        {
+          "name": "currency",
+          "type": "char(3)"
+        },
+        {
+          "name": "hosted_invoice_url",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "stripe_events",
+      "label": "platform.stripe_events",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text evt_…",
+          "key": "pk"
+        },
+        {
+          "name": "endpoint",
+          "type": "billing|connect_accounts"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        },
+        {
+          "name": "account",
+          "type": "text acct_…"
+        },
+        {
+          "name": "object_id",
+          "type": "text"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "status",
+          "type": "received|processing|processed|ignored|failed"
+        },
+        {
+          "name": "attempts",
+          "type": "int"
+        },
+        {
+          "name": "last_error",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "provisioning_jobs",
+      "label": "platform.provisioning_jobs",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text job_…",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "kind",
+          "type": "provision|migrate|suspend|resume|…"
+        },
+        {
+          "name": "status",
+          "type": "queued|running|succeeded|failed|canceled"
+        },
+        {
+          "name": "attempt",
+          "type": "int"
+        },
+        {
+          "name": "max_attempts",
+          "type": "int"
+        },
+        {
+          "name": "step",
+          "type": "text"
+        },
+        {
+          "name": "steps",
+          "type": "jsonb"
+        },
+        {
+          "name": "locked_until",
+          "type": "timestamptz"
+        },
+        {
+          "name": "reveal_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "revealed_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "error",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "tenant_schema_migrations",
+      "label": "platform.tenant_schema_migrations",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "version",
+          "type": "text"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "pending|running|applied|failed|rolled_back"
+        }
+      ]
+    },
+    {
+      "id": "amadeus_accounts",
+      "label": "platform.amadeus_accounts",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ama_…",
+          "key": "pk"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "base_url",
+          "type": "text"
+        },
+        {
+          "name": "client_id",
+          "type": "text"
+        },
+        {
+          "name": "client_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "status",
+          "type": "pending_verification|active|invalid_credentials|disabled"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "amadeus_offices",
+      "label": "platform.amadeus_offices",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text amo_…",
+          "key": "pk"
+        },
+        {
+          "name": "amadeus_account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "office_id",
+          "type": "text (9 chars)"
+        },
+        {
+          "name": "status",
+          "type": "available|assigned|releasing|retired"
+        },
+        {
+          "name": "assigned_tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "supplier_connections",
+      "label": "platform.supplier_connections",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "credential_source",
+          "type": "velexis|tenant"
+        },
+        {
+          "name": "amadeus_account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "office_ids",
+          "type": "text[]"
+        },
+        {
+          "name": "default_office_id",
+          "type": "text"
+        },
+        {
+          "name": "client_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "status",
+          "type": "pending_verification|active|invalid_credentials|disabled"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "payment_provider_connections",
+      "label": "platform.payment_provider_connections",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ppc_…",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "account_mode",
+          "type": "velexis|connect_standard|api_keys"
+        },
+        {
+          "name": "account_reference",
+          "type": "text acct_…"
+        },
+        {
+          "name": "secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "statement_descriptor_suffix",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "pending|active|disabled|error"
+        },
+        {
+          "name": "disconnected_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "credential_submissions",
+      "label": "platform.credential_submissions",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text crs_…",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "kind",
+          "type": "amadeus|stripe_api_keys"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "status",
+          "type": "pending|verifying|applied|failed|superseded"
+        },
+        {
+          "name": "secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "public_data",
+          "type": "jsonb"
+        },
+        {
+          "name": "error_code",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "tenant_payout_accounts",
+      "label": "platform.tenant_payout_accounts",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "scheme",
+          "type": "iban|local"
+        },
+        {
+          "name": "bank_details_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "last4",
+          "type": "char(4)"
+        },
+        {
+          "name": "currency",
+          "type": "char(3)"
+        },
+        {
+          "name": "status",
+          "type": "pending_review|verified|rejected"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "settlements",
+      "label": "platform.settlements",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text stl_…",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "period_start",
+          "type": "timestamptz"
+        },
+        {
+          "name": "currency",
+          "type": "char(3)"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        },
+        {
+          "name": "status",
+          "type": "draft|approved|paid|carried_forward|void"
+        },
+        {
+          "name": "gross_amount",
+          "type": "numeric"
+        },
+        {
+          "name": "net_amount",
+          "type": "numeric"
+        },
+        {
+          "name": "carried_to_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "version",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "id": "settlement_lines",
+      "label": "platform.settlement_lines",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text sln_…",
+          "key": "pk"
+        },
+        {
+          "name": "settlement_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "line_type",
+          "type": "charge|refund|dispute|dispute_reversal|adjustment|carry_forward"
+        },
+        {
+          "name": "balance_transaction_id",
+          "type": "text txn_…",
+          "key": "uk"
+        },
+        {
+          "name": "amount",
+          "type": "numeric"
+        }
+      ]
+    },
+    {
+      "id": "email_outbox",
+      "label": "platform.email_outbox",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text eml_…",
+          "key": "pk"
+        },
+        {
+          "name": "template",
+          "type": "text"
+        },
+        {
+          "name": "to_email",
+          "type": "text"
+        },
+        {
+          "name": "account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "status",
+          "type": "pending|sending|sent|failed|canceled"
+        },
+        {
+          "name": "secret_payload_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "attempts",
+          "type": "int"
+        },
+        {
+          "name": "last_error",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "platform_audit_log",
+      "label": "platform.platform_audit_log",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "key": "pk"
+        },
+        {
+          "name": "actor_type",
+          "type": "account|platform_admin|api_key|system"
+        },
+        {
+          "name": "actor_account_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "action",
+          "type": "text"
+        },
+        {
+          "name": "target_type",
+          "type": "text"
+        },
+        {
+          "name": "target_id",
+          "type": "text"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text"
+        },
+        {
+          "name": "details",
+          "type": "jsonb"
+        },
+        {
+          "name": "request_id",
+          "type": "text"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "accounts",
+      "to": "account_sessions",
+      "label": "has refresh families",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "accounts",
+      "to": "account_tokens",
+      "label": "verification / reset tokens",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "accounts",
+      "to": "account_recovery_codes",
+      "label": "MFA recovery codes",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "accounts",
+      "to": "tenant_memberships",
+      "label": "is member",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tenant_memberships",
+      "label": "has members",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tenant_invitations",
+      "label": "invites",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tenant_domains",
+      "label": "storefront hosts",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "api_keys",
+      "label": "keys",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "api_keys",
+      "to": "api_key_tenant_grants",
+      "label": "hosting key grants",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "plans",
+      "to": "tenants",
+      "label": "plan_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "plans",
+      "to": "subscriptions",
+      "label": "plan_code",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "subscriptions",
+      "label": "billing history (one current)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "billing_customers",
+      "label": "Stripe customer",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "tenants",
+      "to": "billing_customer_attempts",
+      "label": "customer creation attempt",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "subscriptions",
+      "to": "invoices",
+      "label": "invoices",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "stripe_events",
+      "label": "routed events",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "provisioning_jobs",
+      "label": "lifecycle jobs",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tenant_schema_migrations",
+      "label": "tenant schema ledger",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "amadeus_accounts",
+      "to": "amadeus_offices",
+      "label": "office pool",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "amadeus_offices",
+      "label": "assigned_tenant_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "supplier_connections",
+      "label": "one per environment",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "amadeus_accounts",
+      "to": "supplier_connections",
+      "label": "velexis source",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "payment_provider_connections",
+      "label": "one per environment",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "credential_submissions",
+      "label": "own credentials under verification",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tenant_payout_accounts",
+      "label": "payout bank account",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "tenants",
+      "to": "settlements",
+      "label": "monthly statements",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "settlements",
+      "to": "settlement_lines",
+      "label": "lines",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "accounts",
+      "to": "email_outbox",
+      "label": "e-mails",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "accounts",
+      "to": "platform_audit_log",
+      "label": "actor",
+      "cardinality": "1-n"
+    }
+  ]
+}

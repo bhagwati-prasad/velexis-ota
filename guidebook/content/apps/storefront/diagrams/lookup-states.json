@@ -1,0 +1,84 @@
+{
+  "id": "lookup-states",
+  "type": "state",
+  "title": "Guest lookup form",
+  "caption": "`src/pages/lookup.js` (docs/pages-account.md §4). A new idempotency key for every submit; a second submit while one runs sends nothing.",
+  "states": [
+    {
+      "id": "idle",
+      "label": "Form",
+      "kind": "initial"
+    },
+    {
+      "id": "invalid",
+      "label": "Field errors",
+      "kind": "error",
+      "detail": "Empty, reference not 5-10 letters/digits, last name > 60, or the API's `400`."
+    },
+    {
+      "id": "sending",
+      "label": "Looking up",
+      "kind": "normal"
+    },
+    {
+      "id": "found",
+      "label": "Booking page",
+      "kind": "final",
+      "detail": "`/booking.html?id=bkg_…`; the guest token is in `__Host-vx_bt`."
+    },
+    {
+      "id": "notfound",
+      "label": "We could not find a booking with these details",
+      "kind": "error",
+      "detail": "Same message for a wrong reference, a wrong name and both; neither field marked."
+    },
+    {
+      "id": "locked",
+      "label": "Too many attempts, try again in N minutes",
+      "kind": "error",
+      "detail": "`429`: button disabled until `retryAfterSeconds`; then \"You can try again now\"."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "idle",
+      "to": "invalid",
+      "label": "format checks fail"
+    },
+    {
+      "from": "invalid",
+      "to": "idle",
+      "label": "corrected"
+    },
+    {
+      "from": "idle",
+      "to": "sending",
+      "label": "Find my booking"
+    },
+    {
+      "from": "sending",
+      "to": "found",
+      "label": "200"
+    },
+    {
+      "from": "sending",
+      "to": "notfound",
+      "label": "404"
+    },
+    {
+      "from": "notfound",
+      "to": "sending",
+      "label": "try again (new key)"
+    },
+    {
+      "from": "sending",
+      "to": "locked",
+      "label": "429"
+    },
+    {
+      "from": "locked",
+      "to": "idle",
+      "label": "wait over"
+    }
+  ]
+}

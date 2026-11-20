@@ -1,0 +1,44 @@
+{
+  "id": "flow-smoke-tests",
+  "type": "flow",
+  "title": "Run the SDK smoke tests against the local stack",
+  "caption": "test:smoke (vitest.smoke.config.js) runs both files one after the other against the OTA API on 127.0.0.1:4000 wired to the Amadeus stub. Development only; keys are given to the run, never committed.",
+  "steps": [
+    {
+      "title": "Start the stack",
+      "actor": "Owner",
+      "body": "PostgreSQL, Redis and Mailpit running; `.env.local` files copied from `.env.example`; `pnpm dev:keys`; `pnpm db:migrate && pnpm db:seed:reference`; `pnpm stub:amadeus` (own terminal, :4900).",
+      "expect": "The stub terminal shows it listening on port 4900; `psql postgres://velexis_ota_app:dev_ota@127.0.0.1:5432/velexis` connects (development only)."
+    },
+    {
+      "title": "Seed and keep the three keys",
+      "actor": "Owner",
+      "body": "`pnpm --filter @velexis/platform-backend dev:seed`, then `pnpm --filter @velexis/ota-backend dev:seed`. Copy the lines **Publishable test key**, **Secret test key** and **Console automation test key**: they are printed once.",
+      "expect": "Three keys `pk_test_…`, `sk_test_…` (scope `storefront`), `sk_test_…` (scopes `console:automation`, `amadeus:read`). Lost them? Delete the demo OTA's `platform.api_keys` rows locally and seed again."
+    },
+    {
+      "title": "Start the OTA API",
+      "actor": "Owner",
+      "body": "`pnpm --filter @velexis/ota-backend dev` (own terminal).",
+      "expect": "`curl -s http://127.0.0.1:4000/health/live` answers 200."
+    },
+    {
+      "title": "Run the smoke tests",
+      "actor": "Owner",
+      "body": "`SDK_SMOKE_PUBLISHABLE_KEY=pk_test_… SDK_SMOKE_SECRET_KEY=sk_test_… SDK_SMOKE_CONSOLE_KEY=sk_test_… pnpm --filter @velexis/ota-sdk test:smoke` (also reads `REDIS_URL` and `DATABASE_MIGRATOR_URL` from `.env.local`).",
+      "expect": "Both files pass. Token mode: storefront `demo` / `Demo Travel` / `test`, `PAR` first in locations, search `srch_…` completed, priced `prc_…` active, guest checkout `chk_…` open, sign-up `cus_…`, account and empty bookings page, sign-out, console refused `403 SCOPE_NOT_ALLOWED` (`console_operation`), `storefront.resolve` `501 NOT_IMPLEMENTED`. Server mode adds the staff session and the key-only Amadeus reads."
+    },
+    {
+      "title": "Check what the run left behind",
+      "actor": "Owner",
+      "body": "`psql`: `SELECT id, email, email_verified_at FROM tenant_demo.customers WHERE email LIKE 'sdk-smoke.%' ORDER BY created_at DESC LIMIT 4;` and `SELECT id, status, is_guest FROM tenant_demo.checkouts ORDER BY created_at DESC LIMIT 2;`. Mailpit http://127.0.0.1:8025 shows the verification e-mails to `sdk-smoke.token.…@example.com`.",
+      "expect": "New customers (unverified), guest checkouts `open`, the signed-out session revoked (`customer_sessions.revoke_reason = 'logout'`); no `platform.accounts` row with full name `SDK Smoke` remains (the clean-up deletes it, its membership cascades)."
+    },
+    {
+      "title": "If it fails at once",
+      "actor": "Owner",
+      "body": "The global setup names the API's origin and the reason (`ECONNREFUSED`, no answer within 3 s) or the missing setting, never its value.",
+      "expect": "A sixth token-mode run within an hour fails its sign-up with `RateLimitError` (5 sign-ups per hour per end-user IP; token mode counts as 127.0.0.1)."
+    }
+  ]
+}

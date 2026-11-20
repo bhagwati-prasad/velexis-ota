@@ -1,0 +1,386 @@
+{
+  "id": "components-tools",
+  "type": "component",
+  "title": "Inside the tools (tools/*)",
+  "caption": "Workspace packages: amadeus-stub, e2e, reference-data. Plain Node folders without package.json: ci, perf, plan-lint, dev.",
+  "groups": [
+    {
+      "id": "stub",
+      "label": "tools/amadeus-stub"
+    },
+    {
+      "id": "e2e",
+      "label": "tools/e2e"
+    },
+    {
+      "id": "ref",
+      "label": "tools/reference-data"
+    },
+    {
+      "id": "scripts",
+      "label": "tools/ci, plan-lint, perf, dev"
+    },
+    {
+      "id": "ext",
+      "label": "Outside"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "server",
+      "label": "server.ts",
+      "group": "stub",
+      "kind": "api",
+      "term": "amadeus-stub",
+      "detail": "Node `http`, 127.0.0.1 only; request log of the last 1000 requests, bodies never recorded."
+    },
+    {
+      "id": "oauth",
+      "label": "oauth.ts",
+      "group": "stub",
+      "kind": "api",
+      "detail": "`POST /v1/security/oauth2/token`; tokens live 1799 s in memory."
+    },
+    {
+      "id": "routes",
+      "label": "routes.ts + handlers/*",
+      "group": "stub",
+      "kind": "api",
+      "detail": "12 operations; Flight Offers Search answers the fixture cut to `max`."
+    },
+    {
+      "id": "scen",
+      "label": "scenarios.ts",
+      "group": "stub",
+      "kind": "lib",
+      "term": "stub-scenario",
+      "detail": "10 scenarios, magic destination `ZZZ`, declined card `4000000000000002`."
+    },
+    {
+      "id": "orders",
+      "label": "orders.ts",
+      "group": "stub",
+      "kind": "lib",
+      "term": "stub-orders",
+      "detail": "In-memory flight orders per server."
+    },
+    {
+      "id": "validate",
+      "label": "validate.ts",
+      "group": "stub",
+      "kind": "lib",
+      "detail": "Ajv against `docs/amadeus-api/`; unknown body fields refused where asked."
+    },
+    {
+      "id": "record",
+      "label": "record.ts / scrub.ts",
+      "group": "stub",
+      "kind": "lib",
+      "term": "fixture-recording",
+      "detail": "Manual recording from the Amadeus test host, scrubbed and scanned; never in CI."
+    },
+    {
+      "id": "fixtures",
+      "label": "fixtures/",
+      "group": "stub",
+      "kind": "db",
+      "detail": "JSON fixtures per API and scenario."
+    },
+    {
+      "id": "pwcfg",
+      "label": "playwright.config.ts",
+      "group": "e2e",
+      "kind": "lib",
+      "term": "playwright-project",
+      "detail": "Projects portal, platform-admin, storefront, ota-admin, portal-stripe, storefront-stripe."
+    },
+    {
+      "id": "stack",
+      "label": "support/stack.ts",
+      "group": "e2e",
+      "kind": "worker",
+      "term": "e2e-stack",
+      "detail": "Global setup: fresh `velexis_e2e_<runId>`, migrate, seed reference, start built apps, seed demo OTA."
+    },
+    {
+      "id": "support",
+      "label": "support/fixtures, seed, ota, tenants, mailpit, totp",
+      "group": "e2e",
+      "kind": "lib",
+      "detail": "Signed-in fixtures through the platform API; arrangements no screen creates."
+    },
+    {
+      "id": "guards",
+      "label": "storefront-guards.ts, card-leak-guards.ts",
+      "group": "e2e",
+      "kind": "lib",
+      "term": "storefront-guards",
+      "detail": "Third-party requests, cookies, a11y; no card value outside the completion request."
+    },
+    {
+      "id": "specs",
+      "label": "specs/**/*.e2e.ts (44 files)",
+      "group": "e2e",
+      "kind": "ui",
+      "detail": "Portal, platform admin, storefront, OTA admin journeys."
+    },
+    {
+      "id": "fetch",
+      "label": "scripts/fetch.mjs, validate.mjs",
+      "group": "ref",
+      "kind": "lib",
+      "term": "reference-data-snapshot",
+      "detail": "Manual download from OpenTravelData + CLDR; `--check` offline."
+    },
+    {
+      "id": "data",
+      "label": "data/*.csv + overrides.csv + SOURCES.md",
+      "group": "ref",
+      "kind": "db",
+      "term": "overrides-csv",
+      "detail": "7 tables, about 23 900 rows; overrides empty by default."
+    },
+    {
+      "id": "loader",
+      "label": "src/load.ts, cli/load.ts",
+      "group": "ref",
+      "kind": "worker",
+      "term": "reference-loader",
+      "detail": "One transaction: release unique codes, upsert, deactivate; never delete."
+    },
+    {
+      "id": "cichecks",
+      "label": "tools/ci/*.mjs",
+      "group": "scripts",
+      "kind": "lib",
+      "term": "check-package-json",
+      "detail": "check-package-json, check-no-hardcoded-hosts, check-pci-refs/fix-pci-refs, workflow tests."
+    },
+    {
+      "id": "planlint",
+      "label": "tools/plan-lint/plan-lint.mjs",
+      "group": "scripts",
+      "kind": "lib",
+      "term": "plan-lint",
+      "detail": "Validates the three task plans; progress and `--remaining`."
+    },
+    {
+      "id": "perfnode",
+      "label": "tools/perf/*",
+      "group": "scripts",
+      "kind": "lib",
+      "term": "platform-smoke",
+      "detail": "platform-smoke.mjs, gc-observer.cjs, unit-node-options.mjs."
+    },
+    {
+      "id": "devkeys",
+      "label": "tools/dev/dev-keys.mjs, stripe-listen.sh",
+      "group": "scripts",
+      "kind": "lib",
+      "term": "dev-keys",
+      "detail": "Local key files in `.local/keys/`; Stripe CLI forwarding."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "group": "ext",
+      "kind": "db",
+      "detail": ""
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "group": "ext",
+      "kind": "cache",
+      "detail": ""
+    },
+    {
+      "id": "mailpit",
+      "label": "Mailpit :1025 / :8025",
+      "group": "ext",
+      "kind": "external",
+      "term": "mailpit",
+      "detail": ""
+    },
+    {
+      "id": "apps",
+      "label": "Built apps (dist/, .next/standalone)",
+      "group": "ext",
+      "kind": "api",
+      "detail": ""
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus test host",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Only `record` calls it, by hand."
+    },
+    {
+      "id": "optd",
+      "label": "OpenTravelData + Unicode CLDR",
+      "group": "ext",
+      "kind": "external",
+      "detail": "Only `fetch.mjs` downloads, by hand."
+    },
+    {
+      "id": "gha",
+      "label": "GitHub Actions (ci.yml, e2e.yml)",
+      "group": "ext",
+      "kind": "external",
+      "detail": ""
+    }
+  ],
+  "edges": [
+    {
+      "from": "server",
+      "to": "oauth",
+      "label": "token / bearer",
+      "kind": "sync"
+    },
+    {
+      "from": "server",
+      "to": "scen",
+      "label": "X-Stub-Scenario",
+      "kind": "sync"
+    },
+    {
+      "from": "server",
+      "to": "validate",
+      "label": "request check",
+      "kind": "sync"
+    },
+    {
+      "from": "server",
+      "to": "routes",
+      "label": "handler",
+      "kind": "sync"
+    },
+    {
+      "from": "routes",
+      "to": "orders",
+      "label": "order ops",
+      "kind": "sync"
+    },
+    {
+      "from": "routes",
+      "to": "fixtures",
+      "label": "read",
+      "kind": "data"
+    },
+    {
+      "from": "record",
+      "to": "amadeus",
+      "label": "manual",
+      "kind": "sync"
+    },
+    {
+      "from": "record",
+      "to": "fixtures",
+      "label": "writes scrubbed",
+      "kind": "data"
+    },
+    {
+      "from": "pwcfg",
+      "to": "stack",
+      "label": "globalSetup",
+      "kind": "sync"
+    },
+    {
+      "from": "stack",
+      "to": "pg",
+      "label": "velexis_e2e_<runId>",
+      "kind": "data"
+    },
+    {
+      "from": "stack",
+      "to": "redis",
+      "label": "FLUSHDB E2E_REDIS_DB (15)",
+      "kind": "data"
+    },
+    {
+      "from": "stack",
+      "to": "apps",
+      "label": "spawn + /health/ready",
+      "kind": "async"
+    },
+    {
+      "from": "stack",
+      "to": "server",
+      "label": "spawn dist/cli.js",
+      "kind": "async"
+    },
+    {
+      "from": "stack",
+      "to": "loader",
+      "label": "db:seed:reference",
+      "kind": "async"
+    },
+    {
+      "from": "specs",
+      "to": "support",
+      "label": "fixtures",
+      "kind": "sync"
+    },
+    {
+      "from": "specs",
+      "to": "guards",
+      "label": "storefront specs",
+      "kind": "sync"
+    },
+    {
+      "from": "support",
+      "to": "mailpit",
+      "label": "waitForLink",
+      "kind": "sync"
+    },
+    {
+      "from": "fetch",
+      "to": "optd",
+      "label": "manual download",
+      "kind": "sync"
+    },
+    {
+      "from": "fetch",
+      "to": "data",
+      "label": "writes",
+      "kind": "data"
+    },
+    {
+      "from": "loader",
+      "to": "data",
+      "label": "reads",
+      "kind": "data"
+    },
+    {
+      "from": "loader",
+      "to": "pg",
+      "label": "reference.* as velexis_platform_app",
+      "kind": "data"
+    },
+    {
+      "from": "gha",
+      "to": "cichecks",
+      "label": "build-test",
+      "kind": "async"
+    },
+    {
+      "from": "gha",
+      "to": "planlint",
+      "label": "plan-lint job",
+      "kind": "async"
+    },
+    {
+      "from": "gha",
+      "to": "pwcfg",
+      "label": "e2e.yml",
+      "kind": "async"
+    },
+    {
+      "from": "perfnode",
+      "to": "apps",
+      "label": "HTTP to platform API",
+      "kind": "sync"
+    }
+  ]
+}

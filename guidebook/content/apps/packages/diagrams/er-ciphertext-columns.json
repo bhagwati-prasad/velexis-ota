@@ -1,0 +1,281 @@
+{
+  "id": "er-ciphertext-columns",
+  "type": "er",
+  "title": "Where envelope-encrypted values live (and their encryption_key_id)",
+  "caption": "Every *_ciphertext value is an @velexis/crypto envelope bound by AAD to `<schema>.<table>.<column>:<rowId>`. The `encryption_key_id` column repeats the KEK id, which is what rotation reports count. Amadeus tokens in Redis use the same envelope.",
+  "entities": [
+    {
+      "id": "acc",
+      "label": "platform.accounts",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text acc_…",
+          "key": "pk"
+        },
+        {
+          "name": "mfa_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "sc",
+      "label": "platform.supplier_connections",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "client_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "ama",
+      "label": "platform.amadeus_accounts",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ama_…",
+          "key": "pk"
+        },
+        {
+          "name": "client_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "ppc",
+      "label": "platform.payment_provider_connections",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "webhook_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "cs",
+      "label": "platform.credential_submissions",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "webhook_secret_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "pj",
+      "label": "platform.provisioning_jobs",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text job_…",
+          "key": "pk"
+        },
+        {
+          "name": "reveal_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "reveal_encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "st",
+      "label": "tenant_<key>.saved_travelers / saved_traveler_documents",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "discount_eligibility_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "number_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "details_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "ct",
+      "label": "tenant_<key>.checkout_travelers / booking_travelers",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "documents_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "discount_eligibility_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "nt",
+      "label": "tenant_<key>.notifications",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "secret_payload_ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "encryption_key_id",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "label": "amadeus:token:<credId>:<env>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "value",
+          "type": "envelope (encrypted OAuth token)"
+        },
+        {
+          "name": "TTL",
+          "type": "expires_in − 60 s"
+        }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ten_…",
+          "key": "pk"
+        },
+        {
+          "name": "schema_name",
+          "type": "tenant_<key>",
+          "key": "uk"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "tenants",
+      "to": "sc",
+      "label": "tenant_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "ppc",
+      "label": "tenant_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "cs",
+      "label": "tenant_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "pj",
+      "label": "tenant_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "acc",
+      "to": "sc",
+      "label": "created_by_account_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "acc",
+      "to": "ama",
+      "label": "created_by_account_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "st",
+      "label": "schema_name (one schema per tenant)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "ct",
+      "label": "schema_name",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "nt",
+      "label": "schema_name",
+      "cardinality": "1-n"
+    }
+  ]
+}

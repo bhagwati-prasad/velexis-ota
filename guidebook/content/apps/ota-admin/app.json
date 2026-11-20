@@ -1,0 +1,587 @@
+{
+  "id": "ota-admin",
+  "name": "OTA admin",
+  "kind": "frontend",
+  "product": "ota",
+  "summary": "The back office of one OTA (Next.js 15, 127.0.0.1:3002), reached only by SSO from the portal: staff work bookings, import PNRs, read queues, quote fares, capture and refund payments, read customers and change markups, fees, storefront settings, pages and e-mail templates through the OTA API's console operations, called server side with the service key and the staff token.",
+  "audience": [
+    "OTA staff: owner, admin, agent, finance, viewer",
+    "Velexis support and developers (bug hunting, supplier log)"
+  ],
+  "repoPath": "ota/admin",
+  "package": "@velexis/ota-admin",
+  "stack": [
+    "Next.js 15.5 App Router (standalone output, middleware on the Node runtime)",
+    "React 19",
+    "TypeScript 5.6 strict",
+    "Tailwind CSS 4 + shadcn/ui (Radix)",
+    "@tanstack/react-table 8",
+    "Zod 4.6.7 (server action validation only)",
+    "@velexis/ota-sdk console namespace, server mode",
+    "@velexis/config, @velexis/errors, @velexis/logger",
+    "Vitest 4 + Testing Library (happy-dom)",
+    "Playwright + axe e2e (tools/e2e, project ota-admin)"
+  ],
+  "local": {
+    "url": "http://localhost:3002",
+    "port": 3002,
+    "command": "pnpm --filter @velexis/ota-admin dev",
+    "notes": "Binds 127.0.0.1:3002. No sign-in page: open the console from the portal (http://localhost:3000, your own OTA; the demo OTA has no owner). Needs the OTA API on 127.0.0.1:4000 (and its worker), the portal, the platform API, PostgreSQL, Redis, Mailpit and the Amadeus stub. OTA_ADMIN_SERVICE_KEY must equal the backend's (sk_dev_… in .env.example, development only). Browse localhost, not 127.0.0.1, or /sso and sign-out refuse the Origin."
+  },
+  "production": {
+    "host": "admin.ota.example.com"
+  },
+  "dependsOn": ["ota-api", "portal", "sdk", "packages"],
+  "talksTo": [
+    {
+      "app": "ota-api",
+      "how": "SDK console.* from server code only, on loopback (OTA_API_URL=http://127.0.0.1:4000): X-Api-Key service key, Bearer staff token, X-Velexis-Environment, X-Velexis-End-User-IP/-Agent, Idempotency-Key, If-Match"
+    },
+    {
+      "app": "portal",
+      "how": "Receives POST /sso from the portal's hand-off page (one-time portal token); redirects without a session to PUBLIC_PORTAL_URL/console?tenant=<id>; links the portal's OTA pages (team, API keys, domains, billing, go-live)"
+    },
+    {
+      "app": "platform-api",
+      "how": "Indirect: mints the portal token (ptk:<sha256> in Redis), owns memberships, the live flag and the billing notice that console.auth.me reports"
+    },
+    {
+      "app": "storefront",
+      "how": "Indirect: settings, rules, pages and templates change what it shows (5-minute browser copy); 'View on storefront' links"
+    },
+    {
+      "app": "sdk",
+      "how": "@velexis/ota-sdk createVelexisClient(...).console with secretKey, accessToken, sessionKind 'staff', environment"
+    },
+    {
+      "app": "deploy",
+      "how": "Caddy admin.ota.example.com → 127.0.0.1:3002; systemd unit velexis-ota-admin; deploy.sh polls /health/ready"
+    },
+    {
+      "app": "packages",
+      "how": "@velexis/config (env validation), @velexis/errors, @velexis/logger"
+    }
+  ],
+  "data": [
+    "tenant_<key>.bookings (+ booking_travelers, booking_contacts, booking_segments, booking_tickets, booking_remarks)",
+    "tenant_<key>.booking_events",
+    "tenant_<key>.payments, payment_events, refunds",
+    "tenant_<key>.customers (read), saved_travelers, customer_sessions",
+    "tenant_<key>.staff_actions",
+    "tenant_<key>.idempotency_keys",
+    "tenant_<key>.queue_snapshots",
+    "tenant_<key>.supplier_requests (read)",
+    "tenant_<key>.notifications (outbox, via the API)",
+    "tenant_<key>.markup_rules, fee_rules",
+    "tenant_<key>.storefront_settings, storefront_assets, storefront_pages",
+    "tenant_<key>.notification_templates",
+    "Redis (via the APIs): ptk:<sha256>, staffsess:<familyId>, staffdeny:acct|member|tenant:<id>, t:<tenantId>:<env>:sf:*, t:<tenantId>:<env>:pages:<locale>, rl:*",
+    "Admin cookies: __Host-vx_staff_at, __Host-vx_staff_rt, __Host-vx_env, __Host-vx_tenant"
+  ],
+  "docs": [
+    "ota/admin/README.md",
+    "ota/admin/docs/routes.md",
+    "ota/docs/flows/console-operations.md",
+    "ota/docs/api-changes-console-and-internal.md",
+    "ota/docs/scope.md",
+    "ota/docs/runbooks/supplier-timeout-and-reconciliation.md",
+    "tools/e2e/README.md",
+    "docs/mvp/local-development.md"
+  ],
+  "adrs": [
+    "ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md",
+    "ota/docs/adr/0011-console-access-staff-sessions-and-environments.md",
+    "ota/docs/adr/0009-caller-and-tenant-resolution.md",
+    "platform/docs/adr/0007-portal-to-ota-admin-sso-token.md",
+    "ota/docs/adr/0005-markup-and-fee-engine.md",
+    "ota/docs/adr/0008-ticketing-policy.md",
+    "ota/docs/adr/0012-storefront-settings-assets-and-pages.md",
+    "ota/docs/adr/0013-notifications-and-booking-documents.md",
+    "ota/docs/adr/0004-airline-card-data-handling.md",
+    "docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md",
+    "docs/mvp/adr/0008-identity-accounts-customers-sessions.md"
+  ],
+  "roles": [
+    {
+      "name": "Owner / admin",
+      "can": "Everything: booking actions, allowUnpaid on issue, refunds, every settings write; LIVE on a live OTA"
+    },
+    {
+      "name": "Agent",
+      "can": "Bookings (patch, issue, cancel, notes, import, close review), PNR, queues, shopping, customers, supplier log, capture; settings read only; no refunds"
+    },
+    {
+      "name": "Finance",
+      "can": "Read bookings, customers, settings and the supplier log; capture and refund payments; no booking changes"
+    },
+    {
+      "name": "Viewer",
+      "can": "Read bookings, customers, payments and settings; no queues, shopping or supplier log; TEST only"
+    },
+    {
+      "name": "Portal account without a membership of the OTA",
+      "can": "Nothing: SSO refused (STAFF_MEMBERSHIP_INACTIVE); no console page opens without the staff cookies"
+    }
+  ],
+  "screens": [
+    {
+      "route": "POST /sso",
+      "title": "SSO hand-off (route handler)",
+      "purpose": "Portal token → four __Host- cookies, 303 /bookings",
+      "code": "ota/admin/src/app/sso/route.ts"
+    },
+    {
+      "route": "GET /auth/refresh",
+      "title": "Refresh fallback (route handler)",
+      "purpose": "Refresh then 303 to a safe next",
+      "code": "ota/admin/src/app/auth/refresh/route.ts"
+    },
+    {
+      "route": "POST /auth/sign-out",
+      "title": "Sign out (route handler)",
+      "purpose": "Origin check, signOut, cookies cleared",
+      "code": "ota/admin/src/app/auth/sign-out/route.ts"
+    },
+    {
+      "route": "/signed-out",
+      "title": "Signed out",
+      "purpose": "Link back to the portal",
+      "code": "ota/admin/src/app/signed-out/page.tsx"
+    },
+    {
+      "route": "/",
+      "title": "Dashboard",
+      "purpose": "Needs-attention counts, authorised payments, last queue read, latest bookings",
+      "code": "ota/admin/src/app/(console)/page.tsx"
+    },
+    {
+      "route": "/bookings",
+      "title": "Bookings",
+      "purpose": "Filters, saved views, cursor paging",
+      "code": "ota/admin/src/app/(console)/bookings/page.tsx"
+    },
+    {
+      "route": "/bookings/[bookingId]",
+      "title": "Booking",
+      "purpose": "Seven tabs (?tab=); issue, cancel, resync, patch, notes, capture, refund, close review",
+      "code": "ota/admin/src/app/(console)/bookings/[bookingId]/page.tsx"
+    },
+    {
+      "route": "/pnr",
+      "title": "PNR lookup",
+      "purpose": "Lookup by record locator, import, Advanced raw reads",
+      "code": "ota/admin/src/app/(console)/pnr/page.tsx"
+    },
+    {
+      "route": "/queues",
+      "title": "Queues",
+      "purpose": "Newest 100 snapshots grouped by office, queue, category; open a queue",
+      "code": "ota/admin/src/app/(console)/queues/page.tsx"
+    },
+    {
+      "route": "/queues/[queueId]",
+      "title": "Queue",
+      "purpose": "Stored read, Read now from Amadeus (?read=1), PNRs with booking or Import",
+      "code": "ota/admin/src/app/(console)/queues/[queueId]/page.tsx"
+    },
+    {
+      "route": "/shopping",
+      "title": "Shopping on behalf",
+      "purpose": "Raw offers, seat availability, branded fares, confirm price (net, read-only, sent once)",
+      "code": "ota/admin/src/app/(console)/shopping/page.tsx"
+    },
+    {
+      "route": "/payments",
+      "title": "Payments",
+      "purpose": "List with filters",
+      "code": "ota/admin/src/app/(console)/payments/page.tsx"
+    },
+    {
+      "route": "/payments/[paymentId]",
+      "title": "Payment",
+      "purpose": "Detail, Refresh from Stripe, capture, refund",
+      "code": "ota/admin/src/app/(console)/payments/[paymentId]/page.tsx"
+    },
+    {
+      "route": "/customers",
+      "title": "Customers",
+      "purpose": "Search by e-mail or name prefix",
+      "code": "ota/admin/src/app/(console)/customers/page.tsx"
+    },
+    {
+      "route": "/customers/[customerId]",
+      "title": "Customer",
+      "purpose": "Account, statistics, bookings (audited customer.view)",
+      "code": "ota/admin/src/app/(console)/customers/[customerId]/page.tsx"
+    },
+    {
+      "route": "/settings/markups",
+      "title": "Markup rules",
+      "purpose": "List in evaluation order, Active/Inactive",
+      "code": "ota/admin/src/app/(console)/settings/markups/page.tsx"
+    },
+    {
+      "route": "/settings/markups/new",
+      "title": "New markup rule",
+      "purpose": "settings:write only",
+      "code": "ota/admin/src/app/(console)/settings/markups/new/page.tsx"
+    },
+    {
+      "route": "/settings/markups/[id]",
+      "title": "Markup rule",
+      "purpose": "Edit, delete; default rule restricted",
+      "code": "ota/admin/src/app/(console)/settings/markups/[id]/page.tsx"
+    },
+    {
+      "route": "/settings/fees",
+      "title": "Fee rules",
+      "purpose": "List by type and priority",
+      "code": "ota/admin/src/app/(console)/settings/fees/page.tsx"
+    },
+    {
+      "route": "/settings/fees/new",
+      "title": "New fee rule",
+      "purpose": "settings:write only",
+      "code": "ota/admin/src/app/(console)/settings/fees/new/page.tsx"
+    },
+    {
+      "route": "/settings/fees/[id]",
+      "title": "Fee rule",
+      "purpose": "Edit, delete",
+      "code": "ota/admin/src/app/(console)/settings/fees/[id]/page.tsx"
+    },
+    {
+      "route": "/settings/storefront",
+      "title": "Storefront settings",
+      "purpose": "Eight tabs (?tab=), one PATCH per section",
+      "code": "ota/admin/src/app/(console)/settings/storefront/page.tsx"
+    },
+    {
+      "route": "/settings/assets",
+      "title": "Storefront images (nav: Assets)",
+      "purpose": "List, upload, delete storefront images",
+      "code": "ota/admin/src/app/(console)/settings/assets/page.tsx"
+    },
+    {
+      "route": "/settings/pages",
+      "title": "Content pages",
+      "purpose": "Pages by locale and state",
+      "code": "ota/admin/src/app/(console)/settings/pages/page.tsx"
+    },
+    {
+      "route": "/settings/pages/[pageId]",
+      "title": "Content page (and /new)",
+      "purpose": "Markdown editor, publish, footer, delete",
+      "code": "ota/admin/src/app/(console)/settings/pages/[pageId]/page.tsx"
+    },
+    {
+      "route": "/settings/templates",
+      "title": "E-mail templates",
+      "purpose": "Every key by audience and source",
+      "code": "ota/admin/src/app/(console)/settings/templates/page.tsx"
+    },
+    {
+      "route": "/settings/templates/[key]/[channel]/[locale]",
+      "title": "E-mail template",
+      "purpose": "Edit, preview (sandboxed), save, reset",
+      "code": "ota/admin/src/app/(console)/settings/templates/[key]/[channel]/[locale]/page.tsx"
+    },
+    {
+      "route": "/supplier-log",
+      "title": "Supplier log",
+      "purpose": "Amadeus calls, redacted bodies on demand",
+      "code": "ota/admin/src/app/(console)/supplier-log/page.tsx"
+    },
+    {
+      "route": "/portal",
+      "title": "Portal links",
+      "purpose": "The portal's pages of this OTA",
+      "code": "ota/admin/src/app/(console)/portal/page.tsx"
+    },
+    {
+      "route": "GET /health/live",
+      "title": "Liveness (route handler)",
+      "purpose": "200 {status: ok}",
+      "code": "ota/admin/src/app/health/live/route.ts"
+    },
+    {
+      "route": "GET /health/ready",
+      "title": "Readiness (route handler)",
+      "purpose": "OTA API /health/live within 2 s, else 503",
+      "code": "ota/admin/src/app/health/ready/route.ts"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/console/auth/sign-in",
+      "operationId": "consoleSignIn",
+      "purpose": "Called: SSO with the portal token"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/auth/refresh",
+      "operationId": "consoleRefreshSession",
+      "purpose": "Called: rotate the staff session"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/auth/sign-out",
+      "operationId": "consoleSignOut",
+      "purpose": "Called: sign out (scope current)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/auth/me",
+      "operationId": "consoleGetMe",
+      "purpose": "Called: once per request (profile, permissions, environments)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings",
+      "operationId": "consoleListBookings",
+      "purpose": "Called: list, dashboard counts, customer bookings"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings/{bookingId}",
+      "operationId": "consoleGetBooking",
+      "purpose": "Called: detail (refresh=true for Sync)"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/bookings/{bookingId}",
+      "operationId": "consolePatchBooking",
+      "purpose": "Called: travellers, contacts, remarks, agreement"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/issuance",
+      "operationId": "consoleIssueBooking",
+      "purpose": "Called: issue tickets"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/cancellation",
+      "operationId": "consoleCancelBooking",
+      "purpose": "Called: cancel with refund mode"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/review-closure",
+      "operationId": "consoleCloseBookingReview",
+      "purpose": "Called: close a reconciliation review"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/resync",
+      "operationId": "consoleResyncBooking",
+      "purpose": "Called: Resync from Amadeus"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/{bookingId}/notes",
+      "operationId": "consoleAddBookingNote",
+      "purpose": "Called: add note"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings/{bookingId}/amadeus-order",
+      "operationId": "consoleRetrieveFlightOrder",
+      "purpose": "Called: Amadeus order tab"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/bookings/by-record-locator",
+      "operationId": "consoleFindBookingByRecordLocator",
+      "purpose": "Called: PNR lookup"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/bookings/imports",
+      "operationId": "consoleImportBooking",
+      "purpose": "Called: PNR import"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/queues/{queueId}",
+      "operationId": "consoleListQueue",
+      "purpose": "Called: Read now"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/queue-snapshots",
+      "operationId": "consoleListQueueSnapshots",
+      "purpose": "Called: queues, dashboard"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/customers",
+      "operationId": "consoleListCustomers",
+      "purpose": "Called: customers list, import customer search"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/customers/{customerId}",
+      "operationId": "consoleGetCustomer",
+      "purpose": "Called: customer page"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/supplier-requests",
+      "operationId": "consoleListSupplierRequests",
+      "purpose": "Called: supplier log"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v2/shopping/flight-offers",
+      "operationId": "consoleAmadeusSearchFlightOffers",
+      "purpose": "Called: shopping offers"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/shopping/availability/flight-availabilities",
+      "operationId": "consoleAmadeusSearchFlightAvailabilities",
+      "purpose": "Called: seat availability"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/shopping/flight-offers/upselling",
+      "operationId": "consoleAmadeusUpsellAirOffers",
+      "purpose": "Called: branded fares"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/amadeus/v1/shopping/flight-offers/pricing",
+      "operationId": "consoleAmadeusQuoteAirOffers",
+      "purpose": "Called: confirm price"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/{flightOrderId}",
+      "operationId": "consoleAmadeusGetFlightOrder",
+      "purpose": "Called: PNR Advanced panel"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/amadeus/v1/booking/flight-orders/by-reference",
+      "operationId": "consoleAmadeusGetFlightOrderByReference",
+      "purpose": "Called: PNR Advanced panel"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/payments",
+      "operationId": "consoleListPayments",
+      "purpose": "Called: payments list, dashboard"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/payments/{paymentId}",
+      "operationId": "consoleGetPayment",
+      "purpose": "Called: payment page, booking Payments tab"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/payments/{paymentId}/capture",
+      "operationId": "consoleCapturePayment",
+      "purpose": "Called: capture"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/payments/{paymentId}/refunds",
+      "operationId": "consoleRefundPayment",
+      "purpose": "Called: refund"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/markup-rules",
+      "operationId": "consoleListMarkupRules",
+      "purpose": "Called: markup list, shopping default rule"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/markup-rules",
+      "operationId": "consoleCreateMarkupRule",
+      "purpose": "Called: new markup rule"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/settings/markup-rules/{markupRuleId}",
+      "operationId": "consoleUpdateMarkupRule",
+      "purpose": "Called: save rule"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/settings/markup-rules/{markupRuleId}",
+      "operationId": "consoleDeleteMarkupRule",
+      "purpose": "Called: delete rule"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/fee-rules",
+      "operationId": "consoleListFeeRules",
+      "purpose": "Called: fee list (get/create/update/delete likewise)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/storefront",
+      "operationId": "consoleGetStorefrontSettings",
+      "purpose": "Called: storefront settings, new page languages"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/console/settings/storefront",
+      "operationId": "consoleUpdateStorefrontSettings",
+      "purpose": "Called: save one section"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/assets",
+      "operationId": "consoleListStorefrontAssets",
+      "purpose": "Called: images list, pickers"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/assets",
+      "operationId": "consoleUploadStorefrontAsset",
+      "purpose": "Called: upload (multipart)"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/console/settings/assets/{assetId}",
+      "operationId": "consoleDeleteStorefrontAsset",
+      "purpose": "Called: delete image"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/pages",
+      "operationId": "consoleListStorefrontPages",
+      "purpose": "Called: pages list (create/get/update/delete likewise)"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/console/settings/notification-templates",
+      "operationId": "consoleListNotificationTemplates",
+      "purpose": "Called: templates list"
+    },
+    {
+      "method": "PUT",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}",
+      "operationId": "consolePutNotificationTemplate",
+      "purpose": "Called: save template"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/preview",
+      "operationId": "consolePreviewNotificationTemplate",
+      "purpose": "Called: preview"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset",
+      "operationId": "consoleResetNotificationTemplate",
+      "purpose": "Called: reset to default"
+    }
+  ],
+  "tags": ["ota", "back-office", "console", "bff", "sso", "bookings", "pnr", "payments", "settings", "staff"]
+}

@@ -1,0 +1,82 @@
+{
+  "id": "seq-pnr-import",
+  "type": "sequence",
+  "title": "PNR lookup and import",
+  "caption": "ota/admin/src/app/(console)/pnr/page.tsx and actions.ts → ota/backend/src/console/pnr-import.service.ts. Office isolation: only orders whose owner (or queuing) office is one of the OTA's offices.",
+  "actors": [
+    { "id": "staff", "label": "Staff", "kind": "user" },
+    { "id": "page", "label": "/pnr (RSC)", "kind": "ui" },
+    { "id": "act", "label": "Server action importBooking", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "ama", "label": "Amadeus", "kind": "external" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" }
+  ],
+  "steps": [
+    { "from": "staff", "to": "page", "label": "GET /pnr?recordLocator=l2p9xc", "kind": "call" },
+    {
+      "from": "page",
+      "to": "page",
+      "label": "normalise to L2P9XC; ^[A-Z0-9]{5,8}$ or no call",
+      "kind": "self"
+    },
+    {
+      "from": "page",
+      "to": "api",
+      "label": "console.bookings.findByRecordLocator({reference})",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "local unique index (environment, record_locator)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Get Flight Order By Record Locator (the OTA's office)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "staff_actions pnr.lookup (denied when no order is in the OTA's offices); supplier_requests",
+      "kind": "call",
+      "note": "403 OFFICE_NOT_ALLOWED; 404 with error.supplier = Amadeus has no order"
+    },
+    { "from": "api", "to": "page", "label": "matches (+ existing booking link)", "kind": "return" },
+    {
+      "from": "staff",
+      "to": "act",
+      "label": "Import as a booking: pricing (markup_rules|net|override), customer or contact e-mail, sendConfirmation, tags, note, reason, actionKey",
+      "kind": "call"
+    },
+    {
+      "from": "act",
+      "to": "act",
+      "label": "requireStaff(\"bookings:write\"); Zod (tags ≤ 10)",
+      "kind": "self"
+    },
+    {
+      "from": "act",
+      "to": "api",
+      "label": "POST /v1/console/bookings/imports (Idempotency-Key)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "ama", "label": "Flight Order Management GET", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "bookings channel=import, status confirmed, ticketing manual_review, booking_* rows; staff_actions booking.import; notifications booking.confirmed if asked",
+      "kind": "call",
+      "note": "409 ORDER_ALREADY_IMPORTED (details.bookingId), 422 selling_below_net / currency_mismatch / contact_email_required"
+    },
+    { "from": "api", "to": "act", "label": "ConsoleBooking + warnings[]", "kind": "return" },
+    {
+      "from": "act",
+      "to": "staff",
+      "label": "open /bookings/{id} (or stay with warnings); no revalidatePath (would re-run the audited lookup)",
+      "kind": "return"
+    }
+  ]
+}

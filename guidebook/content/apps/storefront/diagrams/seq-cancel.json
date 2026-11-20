@@ -1,0 +1,111 @@
+{
+  "id": "seq-cancel",
+  "type": "sequence",
+  "title": "Cancel from the booking page",
+  "caption": "`src/components/cancel-dialog.js` (ota/docs/flows/change-and-cancel.md §2). The Cancel button exists only when `allowedActions.canCancel` (which needs `features.selfServiceCancellation` on).",
+  "actors": [
+    {
+      "id": "c",
+      "label": "Customer or guest",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "booking page",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus",
+      "kind": "external"
+    },
+    {
+      "id": "w",
+      "label": "OTA worker",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "c",
+      "to": "b",
+      "label": "Cancel booking",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET /v1/bookings/{id}/cancellation-quote",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Order Management GET (refund rules)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "t:<tenantId>:<env>:cxq:<bookingId> (10 min)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "mode release | void | refund | request_only | not_allowed, estimated refund",
+      "kind": "return"
+    },
+    {
+      "from": "c",
+      "to": "b",
+      "label": "reason (+ message ≤ 500), Confirm",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/bookings/{id}/cancellation {expectedRefund, reasonCode} If-Match, key cancel-<id>-<version>-<hash>, 90 s",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Order Management DELETE",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "bookings cancelled (cancelled_by customer), segments, tickets VOID, refunds, booking_events, outbox",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "200 cancelled | 202 request sent | 409 REFUND_AMOUNT_CHANGED (ask again)",
+      "kind": "return"
+    },
+    {
+      "from": "w",
+      "to": "w",
+      "label": "refund.submit / payment.void; e-mail booking.cancelled",
+      "kind": "async"
+    }
+  ]
+}

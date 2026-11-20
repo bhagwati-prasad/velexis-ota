@@ -1,0 +1,41 @@
+{
+  "id": "flow-capture-refund",
+  "type": "flow",
+  "title": "Capture and refund a Stripe payment",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/payments.e2e.ts (nightly, Stripe test mode). Needs the OTA's Stripe test connection and bash tools/dev/stripe-listen.sh --only ota.",
+  "steps": [
+    {
+      "title": "Hold bookings for staff",
+      "actor": "Owner",
+      "screen": "/settings/storefront?tab=policies",
+      "body": "Set **Ticketing policy** to Manual review and save.",
+      "expect": "\"Saved\"; `storefront_settings.ticketing_policy = 'manual_review'`."
+    },
+    {
+      "title": "Book with a test card",
+      "actor": "Traveller",
+      "body": "Book on the OTA's storefront with `4242 4242 4242 4242`.",
+      "expect": "Booking confirmed in manual review; payment `authorized`; PaymentIntent `requires_capture`."
+    },
+    {
+      "title": "Capture",
+      "actor": "Finance",
+      "screen": "/payments/<paymentId>",
+      "url": "http://localhost:3002/payments?status=authorized",
+      "body": "Open the payment, **Capture**, reason, leave the amount empty.",
+      "expect": "`captured`; `payment.capture` staff action; **Refresh from Stripe** shows PaymentIntent `succeeded`."
+    },
+    {
+      "title": "Refund part",
+      "actor": "Finance",
+      "body": "**Refund** €10.00, category Goodwill, a reason.",
+      "expect": "A `refunds` row `pending` → `succeeded` after the webhook; payment `partially_refunded`; `payment.refund` staff action."
+    },
+    {
+      "title": "Refusals",
+      "actor": "Agent",
+      "body": "As an agent, open the same payment.",
+      "expect": "Capture offered, no Refund button (no `payments:refund`); an airline-card payment shows \"Refunded by the airline\" for every role."
+    }
+  ]
+}

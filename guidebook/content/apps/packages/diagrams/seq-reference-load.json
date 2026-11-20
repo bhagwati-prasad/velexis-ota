@@ -1,0 +1,79 @@
+{
+  "id": "seq-reference-load",
+  "type": "sequence",
+  "title": "pnpm db:seed:reference: the reference loader",
+  "caption": "tools/reference-data/src/load.ts. Role velexis_platform_app (DML on reference); with velexis_ota_app the first write fails 42501 and nothing changes.",
+  "actors": [
+    {
+      "id": "dev",
+      "label": "Developer / velexis-deploy",
+      "kind": "user"
+    },
+    {
+      "id": "cli",
+      "label": "dist/cli/load.js --data data",
+      "kind": "worker"
+    },
+    {
+      "id": "files",
+      "label": "data/*.csv + overrides.csv",
+      "kind": "external"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL reference.*",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "dev",
+      "to": "cli",
+      "label": "pnpm db:seed:reference (DATABASE_URL from env / .env.local)",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "files",
+      "label": "read 8 files; check CSV form, headers, keys, overrides",
+      "kind": "call",
+      "note": "Problem → exit 1 before connecting."
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "BEGIN; lock_timeout 10s; statement_timeout 5min; advisory xact lock",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "per table in FK order: release moved UNIQUE codes (set NULL)",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "INSERT … SELECT jsonb_populate_recordset ON CONFLICT DO UPDATE … WHERE row IS DISTINCT",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "currencies, airports, airlines: is_active=false for codes missing from the file",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "COMMIT (any error → ROLLBACK, nothing changed)",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "dev",
+      "label": "one JSON line reference.loaded { tables: { inserted, updated, deactivated }, overrides, durationMs }",
+      "kind": "return"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "id": "content-page-states",
+  "type": "state",
+  "title": "A storefront content page",
+  "caption": "storefront_pages: is_published, published_at, show_in_footer, version. Slug and language are fixed after creation. Every change deletes t:<tenantId>:<env>:pages:<locale> for both environments. Code: settings/pages/actions.ts.",
+  "states": [
+    {
+      "id": "new",
+      "label": "New",
+      "kind": "initial",
+      "detail": "`/settings/pages/new`: slug `^[a-z0-9]+(-[a-z0-9]+)*$` ≤ 64, language from the storefront settings."
+    },
+    {
+      "id": "draft",
+      "label": "Draft",
+      "kind": "normal",
+      "detail": "Not served; no **View on storefront** link."
+    },
+    {
+      "id": "published",
+      "label": "Published",
+      "kind": "normal",
+      "detail": "Served at `/p/<slug>`; in the footer when **Listed in the footer**; `published_at` set the first time."
+    },
+    {
+      "id": "deleted",
+      "label": "Deleted",
+      "kind": "final",
+      "detail": "`DELETE` with `If-Match`; `409 page_linked` while a legal link points to it."
+    }
+  ],
+  "transitions": [
+    { "from": "new", "to": "draft", "label": "Create page (unpublished)" },
+    { "from": "new", "to": "published", "label": "Create page (published)" },
+    { "from": "draft", "to": "published", "label": "Save with Published" },
+    { "from": "published", "to": "draft", "label": "Save without Published" },
+    { "from": "draft", "to": "deleted", "label": "Delete" },
+    { "from": "published", "to": "deleted", "label": "Delete (no legal link points to it)" }
+  ]
+}

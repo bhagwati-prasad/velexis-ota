@@ -1,0 +1,38 @@
+{
+  "id": "signup-flow",
+  "type": "flow",
+  "title": "Sign up and verify the e-mail",
+  "caption": "Step through the sign-up as an OTA owner; check each expected result.",
+  "steps": [
+    {
+      "title": "Open the sign-up page",
+      "actor": "OTA owner",
+      "screen": "Sign up",
+      "url": "http://localhost:3000/sign-up",
+      "body": "Fill in full name, e-mail and a password of at least 12 characters.",
+      "expect": "The form shows inline errors for a short password."
+    },
+    {
+      "title": "Submit",
+      "actor": "OTA owner",
+      "screen": "Check your e-mail",
+      "body": "Press **Create account**.",
+      "expect": "A row in `platform.accounts` with `status = 'pending_verification'`."
+    },
+    {
+      "title": "Open the e-mail",
+      "actor": "OTA owner",
+      "url": "http://localhost:8025",
+      "body": "Open Mailpit and click the verification link.",
+      "expect": "The browser lands on `/verify-email` and shows success."
+    },
+    {
+      "title": "Sign in",
+      "actor": "OTA owner",
+      "screen": "Sign in",
+      "url": "http://localhost:3000/sign-in",
+      "body": "Sign in with the new account.",
+      "expect": "The dashboard opens; `last_login_at` is set. See [[session-cookie]]."
+    }
+  ]
+}

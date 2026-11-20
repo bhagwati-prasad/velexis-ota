@@ -1,0 +1,44 @@
+{
+  "id": "flow-account",
+  "type": "flow",
+  "title": "Create an account, verify, sign in and see My bookings",
+  "caption": "`tools/e2e/specs/storefront/account-bookings.e2e.ts` steps 1-4 (OFE-019).",
+  "steps": [
+    {
+      "title": "Sign up",
+      "actor": "Customer",
+      "screen": "/account/sign-up.html",
+      "url": "http://localhost:5173/account/sign-up.html",
+      "body": "First and last name, a new e-mail, a password of at least 10 characters that is not common, tick the terms; Create an account.",
+      "expect": "Signed in at once (the API opens a session for every sign-up), on to `/account/`; header \"Hi, <first name>\". DB: `customers` (`status = active`, `email_verified_at` empty), `customer_identities`, `customer_sessions`, `customer_consents` (terms, privacy); `notifications` `auth.verify_email` pending → sent."
+    },
+    {
+      "title": "Verify the e-mail",
+      "actor": "Customer",
+      "url": "http://localhost:8025",
+      "body": "Open the verification e-mail in Mailpit and its link `/account/verify.html?token=vt_…`.",
+      "expect": "The token disappears from the address bar at once; \"Confirm your e-mail address\" shows success and lists claimed guest bookings, if any. DB: `customers.email_verified_at` set; guest bookings with that `contact_email` get `customer_id`."
+    },
+    {
+      "title": "Sign out and sign in",
+      "actor": "Customer",
+      "screen": "/account/sign-in.html",
+      "body": "Sign out from the account menu, open **My bookings**: you are sent to sign-in with `next=/bookings.html`; sign in.",
+      "expect": "Back on `/bookings.html`. Cookies `__Host-vx_at` and `__Host-vx_rt` are httpOnly; `document.cookie` shows only `__Host-vx_csrf`, whose value changed at sign-in."
+    },
+    {
+      "title": "My bookings tabs",
+      "actor": "Customer",
+      "screen": "/bookings.html?tab=upcoming",
+      "body": "Switch Upcoming / Past / Cancelled.",
+      "expect": "Each tab has its own address and `aria-current`; an empty Upcoming offers the search and \"Booked as a guest? Find your booking\". Cards: route, dates, travellers, reference, total, status word + colour."
+    },
+    {
+      "title": "Account page",
+      "actor": "Customer",
+      "screen": "/account/",
+      "body": "Change the phone and save; change the password; try a wrong current password.",
+      "expect": "Only changed fields are sent with `ifMatch`; wrong password = field error on Current password; repeated wrong passwords = \"Too many wrong passwords\" with the wait (`429` `details.reason: password_attempts`, or `423 ACCOUNT_LOCKED` on the password change) and a reset link."
+    }
+  ]
+}

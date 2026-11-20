@@ -1,0 +1,38 @@
+{
+  "id": "flow-create-ota",
+  "type": "flow",
+  "title": "Create an OTA and watch provisioning",
+  "caption": "createTenant → provision job → OTA worker → post-steps → active. Needs the OTA worker running.",
+  "steps": [
+    {
+      "title": "Check the key",
+      "actor": "Owner",
+      "body": "`GET /v1/tenants/key-availability?key=acme`.",
+      "expect": "`available: true` for a free key matching `^[a-z][a-z0-9]{2,29}$` and not reserved."
+    },
+    {
+      "title": "Create",
+      "actor": "Owner",
+      "body": "`POST /v1/tenants` with `Idempotency-Key` (16-128 chars) and `{key, name, countryCode, defaultCurrency, timeZone}`.",
+      "expect": "`202 {tenant, provisioningJob, checkoutUrl: null}`; rows in tenants, tenant_memberships, subscriptions, tenant_domains, provisioning_jobs, platform_audit_log. Same key and body again replays the stored 202."
+    },
+    {
+      "title": "Follow setup",
+      "actor": "Owner",
+      "body": "Poll `GET /v1/tenants/{tenantId}/provisioning`.",
+      "expect": "Step log `create_schema`, `run_migrations`, `seed_defaults`, then `record_migrations` … `notify`; status `active`; `initialKeysAvailable: true`."
+    },
+    {
+      "title": "Reveal the initial keys once",
+      "actor": "Owner",
+      "body": "`POST /v1/tenants/{tenantId}/initial-keys/reveal`.",
+      "expect": "`pk_test_…` and `sk_test_…` once; a second call answers `410`; `provisioning_jobs.revealed_at` set; unrevealed ciphertext erased after 24 h by `provisioning.purge_reveals`."
+    },
+    {
+      "title": "Check e-mail and data",
+      "actor": "Tester",
+      "body": "Mailpit: `tenant.welcome`. psql: `select status, schema_name from platform.tenants where key='acme';`",
+      "expect": "`active`, `tenant_acme`; an assigned office in `platform.amadeus_offices`; a `velexis` test payment connection."
+    }
+  ]
+}

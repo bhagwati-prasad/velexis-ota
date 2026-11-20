@@ -1,0 +1,286 @@
+{
+  "id": "er-shopping-booking",
+  "type": "er",
+  "title": "Tenant schema: search → checkout → booking → money",
+  "caption": "The core of every tenant_<key> schema (ota/backend/migrations/tenant/0001_baseline.sql + 0002-0005). Searches and offers are purged when they expire unless a checkout still references a priced offer (RESTRICT); bookings, payments, refunds and events are kept. Only key columns are shown.",
+  "entities": [
+    {
+      "id": "flight_searches",
+      "label": "flight_searches",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (srch_)", "type": "text", "key": "pk" },
+        { "name": "environment", "type": "test|live" },
+        { "name": "channel", "type": "storefront|console" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "status", "type": "pending|completed|failed" },
+        { "name": "criteria", "type": "jsonb" },
+        { "name": "result_count", "type": "int" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "flight_offers",
+      "label": "flight_offers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (off_)", "type": "text", "key": "pk" },
+        { "name": "search_id", "type": "text", "key": "fk" },
+        { "name": "upsell_id", "type": "text", "key": "fk" },
+        { "name": "origin", "type": "search|upsell" },
+        { "name": "payload", "type": "jsonb (Amadeus offer)" },
+        { "name": "net_total", "type": "numeric(12,2)" },
+        { "name": "markup_amount", "type": "numeric(12,2)" },
+        { "name": "selling_total", "type": "numeric(12,2)" },
+        { "name": "markup_rule_id", "type": "text", "key": "fk" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "offer_upsells",
+      "label": "offer_upsells",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (ups_)", "type": "text", "key": "pk" },
+        { "name": "base_offer_id", "type": "text", "key": "fk" },
+        { "name": "amadeus_request", "type": "jsonb" },
+        { "name": "status", "type": "completed|no_upsell|failed" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "priced_offers",
+      "label": "priced_offers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (prc_)", "type": "text", "key": "pk" },
+        { "name": "offer_id", "type": "text", "key": "fk" },
+        { "name": "parent_priced_offer_id", "type": "text", "key": "fk" },
+        { "name": "response", "type": "jsonb (Flight Offers Price)" },
+        { "name": "price_changed", "type": "bool" },
+        { "name": "net_total / markup_amount / fee_amount", "type": "numeric" },
+        { "name": "selling_total", "type": "numeric(12,2)" },
+        { "name": "expires_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "checkouts",
+      "label": "checkouts",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (chk_)", "type": "text", "key": "pk" },
+        { "name": "customer_id", "type": "text", "key": "fk" },
+        { "name": "is_guest", "type": "bool" },
+        { "name": "base_priced_offer_id", "type": "text (RESTRICT)", "key": "fk" },
+        { "name": "priced_offer_id", "type": "text (RESTRICT)", "key": "fk" },
+        { "name": "status", "type": "open|payment_pending|completed|expired|abandoned" },
+        { "name": "pricing_mode", "type": "markup_rules|net|override" },
+        { "name": "total_amount", "type": "= offer + ancillaries + fees" },
+        { "name": "expires_at", "type": "timestamptz" },
+        { "name": "version", "type": "int" }
+      ]
+    },
+    {
+      "id": "checkout_travelers",
+      "label": "checkout_travelers (+ contacts, ancillaries, remarks)",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (ctr_)", "type": "text", "key": "pk" },
+        { "name": "checkout_id", "type": "text (CASCADE)", "key": "fk" },
+        { "name": "first_name / last_name", "type": "text" },
+        { "name": "documents_ciphertext", "type": "bytea (envelope)" },
+        { "name": "discount_eligibility_ciphertext", "type": "bytea" }
+      ]
+    },
+    {
+      "id": "payments",
+      "label": "payments",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (pay_)", "type": "text", "key": "pk" },
+        { "name": "checkout_id", "type": "text", "key": "fk" },
+        { "name": "booking_id", "type": "text (RESTRICT)", "key": "fk" },
+        { "name": "provider", "type": "stripe|airline" },
+        { "name": "method", "type": "card|airline_card" },
+        { "name": "provider_payment_id", "type": "PaymentIntent id", "key": "uk" },
+        { "name": "status", "type": "requires_payment_method…refunded|canceled|failed" },
+        { "name": "amount / amount_captured / amount_refunded", "type": "numeric" },
+        { "name": "card_brand / card_bin / card_last4", "type": "never the PAN" },
+        { "name": "card_fee_amount, card_fee_lines", "type": "numeric, jsonb" },
+        { "name": "version", "type": "int" }
+      ]
+    },
+    {
+      "id": "payment_events",
+      "label": "payment_events",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (pev_)", "type": "text", "key": "pk" },
+        { "name": "payment_id", "type": "text", "key": "fk" },
+        { "name": "type", "type": "text" },
+        { "name": "source", "type": "api|webhook|system|staff" },
+        { "name": "provider_event_id", "type": "evt_… (dedupe)", "key": "uk" },
+        { "name": "payload", "type": "jsonb (redacted)" }
+      ]
+    },
+    {
+      "id": "refunds",
+      "label": "refunds",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (rfd_)", "type": "text", "key": "pk" },
+        { "name": "payment_id", "type": "text", "key": "fk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "amount", "type": "numeric(12,2)" },
+        { "name": "reason", "type": "customer_request|booking_cancelled|…" },
+        { "name": "status", "type": "pending|processing|succeeded|failed|canceled" },
+        { "name": "requested_by_type", "type": "customer|staff|system" }
+      ]
+    },
+    {
+      "id": "bookings",
+      "label": "bookings",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (bkg_)", "type": "text", "key": "pk" },
+        { "name": "reference", "type": "VX + 6 chars", "key": "uk" },
+        { "name": "checkout_id", "type": "text", "key": "uk" },
+        { "name": "customer_id", "type": "text (SET NULL)", "key": "fk" },
+        { "name": "channel", "type": "storefront|console|import" },
+        { "name": "status", "type": "pending|confirmed|ticketed|partially_ticketed|cancelled|failed" },
+        { "name": "ticketing_status", "type": "pending…manual_review|not_applicable" },
+        { "name": "amadeus_order_id / record_locator", "type": "text" },
+        { "name": "reconcile_until / reconcile_outcome", "type": "0002" },
+        { "name": "sync_claimed_at / sync_changes", "type": "0003" },
+        { "name": "cancellation_claimed_at", "type": "0005" },
+        { "name": "net_amount / markup_amount / total_amount", "type": "numeric" },
+        { "name": "order_snapshot", "type": "jsonb (redacted)" },
+        { "name": "version", "type": "int" }
+      ]
+    },
+    {
+      "id": "booking_children",
+      "label": "booking_travelers, booking_contacts, booking_segments, booking_tickets, booking_ancillaries, booking_remarks, booking_associated_records",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (btr_/bco_/seg_/tkt_/anc_/rmk_/bar_)", "type": "text", "key": "pk" },
+        { "name": "booking_id", "type": "text (CASCADE)", "key": "fk" },
+        { "name": "booking_tickets.document_number / status", "type": "ISSUED|VOID|REFUNDED|…" },
+        { "name": "booking_segments.departure_at / is_flown", "type": "timestamptz, bool" }
+      ]
+    },
+    {
+      "id": "booking_documents",
+      "label": "booking_documents",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (doc_)", "type": "text", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "kind", "type": "itinerary|e_ticket_receipt" },
+        { "name": "status", "type": "ready|failed|superseded" },
+        { "name": "storage_key", "type": "tenant_<key>/…", "key": "uk" },
+        { "name": "content_hash", "type": "sha256" }
+      ]
+    },
+    {
+      "id": "booking_access_tokens",
+      "label": "booking_access_tokens",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (bat_)", "type": "text", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "token_hash", "type": "sha256", "key": "uk" },
+        { "name": "issued_via", "type": "booking_created|lookup|email_link|staff" },
+        { "name": "expires_at / revoked_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "booking_events",
+      "label": "booking_events",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (evt_)", "type": "text", "key": "pk" },
+        { "name": "booking_id", "type": "text", "key": "fk" },
+        { "name": "type", "type": "booking.created, booking.ticketed, …" },
+        { "name": "actor_type", "type": "customer|guest|staff|system|supplier|api_key" },
+        { "name": "visible_to_customer", "type": "bool" },
+        { "name": "supplier_request_id", "type": "text", "key": "fk" }
+      ]
+    },
+    {
+      "id": "supplier_requests",
+      "label": "supplier_requests",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (sreq_)", "type": "text", "key": "pk" },
+        { "name": "operation", "type": "e.g. flights.search" },
+        { "name": "amadeus_api", "type": "FlightOffersSearch, …" },
+        { "name": "outcome", "type": "success|client_error|server_error|timeout|network_error" },
+        { "name": "http_status / duration_ms", "type": "int" },
+        { "name": "booking_id / search_id", "type": "text", "key": "fk" },
+        { "name": "request_body / response_body", "type": "jsonb (redacted)" }
+      ]
+    },
+    {
+      "id": "customers",
+      "label": "customers",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id (cus_)", "type": "text", "key": "pk" },
+        { "name": "email", "type": "text", "key": "uk" },
+        { "name": "status", "type": "active|pending_verification|disabled|deleted" }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "flight_searches",
+      "to": "flight_offers",
+      "label": "search_id (CASCADE)",
+      "cardinality": "1-n"
+    },
+    { "from": "flight_offers", "to": "offer_upsells", "label": "base_offer_id", "cardinality": "1-n" },
+    {
+      "from": "offer_upsells",
+      "to": "flight_offers",
+      "label": "upsell_id (origin = upsell)",
+      "cardinality": "1-n"
+    },
+    { "from": "flight_offers", "to": "priced_offers", "label": "offer_id", "cardinality": "1-n" },
+    {
+      "from": "priced_offers",
+      "to": "checkouts",
+      "label": "priced_offer_id, base_priced_offer_id (RESTRICT)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "checkouts",
+      "to": "checkout_travelers",
+      "label": "checkout_id (CASCADE)",
+      "cardinality": "1-n"
+    },
+    { "from": "checkouts", "to": "payments", "label": "checkout_id", "cardinality": "1-n" },
+    {
+      "from": "checkouts",
+      "to": "bookings",
+      "label": "checkout_id UNIQUE: one booking per checkout",
+      "cardinality": "1-1"
+    },
+    { "from": "bookings", "to": "booking_children", "label": "booking_id (CASCADE)", "cardinality": "1-n" },
+    { "from": "bookings", "to": "booking_documents", "label": "booking_id", "cardinality": "1-n" },
+    { "from": "bookings", "to": "booking_access_tokens", "label": "booking_id", "cardinality": "1-n" },
+    { "from": "bookings", "to": "booking_events", "label": "booking_id", "cardinality": "1-n" },
+    { "from": "bookings", "to": "payments", "label": "booking_id (RESTRICT)", "cardinality": "1-n" },
+    { "from": "payments", "to": "payment_events", "label": "payment_id", "cardinality": "1-n" },
+    { "from": "payments", "to": "refunds", "label": "payment_id (RESTRICT)", "cardinality": "1-n" },
+    { "from": "customers", "to": "checkouts", "label": "customer_id (SET NULL)", "cardinality": "1-n" },
+    { "from": "customers", "to": "bookings", "label": "customer_id (SET NULL)", "cardinality": "1-n" },
+    { "from": "bookings", "to": "supplier_requests", "label": "booking_id (SET NULL)", "cardinality": "1-n" },
+    {
+      "from": "flight_searches",
+      "to": "supplier_requests",
+      "label": "search_id (SET NULL)",
+      "cardinality": "1-n"
+    }
+  ]
+}

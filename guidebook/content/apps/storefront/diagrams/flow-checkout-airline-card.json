@@ -1,0 +1,53 @@
+{
+  "id": "flow-checkout-airline-card",
+  "type": "flow",
+  "title": "Book as a guest and pay with the airline card",
+  "caption": "`tools/e2e/specs/storefront/checkout-airline-card.e2e.ts`. Needs `AIRLINE_CARD_ENABLED=true` (default in ota/backend/.env.example) and `airline_card_enabled_test` on (see the local setup flow). No Stripe involved.",
+  "steps": [
+    {
+      "title": "Start the checkout",
+      "actor": "Guest",
+      "screen": "/price.html",
+      "body": "On a fresh price page press **Continue to checkout** without signing in.",
+      "expect": "`/checkout.html?id=chk_…&step=travellers`. DB: `checkouts` row `status = open`, `is_guest = true`, `expires_at` ≈ now + `checkout_ttl_minutes`."
+    },
+    {
+      "title": "Travellers",
+      "actor": "Guest",
+      "body": "First name `Ada`, last name `Cardtest`, date of birth `1985-04-12` (and whatever else the requirements ask). Continue.",
+      "expect": "Moves to Contact details only when nothing is missing; otherwise \"Travellers saved. Some details are still missing\" with the fields marked. DB: `checkout_travelers` rows, `checkouts.version` + 1."
+    },
+    {
+      "title": "Contact and extras",
+      "actor": "Guest",
+      "body": "E-mail (any address; Mailpit catches it) and a mobile number; Continue; skip extras or pick a bag.",
+      "expect": "The contact is pre-filled from the first adult. A bag shows the airline's new total and asks to confirm it (`409 PRICE_CHANGED` is expected, not a bug)."
+    },
+    {
+      "title": "Choose the airline card",
+      "actor": "Guest",
+      "screen": "/checkout.html?step=payment",
+      "body": "Pick **Card, charged by the airline**, read the notice, tick the terms, continue.",
+      "expect": "`/checkout/pay-airline.html?id=chk_…&payment=pay_…` titled \"Pay with your card\" with the airline's price (no OTA markup or fees: `checkouts.pricing_mode = 'net'`). DB: `payments` row `provider = 'airline'`, `method = 'airline_card'`."
+    },
+    {
+      "title": "Type the test card and review",
+      "actor": "Guest",
+      "body": "Holder `Ada Q Holdertest`, number `4111 1111 1111 1111`, an expiry in the future, security code `123`; press **Review the total**.",
+      "expect": "After six digits the brand is detected and the airline's fee quoted (stub VISA fee €1.20); the button becomes \"Pay €…\". A number with a wrong check digit (`4111 1111 1111 1112`) is refused on the page and nothing is sent."
+    },
+    {
+      "title": "Pay",
+      "actor": "Guest",
+      "body": "Press **Pay €…** once.",
+      "expect": "\"Do not close this page\", then `/confirmation.html?booking=bkg_…` with the reference and ticket lines `000-…`. Inputs emptied. DB: `bookings` `ticketed`, `payments` `captured` with `card_brand`, `card_bin` `411111`, `card_last4` `1111` and nothing else of the card. Cookie `__Host-vx_bt` set (httpOnly)."
+    },
+    {
+      "title": "E-mails and decline path",
+      "actor": "Guest",
+      "url": "http://localhost:8025",
+      "body": "Check Mailpit. Then try a new booking with the stub's declined card `4000 0000 0000 0002` three times.",
+      "expect": "\"Your booking <reference> with Demo Travel is confirmed\" (and the ticketed e-mail). Declines: \"The airline declined the card\" twice, then \"Too many attempts\" (`403 PAYMENT_ATTEMPTS_EXCEEDED`); Redis `t:<tenantId>:test:ac:chk:<checkoutId>` counts 3."
+    }
+  ]
+}

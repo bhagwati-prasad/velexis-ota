@@ -1,0 +1,259 @@
+{
+  "id": "er-deploy-data",
+  "type": "er",
+  "title": "What a deploy writes and reads in the database and Redis",
+  "caption": "Migration ledgers (packages/db/src/migrate/ledger.ts) per schema, the platform's mirror of tenant migrations (platform/backend/migrations/platform/0001_baseline.sql) fed by the deploy's fan-out report, and the Redis key of Caddy's on-demand TLS gate.",
+  "entities": [
+    {
+      "id": "platform_ledger",
+      "label": "platform.schema_migrations",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text (0001_baseline, R__ota_read_access)",
+          "key": "pk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "checksum",
+          "type": "text (SHA-256)"
+        },
+        {
+          "name": "phase",
+          "type": "expand|migrate|contract|repeatable"
+        },
+        {
+          "name": "status",
+          "type": "running|applied|failed"
+        },
+        {
+          "name": "execution_ms",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "reference_ledger",
+      "label": "reference.schema_migrations",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "running|applied|failed"
+        }
+      ]
+    },
+    {
+      "id": "tenant_ledger",
+      "label": "tenant_<key>.schema_migrations",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "phase",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "running|applied|failed"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text (ten_…)",
+          "key": "pk"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "schema_name",
+          "type": "text (tenant_<key>, generated)",
+          "key": "uk"
+        },
+        {
+          "name": "status",
+          "type": "provisioning|active|suspended|…"
+        },
+        {
+          "name": "schema_version",
+          "type": "text (latest tenant migration)"
+        }
+      ]
+    },
+    {
+      "id": "tsm",
+      "label": "platform.tenant_schema_migrations",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "version",
+          "type": "text"
+        },
+        {
+          "name": "schema_name",
+          "type": "text"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "pending|running|applied|failed|rolled_back"
+        },
+        {
+          "name": "runner_id",
+          "type": "text"
+        },
+        {
+          "name": "finished_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "jobs",
+      "label": "platform.provisioning_jobs",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text (job_…)",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "kind",
+          "type": "provision|migrate|suspend|resume|…"
+        },
+        {
+          "name": "status",
+          "type": "queued|running|succeeded|failed|…"
+        }
+      ]
+    },
+    {
+      "id": "events",
+      "label": "queue platform-tenant-events (BullMQ, prefix vx)",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "name",
+          "type": "tenant.migrated | tenant.migration_failed"
+        },
+        {
+          "name": "jobId",
+          "type": "null for deploy fan-out reports"
+        },
+        {
+          "name": "tenantId",
+          "type": "text"
+        },
+        {
+          "name": "ledger",
+          "type": "full ledger of the schema"
+        }
+      ]
+    },
+    {
+      "id": "tlsask",
+      "label": "tlsask:<host>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "value",
+          "type": "1 (allowed hosts only; refusals live in the API's in-process LRU)"
+        },
+        {
+          "name": "ttl",
+          "type": "60 s (TLS_ASK_TTL_SECONDS)"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "tenants",
+      "to": "tenant_ledger",
+      "label": "schema_name names the schema whose ledger it is",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "tenants",
+      "to": "tsm",
+      "label": "mirror of the tenant ledger",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "jobs",
+      "label": "provision/migrate jobs",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenant_ledger",
+      "to": "events",
+      "label": "migrate-<sha>.json published by tenants:report-migrations",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "events",
+      "to": "tsm",
+      "label": "platform worker upserts",
+      "cardinality": "n-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tlsask",
+      "label": "status decides the ask answer",
+      "cardinality": "1-n"
+    }
+  ]
+}

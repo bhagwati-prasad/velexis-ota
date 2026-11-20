@@ -1,0 +1,25 @@
+{
+  "id": "flow-payout-account",
+  "type": "flow",
+  "title": "Review and reveal an OTA's payout account",
+  "caption": "Connections tab of /tenants/[tenantId] (payout-account.tsx).",
+  "steps": [
+    {
+      "title": "Open the payout account",
+      "screen": "/tenants/[tenantId]",
+      "url": "http://localhost:3001/tenants/ten_…?tab=connections",
+      "body": "Scroll to **Payout account**.",
+      "expect": "Masked fields only ('IBAN ending in 7947'), review status and note; 'not entered yet' when the owner has none."
+    },
+    {
+      "title": "Verify or reject",
+      "body": "**Verify** (confirm) or **Reject** with a note (1-1000 chars).",
+      "expect": "Status follows; owner e-mailed; a stale version (owner changed it meanwhile) asks for a full reload."
+    },
+    {
+      "title": "Reveal",
+      "body": "**Reveal bank details** → reason → code if asked.",
+      "expect": "IBAN in groups of four and BIC (or account and routing numbers) for 60 s with a countdown; **Hide now** clears it; no copy button; audit `payout_account.revealed` every time."
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "id": "customer-states",
+  "type": "state",
+  "title": "Customer account (customers.status)",
+  "caption": "src/identity (sign-up, verification), src/account (deletion, erasure). Code note: sign-up inserts the customer as active (email_verified_at stays null until the link is used); pending_verification is only turned into active by verification, never written by sign-up.",
+  "states": [
+    {
+      "id": "signup",
+      "label": "auth.signUp",
+      "kind": "initial",
+      "detail": "201; session opened (cookies in edge mode); `auth.verify_email` e-mail queued."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Can sign in; checkout may require a verified address (`403 EMAIL_NOT_VERIFIED` when `require_email_verification`). Unverified = `email_verified_at` null; the console filter `status=active` includes pending_verification and `emailVerified` tells them apart."
+    },
+    {
+      "id": "pending_verification",
+      "label": "pending_verification",
+      "kind": "normal",
+      "detail": "In the CHECK list; verification turns it into active. Not written by the current sign-up."
+    },
+    {
+      "id": "disabled",
+      "label": "disabled",
+      "kind": "error",
+      "detail": "`disabled_reason`; sessions refused (t:<tenantId>:<env>:cust:<id> = 0)."
+    },
+    {
+      "id": "deleted",
+      "label": "deleted",
+      "kind": "normal",
+      "detail": "account.delete (current password): `deleted`, `deleted_at`, the e-mail replaced by a placeholder, marketing consent withdrawn, sessions revoked, `account.deleted` e-mail to the old address, `202` with `erasureDueBy` = +30 days. Refused with `409 ACCOUNT_DELETION_BLOCKED` while a booking waits for payment, tickets or a refund."
+    },
+    {
+      "id": "erased",
+      "label": "erased (row gone)",
+      "kind": "final",
+      "detail": "customers.erase (hourly, minute 50): identities, sessions, consents… deleted; bookings/payments detached (customer_id NULL) with a customer.erased event."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "signup",
+      "to": "active",
+      "label": "insert"
+    },
+    {
+      "from": "pending_verification",
+      "to": "active",
+      "label": "auth.verifyEmail"
+    },
+    {
+      "from": "active",
+      "to": "disabled",
+      "label": "disable (no MVP operation)"
+    },
+    {
+      "from": "active",
+      "to": "deleted",
+      "label": "account.delete (current password)"
+    },
+    {
+      "from": "deleted",
+      "to": "erased",
+      "label": "30 days − 1 h 5 min later"
+    }
+  ]
+}

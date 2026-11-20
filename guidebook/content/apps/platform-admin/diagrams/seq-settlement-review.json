@@ -1,0 +1,101 @@
+{
+  "id": "seq-settlement-review",
+  "type": "sequence",
+  "title": "Settlement review: draft to paid",
+  "caption": "Approve and Mark paid are step-up operations with If-Match; the adjustment and void need a reason. The money transfer itself happens outside the system. Code: (app)/settlements/[settlementId]/actions.ts, (app)/tenants/[tenantId]/payout-actions.ts.",
+  "actors": [
+    { "id": "ad", "label": "Admin", "kind": "user" },
+    { "id": "ui", "label": "Statement page + actions", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" },
+    { "id": "pw", "label": "Platform worker", "kind": "worker" }
+  ],
+  "steps": [
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "Dashboard 'draft settlements to review' → /settlements?status=draft → stl_…",
+      "kind": "call"
+    },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "GET /v1/admin/settlements/{id} + /lines?cursor=",
+      "kind": "call"
+    },
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "Add an adjustment {amount (currency decimals), description, reason}",
+      "kind": "call"
+    },
+    { "from": "ui", "to": "api", "label": "POST …/adjustments", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "settlement_lines adjustment; totals recomputed; audit settlement.adjusted",
+      "kind": "call"
+    },
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "Approve → 'Approve statement' (ConfirmDialog names the net)",
+      "kind": "call"
+    },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "POST …/approve If-Match (→ REAUTH_REQUIRED → step-up → again)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "net > 0 → approved (PAYOUT_ACCOUNT_REQUIRED unless verified); net ≤ 0 → carried_forward",
+      "kind": "call"
+    },
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "Payout account link → Reveal bank details (reason, step-up, 60 s)",
+      "kind": "call"
+    },
+    {
+      "from": "ui",
+      "to": "api",
+      "label": "POST /v1/admin/tenants/{id}/payout-account/reveal {reason}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "decrypt tenant_payout_accounts.bank_details_ciphertext; audit payout_account.revealed",
+      "kind": "call"
+    },
+    {
+      "from": "ad",
+      "to": "ad",
+      "label": "pays by bank transfer outside Velexis",
+      "kind": "self"
+    },
+    {
+      "from": "ad",
+      "to": "ui",
+      "label": "Record the bank transfer {day (UTC, not future), bank reference 1-200}",
+      "kind": "call"
+    },
+    { "from": "ui", "to": "api", "label": "POST …/mark-paid If-Match (step-up)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "approved → paid (paid_at, payout_reference); audit settlement.paid; email_outbox to owners and finance",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "ad",
+      "label": "e-mail 'Velexis paid the <month> settlement of <OTA>' (Mailpit)",
+      "kind": "async"
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "id": "seq-provisioning",
+  "type": "sequence",
+  "title": "tenant.provision: the OTA worker creates tenant_<key>",
+  "caption": "The platform asks, the OTA worker builds the schema in one transaction as velexis_provisioner and reports back (ota/docs/flows/tenant-provisioning-worker.md, src/provisioning). tenant.migrate, tenant.suspend and tenant.resume use the same queue.",
+  "actors": [
+    { "id": "pw", "label": "Platform worker", "kind": "worker" },
+    { "id": "q", "label": "Redis (BullMQ vx)", "kind": "queue" },
+    { "id": "ow", "label": "OTA worker (tenant-ops.processor.ts)", "kind": "worker" },
+    { "id": "plat", "label": "platform.tenants (read only)", "kind": "db" },
+    { "id": "t", "label": "tenant_<key> (velexis_provisioner)", "kind": "db" }
+  ],
+  "steps": [
+    {
+      "from": "pw",
+      "to": "q",
+      "label": "ota-tenant-ops tenant.provision {v, jobId, tenantId, requestedAt, requestId}",
+      "kind": "async"
+    },
+    {
+      "from": "ow",
+      "to": "q",
+      "label": "take job (concurrency 2); validate against @velexis/api-types/jobs (invalid → UnrecoverableError, queue.job_invalid)",
+      "kind": "call"
+    },
+    {
+      "from": "ow",
+      "to": "plat",
+      "label": "tenant row: status must be provisioning (else TENANT_NOT_PROVISIONING), schema_name ^tenant_[a-z][a-z0-9_]{1,39}$, time_zone",
+      "kind": "call"
+    },
+    {
+      "from": "ow",
+      "to": "t",
+      "label": "BEGIN; lock_timeout 5 s; advisory lock; CREATE SCHEMA IF NOT EXISTS",
+      "kind": "call"
+    },
+    {
+      "from": "ow",
+      "to": "t",
+      "label": "apply 0001_baseline … 0005 (checksums verified), schema_migrations rows",
+      "kind": "call"
+    },
+    {
+      "from": "ow",
+      "to": "t",
+      "label": "GRANT USAGE + DML to velexis_ota_app; ALTER DEFAULT PRIVILEGES",
+      "kind": "call"
+    },
+    {
+      "from": "ow",
+      "to": "t",
+      "label": "seeds: storefront_settings (issue_after_payment, booking queue 50/0, time_zone), default markup rule 0 % priority 1000, notification_templates",
+      "kind": "call"
+    },
+    { "from": "ow", "to": "t", "label": "COMMIT", "kind": "call" },
+    {
+      "from": "ow",
+      "to": "q",
+      "label": "platform-tenant-events tenant.provisioned {schemaName, schemaVersion, migrations[], steps[]} (id <jobId>-<attempt>)",
+      "kind": "async",
+      "note": "Retryable (lock timeout, serialization, connection lost): thrown back to BullMQ. Non-retryable (checksum mismatch, foreign content): tenant.provision_failed at once."
+    },
+    {
+      "from": "pw",
+      "to": "q",
+      "label": "consume: mirror ledger into platform.tenant_schema_migrations, post-steps, activate",
+      "kind": "call"
+    }
+  ]
+}

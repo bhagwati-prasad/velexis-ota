@@ -1,0 +1,91 @@
+{
+  "id": "tenant-states",
+  "type": "state",
+  "title": "OTA (tenant) status",
+  "caption": "`platform.tenants.status`. Only `active` OTAs are served by the storefront, the OTA API and the console; `suspended` answers `403 TENANT_SUSPENDED` on the OTA side within 60 s (vx:invalidate tenant).",
+  "states": [
+    {
+      "id": "start",
+      "label": "new",
+      "kind": "initial"
+    },
+    {
+      "id": "provisioning",
+      "label": "provisioning",
+      "kind": "normal",
+      "detail": "Rows written by `createTenant`; waiting for the `provision` job (and, from M5, for the Checkout)."
+    },
+    {
+      "id": "active",
+      "label": "active",
+      "kind": "normal",
+      "detail": "Served. Writes to keys, domains and connections need this status (`409 TENANT_NOT_ACTIVE` otherwise)."
+    },
+    {
+      "id": "suspended",
+      "label": "suspended",
+      "kind": "normal",
+      "detail": "`suspension_reason` billing, abuse, request or admin. Keys, domains and connections are read-only."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Provisioning gave up, or the Checkout was abandoned for 48 h. Does not count against MAX_TENANTS_PER_ACCOUNT."
+    },
+    {
+      "id": "deprovisioning",
+      "label": "deprovisioning (reserved)",
+      "kind": "normal",
+      "detail": "Allowed by the CHECK; no MVP code path sets it."
+    },
+    {
+      "id": "deleted",
+      "label": "deleted (reserved)",
+      "kind": "final",
+      "detail": "Allowed by the CHECK; no MVP code path sets it."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "provisioning",
+      "label": "createTenant / tenants:create-demo"
+    },
+    {
+      "from": "provisioning",
+      "to": "active",
+      "label": "post-step activate after tenant.provisioned"
+    },
+    {
+      "from": "provisioning",
+      "to": "failed",
+      "label": "provision job failed / billing.abandoned_checkouts (48 h)"
+    },
+    {
+      "from": "failed",
+      "to": "provisioning",
+      "label": "retryProvisioning (owner) / adminRetryProvisioningJob - the OTA limit is not checked again (bug)"
+    },
+    {
+      "from": "active",
+      "to": "suspended",
+      "label": "adminSuspendTenant / billing sync (canceled, unpaid, incomplete_expired) / billing.manual_trials"
+    },
+    {
+      "from": "suspended",
+      "to": "active",
+      "label": "adminResumeTenant / billing sync when the subscription is trialing or active"
+    },
+    {
+      "from": "active",
+      "to": "deprovisioning",
+      "label": "reserved"
+    },
+    {
+      "from": "deprovisioning",
+      "to": "deleted",
+      "label": "reserved"
+    }
+  ]
+}

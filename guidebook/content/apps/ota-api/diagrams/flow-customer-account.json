@@ -1,0 +1,63 @@
+{
+  "id": "flow-customer-account",
+  "type": "flow",
+  "title": "Customer account: sign up, verify, my trips, change, cancel",
+  "caption": "Mirrors tools/e2e/specs/storefront/account-bookings.e2e.ts. Self-service cancellation needs storefront_settings.features.selfServiceCancellation (off for a new OTA). E-mails land in Mailpit.",
+  "steps": [
+    {
+      "title": "Sign up",
+      "actor": "Traveller",
+      "screen": "/account/sign-up.html",
+      "url": "http://localhost:5173/account/sign-up.html",
+      "body": "Name, e-mail, a strong password, accept the terms.",
+      "expect": "`POST /v1/auth/sign-up` → `201`; cookies `__Host-vx_at` (15 min), `__Host-vx_rt` (HttpOnly) and `__Host-vx_csrf` (readable by JS). Rows: `customers` (active, `email_verified_at` null), `customer_identities` (argon2id), `customer_sessions`, `customer_preferences`, 3 `customer_consents`, `notifications` `auth.verify_email`."
+    },
+    {
+      "title": "Verify the address",
+      "actor": "Traveller",
+      "url": "http://127.0.0.1:8025",
+      "body": "Open the e-mail in Mailpit and follow the link (`/account/verify.html?token=…`).",
+      "expect": "`POST /v1/auth/email-verification/confirm` → `200`; `email_verified_at` set; guest bookings of that address attached to the account (unless marked `customer.erased`). The token works once (`400 VERIFICATION_TOKEN_INVALID` the second time)."
+    },
+    {
+      "title": "Sign out and in",
+      "actor": "Traveller",
+      "screen": "/account/sign-in.html",
+      "body": "Sign out, sign in again; try a wrong password 5 times on another address.",
+      "expect": "`204` then `200`; the session row revoked/new. Five failures → `423 ACCOUNT_LOCKED` (Redis `t:<tenantId>:test:authfail:<sha256(email)>`, 15 min); 11 sign-ins/min from one IP → `429`."
+    },
+    {
+      "title": "My trips",
+      "actor": "Traveller",
+      "screen": "/bookings.html",
+      "body": "Book a trip while signed in (airline card), then open My bookings.",
+      "expect": "`GET /v1/bookings?timeframe=upcoming|past|cancelled`; upcoming sorted by departure; the booking has `customer_id` set."
+    },
+    {
+      "title": "Change contact details",
+      "actor": "Traveller",
+      "screen": "/booking.html?id=bkg_…",
+      "body": "Change the contact e-mail and phone.",
+      "expect": "`PATCH /v1/bookings/{id}` (If-Match) → Amadeus PATCH, `booking_contacts` and `bookings.contact_email` updated, `booking.updated` e-mail to the new address with the itinerary, a short notice to the old one. Traveller changes → `403 FEATURE_DISABLED` (travelerChanges)."
+    },
+    {
+      "title": "Cancel",
+      "actor": "Traveller",
+      "body": "Press Cancel: the page shows the refund preview, then confirm.",
+      "expect": "Quote `GET …/cancellation-quote` (cached 10 min in `t:…:cxq:<bookingId>`); `POST …/cancellation` → booking `cancelled`, `booking.cancelled` e-mail, cancelled itinerary PDF; the trip moves to the Cancelled tab."
+    },
+    {
+      "title": "Silent refresh",
+      "actor": "Tester",
+      "body": "Delete `__Host-vx_at` in the browser and reload a page.",
+      "expect": "`401 TOKEN_EXPIRED`, the SDK calls `POST /v1/auth/refresh` with the refresh cookie and retries; a rotated refresh token used again → `401 REFRESH_TOKEN_REUSED` and the whole family revoked."
+    },
+    {
+      "title": "Delete the account",
+      "actor": "Traveller",
+      "screen": "/account/index.html",
+      "body": "Delete with the current password.",
+      "expect": "`POST /v1/account/deletion` → `202` with `erasureDueBy` (+30 days); `customers.status = deleted`, sessions revoked, `account.deleted` e-mail; Redis `t:<tenantId>:<env>:cust:<id>` = 0 so live access tokens fail with 401."
+    }
+  ]
+}

@@ -1,0 +1,228 @@
+{
+  "id": "packages",
+  "name": "Shared packages and tools",
+  "kind": "library",
+  "product": "shared",
+  "summary": "The foundation every Velexis app builds on: seven shared TypeScript packages (config, logger, crypto, db, errors, api-types, testing) and the tools around them (Amadeus stub, Playwright e2e harness, reference-data loader, CI checks, plan linter, perf smoke test, dev key script). Half A of this guide covers packages/*, half B covers tools/*.",
+  "audience": [
+    "Owner hunting bugs (DB migrations, reference data, error codes, redaction, test harness)",
+    "Backend developers (tenantTx, platformDb, envelope encryption, error catalogue)",
+    "Frontend developers (error codes, API types)",
+    "Test authors (template databases, Mailpit, Amadeus stub, Stripe events, Playwright)",
+    "Operator on the VM (migrate.js, reference loader, KEK rotation)"
+  ],
+  "repoPath": "packages",
+  "package": "@velexis/config, @velexis/logger, @velexis/crypto, @velexis/db, @velexis/errors, @velexis/api-types, @velexis/testing; tools: @velexis/amadeus-stub, @velexis/e2e, @velexis/reference-data (+ plain Node folders tools/ci, tools/perf, tools/plan-lint, tools/dev)",
+  "stack": [
+    "TypeScript 5.6.3, tsc -b to CommonJS + .d.ts, Node.js 24 (.nvmrc)",
+    "pnpm workspaces + Turborepo; exact dependency versions",
+    "Kysely 0.28.20 on pg 8.23.1; kysely-codegen 0.20.0",
+    "pino 9.14.0 + pino-http 10.5.0",
+    "Node built-in crypto (AES-256-GCM, HMAC-SHA-256), ulid 3.0.2",
+    "openapi-typescript 7.13.0, Redocly CLI 2.79.0, Ajv 8.20.0 + ajv-formats 3.0.1, yaml 2.9.1",
+    "Vitest 4.1.12, ioredis 5.11.1, nodemailer 10.6.0 (tests), stripe 18.5.0 (tests)",
+    "Playwright 1.65.1, @axe-core/playwright 4.14.0, otplib 12.0.1",
+    "Amadeus stub: Node http, no framework; reference data: OpenTravelData (CC BY 4.0) + Unicode CLDR 48.2.0"
+  ],
+  "local": {
+    "url": "http://127.0.0.1:4900",
+    "port": 4900,
+    "command": "pnpm build && pnpm db:migrate && pnpm db:seed:reference && pnpm stub:amadeus",
+    "notes": "Libraries: nothing to start except the Amadeus stub (127.0.0.1:4900) and, for tests, Mailpit (SMTP 127.0.0.1:1025, UI/API http://127.0.0.1:8025). Prerequisites: deploy/scripts/dev-setup.sh, pnpm dev:keys, cp .env.example .env.local (development values only). Tests: pnpm test, pnpm test:int, pnpm test:e2e."
+  },
+  "production": {
+    "host": "No host of its own: the runtime packages ship inside the backends' releases; on the VM velexis-deploy runs db/dist/cli/migrate.js (platform, reference, tenants) and reference-data/dist/cli/load.js before switching releases. Test packages, the stub and tools/e2e never reach the VM."
+  },
+  "dependsOn": [],
+  "talksTo": [
+    {
+      "app": "platform-api",
+      "how": "Imported at run time: config, logger, crypto (credentials, MFA secrets), db (platformDb, migrations), errors (exception filter), api-types (types, job validation); @velexis/testing in its tests"
+    },
+    {
+      "app": "ota-api",
+      "how": "Imported at run time: tenantTx for every tenant query, migrateTenantSchema for provisioning, envelope encryption of tenant columns, redactPayload, storage adapter, job validation; @velexis/testing and the Amadeus stub in its tests"
+    },
+    {
+      "app": "portal",
+      "how": "config, logger, errors (code → message), api-types (platform types); e2e journeys drive it"
+    },
+    { "app": "platform-admin", "how": "config, logger, errors, api-types; e2e journeys drive it" },
+    { "app": "ota-admin", "how": "config, logger, errors; e2e journeys drive it" },
+    {
+      "app": "storefront",
+      "how": "Types through the SDK; e2e storefront journeys drive the production build in vite preview"
+    },
+    { "app": "sdk", "how": "JSDoc types from @velexis/api-types only; @velexis/testing in its tests" },
+    {
+      "app": "deploy",
+      "how": "velexis-deploy runs migrate.js and the reference loader as transient units (migrator.env, reference-loader.env); CI workflows run tools/ci, plan-lint, e2e"
+    }
+  ],
+  "data": [
+    "reference.currencies, countries, time_zones, cities, airports, airlines, aircraft (written only by the reference loader as velexis_platform_app)",
+    "platform.schema_migrations, reference.schema_migrations, tenant_<key>.schema_migrations (migration ledgers written by migrate.js)",
+    "platform.tenants (read by the tenant fan-out: status IN provisioning, active, suspended)",
+    "tenant_<key> schemas: created by migrateTenantSchema as velexis_provisioner, default privileges for velexis_ota_app",
+    "*_ciphertext + encryption_key_id columns (platform.accounts, supplier_connections, amadeus_accounts, payment_provider_connections, credential_submissions, provisioning_jobs; tenant saved_travelers, saved_traveler_documents, checkout_travelers, booking_travelers, notifications) — formats owned by @velexis/crypto",
+    "Scratch databases: velexis_test_tpl_<runId>, velexis_test_<runId>_<random> (integration tests), velexis_e2e_<runId> (Playwright), velexis_codegen_<pid> (db:codegen), velexis_dbtest_<random> (@velexis/db tests)",
+    "Redis: databases 1–15 for tests (useRedis), database 15 for the e2e stack (E2E_REDIS_DB); queue names vx:<queue> and channel vx:invalidate defined in @velexis/api-types",
+    "Files: .local/keys/ and .local/storage/ (dev), /etc/velexis/keys/<zone>/ and /var/lib/velexis/storage (VM)"
+  ],
+  "docs": [
+    "packages/README.md",
+    "packages/config/README.md",
+    "packages/logger/README.md",
+    "packages/crypto/README.md",
+    "packages/db/README.md",
+    "packages/errors/README.md",
+    "packages/api-types/README.md",
+    "packages/testing/README.md",
+    "tools/amadeus-stub/README.md",
+    "tools/e2e/README.md",
+    "tools/reference-data/README.md",
+    "tools/ci/README.md",
+    "tools/perf/README.md",
+    "tools/plan-lint/README.md",
+    "tools/dev/README.md",
+    "docs/mvp/local-development.md"
+  ],
+  "adrs": [
+    "docs/mvp/adr/0002-monorepo-pnpm-turborepo.md",
+    "docs/mvp/adr/0004-postgresql-schema-per-tenant.md",
+    "docs/mvp/adr/0005-data-access-kysely-sql-migrations.md",
+    "docs/mvp/adr/0006-contract-first-openapi.md",
+    "docs/mvp/adr/0009-background-jobs-bullmq.md",
+    "docs/mvp/adr/0010-secrets-envelope-encryption.md",
+    "docs/mvp/adr/0015-testing-strategy.md",
+    "docs/mvp/adr/0016-observability.md",
+    "docs/mvp/adr/0017-email-documents-storage.md",
+    "docs/mvp/adr/0021-migration-cli-and-repeatable-grants.md",
+    "docs/mvp/adr/0022-shared-test-support-package.md",
+    "docs/mvp/adr/0024-reference-data-sources-and-loader.md",
+    "docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md"
+  ],
+  "roles": [
+    {
+      "name": "velexis_migrator",
+      "can": "DDL on platform and reference; runs migrate.js; owns the ledgers; reads platform.tenants for the fan-out"
+    },
+    {
+      "name": "velexis_provisioner",
+      "can": "Owns every tenant_<key> schema (SET LOCAL ROLE in the runner); no writes on platform or reference"
+    },
+    {
+      "name": "velexis_platform_app",
+      "can": "DML on platform and reference (the reference loader's role); never anything in tenant schemas"
+    },
+    {
+      "name": "velexis_ota_app",
+      "can": "DML in tenant schemas through default privileges; SELECT on reference and the platform tables of R__ota_read_access.sql; search_path pg_catalog"
+    },
+    {
+      "name": "velexis_test_admin",
+      "can": "Local and CI only: CREATEDB, member of velexis_migrator; creates and drops test, e2e and codegen databases"
+    },
+    {
+      "name": "Developer",
+      "can": "Runs every command locally; records stub fixtures and refreshes reference data by hand"
+    },
+    {
+      "name": "CI (GitHub Actions)",
+      "can": "Runs plan-lint, check-package-json, tests, generators-up-to-date, test:int, e2e; never records fixtures or downloads reference data"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/v1/security/oauth2/token",
+      "operationId": "oauth2Token",
+      "purpose": "Amadeus stub: client_credentials token (expires_in 1799)"
+    },
+    {
+      "method": "GET",
+      "path": "/v2/shopping/flight-offers",
+      "operationId": "getFlightOffers",
+      "purpose": "Stub: Flight Offers Search fixture cut to max; destination ZZZ → no offers"
+    },
+    {
+      "method": "POST",
+      "path": "/v2/shopping/flight-offers",
+      "operationId": "searchFlightOffers",
+      "purpose": "Stub: POST search (X-HTTP-Method-Override: GET)"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/shopping/availability/flight-availabilities",
+      "operationId": "searchFlightAvailabilities",
+      "purpose": "Stub: seats by booking class"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/shopping/flight-offers/upselling",
+      "operationId": "upsellAirOffers",
+      "purpose": "Stub: branded fares BASIC/CLASSIC/FLEXIBLE"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/shopping/flight-offers/pricing",
+      "operationId": "quoteAirOffers",
+      "purpose": "Stub: echoes offers + booking requirements; include=bags,detailed-fare-rules,credit-card-fees"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/booking/flight-orders",
+      "operationId": "createFlightOrders",
+      "purpose": "Stub: stores an order (201); declined test card 4000000000000002 → 1304"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/booking/flight-orders/{flight-orderId}/issuance",
+      "operationId": "issueFlightOrder",
+      "purpose": "Stub: e-tickets; second issue → 400 9112"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/booking/flight-orders/{flight-orderId}",
+      "operationId": "getFlightOrder",
+      "purpose": "Stub: read an order (404 1797 when gone)"
+    },
+    {
+      "method": "PATCH",
+      "path": "/v1/booking/flight-orders/{flight-orderId}",
+      "operationId": "patchFlightOrder",
+      "purpose": "Stub: replace contacts/remarks"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/booking/flight-orders/{flight-orderId}",
+      "operationId": "cancelFlightOrder",
+      "purpose": "Stub: cancel (204); version-conflict 409, cancel-refused 400"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/booking/flight-orders/by-reference",
+      "operationId": "getFlightOrderByReference",
+      "purpose": "Stub: by record locator, originSystemCode=GDS"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/office/queues/{queue-id}",
+      "operationId": "listQueue",
+      "purpose": "Stub: queue placements of active orders"
+    }
+  ],
+  "tags": [
+    "library",
+    "tooling",
+    "two-halves: packages/* (half A) and tools/* (half B)",
+    "tools app id alias: tools → packages",
+    "dev-only: @velexis/testing, @velexis/amadeus-stub, @velexis/e2e",
+    "tenancy",
+    "migrations",
+    "encryption",
+    "testing",
+    "reference-data",
+    "ci"
+  ]
+}

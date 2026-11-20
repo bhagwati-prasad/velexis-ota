@@ -1,0 +1,80 @@
+{
+  "id": "seq-cookie-csrf-refresh",
+  "type": "sequence",
+  "title": "Cookie mode: CSRF cookie and the shared refresh (hosted storefront)",
+  "caption": "Two concurrent writes of the storefront's client family (the root client and its withOptions({ currency }) child). One GET /v1/storefront issues the missing CSRF cookie; one POST /v1/auth/refresh serves both calls answered 401 TOKEN_EXPIRED; each call is sent again once with its own Idempotency-Key. internal/session.js (sendWithCsrf, fetchCsrf, refreshCookies).",
+  "actors": [
+    { "id": "page", "label": "Storefront page", "kind": "ui" },
+    { "id": "sdk", "label": "SDK client family (cookie)", "kind": "lib" },
+    { "id": "browser", "label": "Browser cookie jar", "kind": "cache" },
+    { "id": "caddy", "label": "Caddy /api/*", "kind": "edge" },
+    { "id": "api", "label": "OTA API", "kind": "api" }
+  ],
+  "steps": [
+    {
+      "from": "page",
+      "to": "sdk",
+      "label": "checkout.setTravelers(…) and account.update(…) at the same time",
+      "kind": "call"
+    },
+    { "from": "sdk", "to": "browser", "label": "readCsrfCookie(): __Host-vx_csrf missing", "kind": "call" },
+    {
+      "from": "sdk",
+      "to": "caddy",
+      "label": "ONE GET /api/v1/storefront (cache: no-store), shared by both writes",
+      "kind": "call"
+    },
+    {
+      "from": "caddy",
+      "to": "api",
+      "label": "GET /v1/storefront + X-Velexis-Edge, X-Velexis-Host",
+      "kind": "call"
+    },
+    { "from": "api", "to": "browser", "label": "200 + Set-Cookie __Host-vx_csrf", "kind": "return" },
+    {
+      "from": "sdk",
+      "to": "caddy",
+      "label": "PUT …/travelers and PATCH /v1/account with X-CSRF-Token (cookies sent by the browser, credentials: same-origin)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "sdk",
+      "label": "401 TOKEN_EXPIRED for both (the API did nothing)",
+      "kind": "return"
+    },
+    {
+      "from": "sdk",
+      "to": "sdk",
+      "label": "refreshCookies: no refresh in flight and generation unchanged → start ONE refresh (root client's transport settings)",
+      "kind": "self"
+    },
+    {
+      "from": "sdk",
+      "to": "caddy",
+      "label": "POST /api/v1/auth/refresh {} + X-CSRF-Token (refresh token = __Host-vx_rt cookie)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "browser",
+      "label": "200 AuthSessionInfo + new __Host-vx_at / __Host-vx_rt",
+      "kind": "return"
+    },
+    { "from": "sdk", "to": "sdk", "label": "generation += 1; both waiting calls resume", "kind": "self" },
+    {
+      "from": "sdk",
+      "to": "caddy",
+      "label": "both writes sent again once, same Idempotency-Key where the operation takes one",
+      "kind": "call"
+    },
+    { "from": "api", "to": "sdk", "label": "200 Checkout / 200 Account", "kind": "return" },
+    {
+      "from": "sdk",
+      "to": "page",
+      "label": "results; session tokens never reach page code",
+      "kind": "return",
+      "note": "If the refresh is refused with 401 (REFRESH_TOKEN_INVALID or REFRESH_TOKEN_REUSED) the starting client's onSessionExpired runs once and every waiting call rejects with that AuthenticationError. A second 403 CSRF_TOKEN_INVALID is thrown, never looped on."
+    }
+  ]
+}

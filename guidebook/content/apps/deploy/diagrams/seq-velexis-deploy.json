@@ -1,0 +1,117 @@
+{
+  "id": "seq-velexis-deploy",
+  "type": "sequence",
+  "title": "Inside velexis-deploy <sha>",
+  "caption": "deploy/scripts/deploy.sh (installed as /usr/local/sbin/velexis-deploy). One flock on /run/velexis-deploy.lock; every failure before the switch leaves the running release untouched.",
+  "actors": [
+    { "id": "vd", "label": "velexis-deploy (root)", "kind": "worker" },
+    { "id": "fs", "label": "/srv/velexis, /var/lib/velexis, /etc", "kind": "db" },
+    { "id": "tu", "label": "transient unit (DynamicUser)", "kind": "worker" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" },
+    { "id": "run", "label": "velexis-run ota (velexis-ota)", "kind": "worker" },
+    { "id": "redis", "label": "Redis queue platform-tenant-events", "kind": "queue" },
+    { "id": "sd", "label": "systemd units", "kind": "worker" },
+    { "id": "caddy", "label": "Caddy", "kind": "edge" }
+  ],
+  "steps": [
+    {
+      "from": "vd",
+      "to": "fs",
+      "label": "verify_upload: SHA256SUMS lists exactly the files, all intact, no special files",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "vd",
+      "label": "RELEASE.json sha matches; Node major of the build == VM's node",
+      "kind": "self"
+    },
+    {
+      "from": "vd",
+      "to": "fs",
+      "label": "check_env_files: every variable of deploy/env/*.env.example exists in /etc/velexis/*.env",
+      "kind": "call",
+      "note": "Missing names → 'env files lack variables…'; nothing changed."
+    },
+    {
+      "from": "vd",
+      "to": "fs",
+      "label": "snapshot units, drop-in, Caddyfile, waf/, caddy build, maintenance page → /var/lib/velexis/system/<sha>/",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "caddy",
+      "label": "stage Caddyfile.next / waf.next / caddy-velexis.next and caddy validate with caddy.env",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "sd",
+      "label": "install changed units + daemon-reload; install root scripts",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "fs",
+      "label": "mv incoming/<sha> → releases/<sha> (root:velexis, read-only)",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "tu",
+      "label": "systemd-run -p DynamicUser=yes -p EnvironmentFile=/etc/velexis/migrator.env node dist/cli/migrate.js platform | reference | tenants",
+      "kind": "call"
+    },
+    {
+      "from": "tu",
+      "to": "pg",
+      "label": "apply files, record in schema_migrations (fan-out 4 at a time, abort > 10 % failures)",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "run",
+      "label": "velexis-run ota node <rel>/ota-backend/dist/cli.js tenants:report-migrations --report migrate-<sha>.json",
+      "kind": "call",
+      "note": "Skipped on the first deploy (no running release)."
+    },
+    {
+      "from": "run",
+      "to": "redis",
+      "label": "tenant.migrated / tenant.migration_failed (jobId null)",
+      "kind": "async"
+    },
+    {
+      "from": "vd",
+      "to": "tu",
+      "label": "reference data load when the datasets' checksum changed (reference-loader.env)",
+      "kind": "call"
+    },
+    { "from": "vd", "to": "fs", "label": "switch /srv/velexis/current (ln -sfn + mv -T)", "kind": "call" },
+    {
+      "from": "vd",
+      "to": "sd",
+      "label": "restart workers → APIs → front ends, poll 127.0.0.1:<port>/health/ready ≤ 90 s each",
+      "kind": "call"
+    },
+    {
+      "from": "sd",
+      "to": "vd",
+      "label": "unhealthy unit → rollback_to previous sha (snapshot units, switch back, restart), exit 1",
+      "kind": "return"
+    },
+    {
+      "from": "vd",
+      "to": "caddy",
+      "label": "activate: move staged files; reload, or restart when build or drop-in changed (record caddy-dropin.sha256)",
+      "kind": "call"
+    },
+    {
+      "from": "vd",
+      "to": "fs",
+      "label": "append deploy-history; prune to 5 releases (never current or rollback target)",
+      "kind": "call"
+    }
+  ]
+}

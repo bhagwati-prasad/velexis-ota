@@ -1,0 +1,38 @@
+{
+  "id": "flow-run-e2e",
+  "type": "flow",
+  "title": "Run the Playwright journeys",
+  "caption": "tools/e2e/README.md. The harness runs what is built; it never builds the apps.",
+  "steps": [
+    {
+      "title": "Browser",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/e2e exec playwright install chromium`.",
+      "expect": ""
+    },
+    {
+      "title": "Build",
+      "actor": "Developer",
+      "body": "`pnpm build` (or the per-app builds the README lists).",
+      "expect": "`dist/` and `.next/standalone` of every app."
+    },
+    {
+      "title": "Smoke",
+      "actor": "Developer",
+      "body": "`pnpm test:e2e -- --project=portal --project=platform-admin specs/smoke.e2e.ts`.",
+      "expect": "Stack starts in 6–10 s; database `velexis_e2e_<runId>` created then dropped."
+    },
+    {
+      "title": "Everything with the OTA",
+      "actor": "Developer",
+      "body": "`E2E_WITH_OTA=1 pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront --project=ota-admin`.",
+      "expect": "11 processes, demo OTA `tenant_demo` seeded; ports 3000-3002, 3100-3101, 4000-4001, 4173-4175, 4900."
+    },
+    {
+      "title": "After a failure",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/e2e exec playwright show-trace test-results/<test>/trace.zip`; read `test-results/stack/<process>.log`.",
+      "expect": "No retries: each failure is a finding."
+    }
+  ]
+}

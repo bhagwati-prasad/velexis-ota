@@ -1,0 +1,86 @@
+{
+  "id": "submission-status-states",
+  "type": "state",
+  "title": "Own credentials and own Stripe keys verification (SubmissionStatus)",
+  "caption": "The component reads getCredentialSubmission every 2 s, one read at a time, until a final status; the error code and the API's message are never shown, only the portal's words.",
+  "states": [
+    {
+      "id": "submitted",
+      "label": "Submitted (202)",
+      "kind": "initial",
+      "detail": "`credential_submissions` row `pending`; secret encrypted."
+    },
+    {
+      "id": "verifying",
+      "label": "Being verified",
+      "kind": "normal",
+      "detail": "\"The connection keeps working as it does now.\""
+    },
+    {
+      "id": "waiting",
+      "label": "Waiting to read again",
+      "kind": "normal",
+      "detail": "`RATE_LIMITED` (Retry-After ≤ 60 s), 503, 500 or the portal unreachable: a note, polling goes on."
+    },
+    {
+      "id": "applied",
+      "label": "Applied",
+      "kind": "final",
+      "detail": "Connection switched; page revalidated; e-mail `connection.credentials_applied`."
+    },
+    {
+      "id": "failed",
+      "label": "Failed",
+      "kind": "error",
+      "detail": "AMADEUS_CREDENTIALS_INVALID, STRIPE_KEY_INVALID, STRIPE_LIVEMODE_MISMATCH, PROVIDER_UNAVAILABLE, TENANT_NOT_ACTIVE, CONNECTION_DISABLED, CONNECTION_CHANGED, FEATURE_DISABLED."
+    },
+    {
+      "id": "superseded",
+      "label": "Replaced by newer credentials",
+      "kind": "final"
+    },
+    {
+      "id": "stopped",
+      "label": "Stopped with a message",
+      "kind": "error",
+      "detail": "Any other refusal (e.g. NOT_FOUND)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "submitted",
+      "to": "verifying",
+      "label": "worker credentials.verify"
+    },
+    {
+      "from": "verifying",
+      "to": "waiting",
+      "label": "read refused, may pass"
+    },
+    {
+      "from": "waiting",
+      "to": "verifying",
+      "label": "next read"
+    },
+    {
+      "from": "verifying",
+      "to": "applied",
+      "label": "verified"
+    },
+    {
+      "from": "verifying",
+      "to": "failed",
+      "label": "rejected or apply guard"
+    },
+    {
+      "from": "verifying",
+      "to": "superseded",
+      "label": "new submission"
+    },
+    {
+      "from": "verifying",
+      "to": "stopped",
+      "label": "other refusal"
+    }
+  ]
+}

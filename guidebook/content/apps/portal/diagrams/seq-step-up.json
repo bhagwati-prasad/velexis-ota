@@ -1,0 +1,120 @@
+{
+  "id": "seq-step-up",
+  "type": "sequence",
+  "title": "A sensitive action asks for a step-up",
+  "caption": "Live secret keys, payout account, own credentials, Stripe Connect, owner grants, go-live, MFA changes: without a TOTP in the last 15 minutes the API answers REAUTH_REQUIRED and the same form is sent again after the code.",
+  "actors": [
+    {
+      "id": "u",
+      "label": "Owner",
+      "kind": "user"
+    },
+    {
+      "id": "form",
+      "label": "Form (useStepUpAction)",
+      "kind": "ui"
+    },
+    {
+      "id": "act",
+      "label": "Server action",
+      "kind": "ui"
+    },
+    {
+      "id": "su",
+      "label": "stepUp action",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "Platform API",
+      "kind": "api"
+    }
+  ],
+  "steps": [
+    {
+      "from": "u",
+      "to": "form",
+      "label": "submit (e.g. Save the payout account)",
+      "kind": "call"
+    },
+    {
+      "from": "form",
+      "to": "act",
+      "label": "FormData",
+      "kind": "call"
+    },
+    {
+      "from": "act",
+      "to": "api",
+      "label": "PUT /v1/tenants/{id}/payout-account",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "act",
+      "label": "401 REAUTH_REQUIRED",
+      "kind": "return"
+    },
+    {
+      "from": "act",
+      "to": "form",
+      "label": "{ stepUp: true }",
+      "kind": "return"
+    },
+    {
+      "from": "form",
+      "to": "u",
+      "label": "StepUpDialog \"Confirm it is you\"",
+      "kind": "return"
+    },
+    {
+      "from": "u",
+      "to": "su",
+      "label": "6-digit code",
+      "kind": "call"
+    },
+    {
+      "from": "su",
+      "to": "api",
+      "label": "POST /v1/auth/step-up {code}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "su",
+      "label": "PortalSession with mfa_at",
+      "kind": "return"
+    },
+    {
+      "from": "su",
+      "to": "form",
+      "label": "new cookies set; status verified",
+      "kind": "return"
+    },
+    {
+      "from": "form",
+      "to": "act",
+      "label": "same FormData again",
+      "kind": "call"
+    },
+    {
+      "from": "act",
+      "to": "api",
+      "label": "PUT … (new access token)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "act",
+      "label": "200",
+      "kind": "return"
+    },
+    {
+      "from": "act",
+      "to": "u",
+      "label": "saved, page revalidated",
+      "kind": "return",
+      "note": "Cancel keeps the state and says nothing changed."
+    }
+  ]
+}

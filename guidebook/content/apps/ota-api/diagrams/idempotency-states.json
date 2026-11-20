@@ -1,0 +1,40 @@
+{
+  "id": "idempotency-states",
+  "type": "state",
+  "title": "Idempotency record (idempotency_keys.status)",
+  "caption": "src/common/http/idempotency.service.ts. Scope = <environment>:<principal>:<operationId>; the same key with another request hash is 409 IDEMPOTENCY_KEY_REUSED; stored answers live 24 h (retention.daily deletes them after expires_at).",
+  "states": [
+    { "id": "new", "label": "first request with Idempotency-Key", "kind": "initial" },
+    {
+      "id": "processing",
+      "label": "processing",
+      "kind": "normal",
+      "detail": "Claimed in a short transaction with a 2-minute lease (`locked_until`) renewed every 30 s. A duplicate waits up to 60 s, then replays or answers `409 CONFLICT idempotency_key_in_use`; a dead lease is taken over."
+    },
+    {
+      "id": "completed",
+      "label": "completed",
+      "kind": "final",
+      "detail": "2xx stored (and a 504 linked to a pending booking): `response_body` redacted; tokens, cookies and unmasked data only in `response_ciphertext`. Replays answer from it."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "final",
+      "detail": "A final 4xx stored and replayed as such."
+    },
+    {
+      "id": "deleted",
+      "label": "record deleted",
+      "kind": "error",
+      "detail": "Transient answers (429, 503, 502 PAYMENT_PROVIDER_ERROR, other 5xx) delete the record so the same key can be sent again."
+    }
+  ],
+  "transitions": [
+    { "from": "new", "to": "processing", "label": "claim (insert with request hash)" },
+    { "from": "processing", "to": "completed", "label": "2xx (or 504 linked to a booking)" },
+    { "from": "processing", "to": "failed", "label": "final 4xx" },
+    { "from": "processing", "to": "deleted", "label": "transient error" },
+    { "from": "deleted", "to": "new", "label": "client retries with the same key" }
+  ]
+}

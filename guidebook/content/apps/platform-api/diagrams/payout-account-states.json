@@ -1,0 +1,56 @@
+{
+  "id": "payout-account-states",
+  "type": "state",
+  "title": "Payout account review",
+  "caption": "`platform.tenant_payout_accounts.status`. Needed (verified) for go-live in velexis payment mode and for approving or paying a settlement.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "pending_review",
+      "label": "pending_review",
+      "kind": "normal"
+    },
+    {
+      "id": "verified",
+      "label": "verified",
+      "kind": "normal"
+    },
+    {
+      "id": "rejected",
+      "label": "rejected",
+      "kind": "error",
+      "detail": "`review_note`."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "pending_review",
+      "label": "setPayoutAccount (owner, step-up)"
+    },
+    {
+      "from": "pending_review",
+      "to": "verified",
+      "label": "adminReviewPayoutAccount verify"
+    },
+    {
+      "from": "pending_review",
+      "to": "rejected",
+      "label": "adminReviewPayoutAccount reject"
+    },
+    {
+      "from": "verified",
+      "to": "pending_review",
+      "label": "setPayoutAccount again (any change resets)"
+    },
+    {
+      "from": "rejected",
+      "to": "pending_review",
+      "label": "setPayoutAccount again"
+    }
+  ]
+}

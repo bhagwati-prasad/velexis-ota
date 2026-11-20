@@ -1,0 +1,38 @@
+{
+  "id": "provisioning-job-states",
+  "type": "state",
+  "title": "Provisioning job (tenant job)",
+  "caption": "platform.provisioning_jobs.status; kinds provision, migrate, suspend, resume (export, delete, restore, rotate_secrets reserved). One queued or running job per tenant and kind (provisioning_jobs_active_uq). The job page offers Retry only on failed and Cancel job only on queued.",
+  "states": [
+    { "id": "start", "label": "created", "kind": "initial" },
+    {
+      "id": "queued",
+      "label": "queued",
+      "kind": "normal",
+      "detail": "Waiting for dispatch or its next attempt (`scheduled_at`). **Cancel job** (reason)."
+    },
+    {
+      "id": "running",
+      "label": "running",
+      "kind": "normal",
+      "detail": "BullMQ job `<jobId>-<attempt>` on `ota-tenant-ops`; lease `locked_until`. No action."
+    },
+    { "id": "succeeded", "label": "succeeded (Done)", "kind": "final" },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Attempts used up or not retryable. **Retry** creates a new job; this one stays as history."
+    },
+    { "id": "canceled", "label": "canceled", "kind": "final" }
+  ],
+  "transitions": [
+    { "from": "start", "to": "queued", "label": "suspend / resume / migrate / create OTA" },
+    { "from": "queued", "to": "running", "label": "dispatcher or reconciler" },
+    { "from": "running", "to": "succeeded", "label": "OTA worker answers + post-steps" },
+    { "from": "running", "to": "queued", "label": "retryable failure (backoff 30 s × 2^attempt)" },
+    { "from": "running", "to": "failed", "label": "last attempt / not retryable" },
+    { "from": "queued", "to": "canceled", "label": "Cancel job (reason)" },
+    { "from": "failed", "to": "start", "label": "Retry → new job of the same kind" }
+  ]
+}

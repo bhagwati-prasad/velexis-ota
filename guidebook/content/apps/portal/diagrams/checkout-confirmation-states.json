@@ -1,0 +1,78 @@
+{
+  "id": "checkout-confirmation-states",
+  "type": "state",
+  "title": "Billing page after Stripe Checkout (?checkout=success)",
+  "caption": "The billing page never claims success from the redirect alone: it reads the subscription until Stripe's webhook made it trialing or active.",
+  "states": [
+    {
+      "id": "back",
+      "label": "Back from Stripe",
+      "kind": "initial"
+    },
+    {
+      "id": "confirming",
+      "label": "Confirming your payment",
+      "kind": "normal",
+      "detail": "`getCheckoutSync` every 2 s; no plan offered meanwhile."
+    },
+    {
+      "id": "wait",
+      "label": "Waiting (rate limit / unavailable)",
+      "kind": "normal",
+      "detail": "Waits Retry-After (≤60 s) or retries with a note."
+    },
+    {
+      "id": "confirmed",
+      "label": "Payment confirmed",
+      "kind": "final",
+      "detail": "Stripe subscription `trialing` or `active`; \"Follow the set-up\" when the set-up starts again."
+    },
+    {
+      "id": "error",
+      "label": "Stopped with a message",
+      "kind": "error"
+    },
+    {
+      "id": "canceled",
+      "label": "Nothing changed (?checkout=canceled)",
+      "kind": "final"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "back",
+      "to": "confirming",
+      "label": "subscription not yet Stripe trialing/active"
+    },
+    {
+      "from": "back",
+      "to": "confirmed",
+      "label": "already confirmed"
+    },
+    {
+      "from": "confirming",
+      "to": "wait",
+      "label": "429 / 503"
+    },
+    {
+      "from": "wait",
+      "to": "confirming",
+      "label": "retry"
+    },
+    {
+      "from": "confirming",
+      "to": "confirmed",
+      "label": "webhook processed"
+    },
+    {
+      "from": "confirming",
+      "to": "error",
+      "label": "other refusal"
+    },
+    {
+      "from": "back",
+      "to": "canceled",
+      "label": "cancel URL"
+    }
+  ]
+}

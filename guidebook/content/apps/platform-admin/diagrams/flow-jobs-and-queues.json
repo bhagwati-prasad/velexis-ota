@@ -1,0 +1,38 @@
+{
+  "id": "flow-jobs-and-queues",
+  "type": "flow",
+  "title": "Inspect, retry and cancel jobs; read the queues",
+  "caption": "A migrate to an unknown version is the quickest way to get a failed job on purpose (admin-tenant-lifecycle.e2e.ts).",
+  "steps": [
+    {
+      "title": "Make a failing migrate job",
+      "screen": "/tenants/[tenantId]",
+      "body": "Type `9999_not_in_this_release` in **Target version (optional)**, press **Migrate**, confirm **Start migration**.",
+      "expect": "'The migrate job is on its way to the OTA worker.' with a Migration job link."
+    },
+    {
+      "title": "Read the job",
+      "screen": "/provisioning-jobs/[jobId]",
+      "body": "Open the link; reload until the status changes.",
+      "expect": "Status Failed with `UNKNOWN_TARGET_VERSION: No tenant migration of this release has the target version …`; BullMQ job `<jobId>-<n>` on `ota-tenant-ops`; OTA status unchanged."
+    },
+    {
+      "title": "Retry or cancel",
+      "body": "**Retry** on a failed job (confirm); **Cancel job** with a reason on a queued one.",
+      "expect": "Retry answers with a **new** job (link); the failed one stays. Cancel → `canceled`. Running/succeeded/canceled jobs offer neither."
+    },
+    {
+      "title": "Queues",
+      "screen": "/queues",
+      "url": "http://localhost:3001/queues",
+      "body": "Two tables: Platform queues and OTA queues; open `ota-tenant-ops`.",
+      "expect": "Waiting/active/delayed/failed counts and oldest wait in words; the OTA queue says 'OTA queue, view only' and has no Retry; the failed attempt links its provisioning job."
+    },
+    {
+      "title": "Retry a platform queue job",
+      "screen": "/queues/[queue]",
+      "body": "On a `platform-*` queue with failures, **Retry** a job (confirm).",
+      "expect": "Job back to waiting; the row disappears on reload; audit `queue_job.retried`."
+    }
+  ]
+}

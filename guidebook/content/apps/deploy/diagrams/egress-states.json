@@ -1,0 +1,41 @@
+{
+  "id": "egress-states",
+  "type": "state",
+  "title": "An outbound destination under the allow-list",
+  "caption": "deploy/scripts/egress.sh (velexis-egress refresh every 2 minutes) and docs/mvp/runbooks/outbound-allow-list.md. Table inet velexis_egress, chain output policy drop.",
+  "states": [
+    {
+      "id": "unlisted",
+      "label": "Not on the list",
+      "kind": "initial",
+      "detail": "Dropped and logged `VELEXIS-EGRESS-DENY` (max 10/min, with UID); the app sees 'Operation not permitted'."
+    },
+    {
+      "id": "listed",
+      "label": "Line in allowed-hosts.conf",
+      "kind": "normal",
+      "detail": "Added by pull request, installed with `provision-vm.sh --steps egress`."
+    },
+    {
+      "id": "resolved",
+      "label": "Addresses in allow4/allow6",
+      "kind": "normal",
+      "detail": "Each address kept 24 h after a lookup last returned it; last good kept when lookups fail."
+    },
+    {
+      "id": "emergency",
+      "label": "Emergency opening",
+      "kind": "error",
+      "detail": "`nft add element … emergency4 { ip . tcp . 443 timeout 4h }`; check-vm FAIL until it expires; review as an incident."
+    },
+    { "id": "expired", "label": "Expired / closed", "kind": "final" }
+  ],
+  "transitions": [
+    { "from": "unlisted", "to": "listed", "label": "PR + --steps egress" },
+    { "from": "listed", "to": "resolved", "label": "refresh resolves (getent ahosts)" },
+    { "from": "resolved", "to": "resolved", "label": "refresh every 2 min" },
+    { "from": "resolved", "to": "unlisted", "label": "line removed / address unseen for 24 h" },
+    { "from": "unlisted", "to": "emergency", "label": "outage: time-limited opening" },
+    { "from": "emergency", "to": "expired", "label": "timeout, reboot or nft delete element" }
+  ]
+}

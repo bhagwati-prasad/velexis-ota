@@ -1,0 +1,32 @@
+{
+  "id": "flow-stripe-events",
+  "type": "flow",
+  "title": "Failed Stripe events, resync and invoices",
+  "caption": "Needs FEATURE_STRIPE_BILLING (or FEATURE_OWN_STRIPE for the events page), Stripe test keys and stripe listen. See runbook §3.",
+  "steps": [
+    {
+      "title": "Open the inbox",
+      "screen": "/stripe-events",
+      "url": "http://localhost:3001/stripe-events?status=failed",
+      "body": "Dashboard 'failed Stripe events' or the nav.",
+      "expect": "Failed and ignored first; id, receiver, type, status, attempts, last error (`CODE: message`), OTA, times."
+    },
+    {
+      "title": "Fix the cause, then Reprocess",
+      "body": "E.g. `UNKNOWN_PRICE`: link the price on `/plans/<code>`. Then **Reprocess** → **Reprocess event**.",
+      "expect": "'queued, reload later'; after reload the event is received → processed; audit `stripe_event.reprocessed`. An event that moved meanwhile answers `409` worded."
+    },
+    {
+      "title": "Resync one subscription",
+      "screen": "/subscriptions/[subscriptionId]",
+      "body": "On a Stripe row with a Stripe subscription: **Resync from Stripe** → **Resync now**.",
+      "expect": "Status and period end as Stripe has them; every 409 reason worded (unknown_price, subscription_busy …); 502 = nothing changed."
+    },
+    {
+      "title": "Invoices",
+      "screen": "/invoices",
+      "body": "Filter by status or OTA.",
+      "expect": "Amounts in the invoice currency's decimals (`€149.00`, `¥5,000`); Stripe page/PDF links only when `https:`."
+    }
+  ]
+}

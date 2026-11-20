@@ -1,0 +1,40 @@
+{
+  "id": "flow-pnr-import",
+  "type": "flow",
+  "title": "Look up and import a PNR",
+  "caption": "Mirrors tools/e2e/specs/ota-admin/pnr-import.e2e.ts. Locally, an order of your office comes from the Amadeus stub or from a booking made on your storefront.",
+  "steps": [
+    {
+      "title": "Look up",
+      "actor": "Agent",
+      "screen": "/pnr",
+      "url": "http://localhost:3002/pnr",
+      "body": "Type the record locator in lower case and press **Look up**.",
+      "expect": "The order: travellers as Amadeus writes them, flights, queuing office, net total; **Import as a booking**."
+    },
+    {
+      "title": "Import",
+      "actor": "Agent",
+      "body": "Press **Import as a booking**, keep pricing \"markup rules\", add a reason, press **Import**.",
+      "expect": "The new booking opens: for an order without tickets Confirmed + ticketing manual review (with all its tickets: Ticketed + Issued), the record locator, payment not_applicable; `bookings.channel = 'import'`; `booking.import` staff action with the reason."
+    },
+    {
+      "title": "Look up again",
+      "actor": "Agent",
+      "body": "Same record locator.",
+      "expect": "\"Already a booking of this OTA\" with a link."
+    },
+    {
+      "title": "Another OTA's order",
+      "actor": "Agent",
+      "body": "A record locator of the demo OTA's office.",
+      "expect": "\"This order belongs to an office outside this OTA\" listing only your offices; no traveller shown; no booking; a `denied` `pnr.lookup` staff action."
+    },
+    {
+      "title": "Advanced panel",
+      "actor": "Agent",
+      "body": "Open **Advanced**, **Read the orders of <locator>**.",
+      "expect": "The raw answer (net prices) with the call's facts; an `amadeus.getFlightOrderByReference` staff action."
+    }
+  ]
+}

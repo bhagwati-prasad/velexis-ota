@@ -1,0 +1,87 @@
+{
+  "id": "seq-sign-in-mfa",
+  "type": "sequence",
+  "title": "Admin sign-in: password, then TOTP every time",
+  "caption": "The password step never sets a session cookie; only adminVerifyMfa's AdminSession becomes __Host-vxa_at / __Host-vxa_rt. Code: (auth)/sign-in/actions.ts and (auth)/sign-in/mfa/actions.ts.",
+  "actors": [
+    { "id": "b", "label": "Browser", "kind": "user" },
+    { "id": "mw", "label": "middleware.ts", "kind": "edge" },
+    { "id": "sa", "label": "Server actions signIn / verifyMfa", "kind": "ui" },
+    { "id": "api", "label": "Platform API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" },
+    { "id": "r", "label": "Redis", "kind": "cache" }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "mw",
+      "label": "GET /tenants (no session)",
+      "kind": "call",
+      "note": "Deny by default: 303 to /sign-in?next=/tenants"
+    },
+    { "from": "b", "to": "sa", "label": "POST sign-in form {email, password, next}", "kind": "call" },
+    {
+      "from": "sa",
+      "to": "sa",
+      "label": "Zod: e-mail trimmed ≤ 254, password 1-256 code points; safeNextPath(next)",
+      "kind": "self"
+    },
+    {
+      "from": "sa",
+      "to": "api",
+      "label": "POST /v1/admin/auth/sign-in (no Bearer; X-Velexis-Bff-Key, End-User-IP/Agent)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "accounts: password (Argon2id), is_platform_admin, mfa_enabled, lockout; audit admin.sign_in_failed on failure",
+      "kind": "call"
+    },
+    { "from": "api", "to": "r", "label": "SET mfach:<sha256> (5 min), rl: throttle per IP", "kind": "call" },
+    {
+      "from": "api",
+      "to": "sa",
+      "label": "200 {mfaChallengeToken, expiresIn} | 401 INVALID_CREDENTIALS | MFA_REQUIRED | 423 ACCOUNT_LOCKED | 429",
+      "kind": "return"
+    },
+    {
+      "from": "sa",
+      "to": "b",
+      "label": "Set-Cookie __Host-vxa_mfa (≤ 5 min); 303 /sign-in/mfa?next=…",
+      "kind": "return"
+    },
+    { "from": "b", "to": "sa", "label": "POST code form {method totp|recovery, code}", "kind": "call" },
+    {
+      "from": "sa",
+      "to": "api",
+      "label": "POST /v1/admin/auth/mfa/verify {mfaChallengeToken, code | recoveryCode}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "r",
+      "label": "check challenge, attempts (5), mfastep:<accountId> (no replay)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "account_sessions (audience platform_admin, family 12 h, mfa_verified_at now), audit admin.sign_in",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "sa",
+      "label": "200 AdminSession | MFA_CODE_INVALID | MFA_CHALLENGE_INVALID",
+      "kind": "return"
+    },
+    {
+      "from": "sa",
+      "to": "b",
+      "label": "Set-Cookie __Host-vxa_at (15 min) + __Host-vxa_rt; delete __Host-vxa_mfa; 303 to next or /",
+      "kind": "return",
+      "note": "MFA_CHALLENGE_INVALID or no challenge cookie → /sign-in?mfa=expired"
+    }
+  ]
+}

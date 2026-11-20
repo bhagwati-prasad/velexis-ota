@@ -1,0 +1,56 @@
+{
+  "id": "flow-provision-vm",
+  "type": "flow",
+  "title": "Provision a new VM and prove it with check-vm.sh",
+  "caption": "docs/mvp/deployment-single-vm.md §3; deploy/scripts/provision-vm.sh and check-vm.sh. Allow one to two hours. Agents never do these steps.",
+  "steps": [
+    {
+      "title": "Create the VM and DNS",
+      "actor": "Developer",
+      "body": "Ubuntu 24.04, 4 vCPU / 8 GB / 160 GB, admin user with your key (not root). A/AAAA records for `platform.example.com`, `admin.`, `api.` of it, `admin.ota.example.com`, `api.ota.example.com`, `*.ota.example.com`.",
+      "expect": "`ssh ubuntu@<vm>` works with your key."
+    },
+    {
+      "title": "Deploy key and Caddy build",
+      "actor": "Developer",
+      "body": "`ssh-keygen -t ed25519 -f velexis-deploy -C github-actions`; take `caddy/bin/caddy` of the commit's Deploy artefact or `bash deploy/caddy/build/build-caddy.sh /tmp/caddy-build`.",
+      "expect": "SHA-256 of the binary equals `CADDY_SHA256` in `deploy/caddy/build/versions.env`."
+    },
+    {
+      "title": "Copy and provision",
+      "actor": "Developer",
+      "body": "`scp -r deploy/ velexis-deploy.pub caddy ubuntu@<vm>:/tmp/` then `sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu CADDY_BINARY=/tmp/caddy bash /tmp/deploy/scripts/provision-vm.sh`.",
+      "expect": "Steps packages → summary complete; `/var/log/velexis/provision.log` lists them; one-time AIDE re-baseline at the end."
+    },
+    {
+      "title": "SSH second factor",
+      "actor": "Developer",
+      "body": "Enrol FIDO2 keys (runbooks/ssh-access.md §2) or TOTP (§3), then `sudo ADMIN_USER=ubuntu ADMIN_MFA=fido2 bash /tmp/deploy/scripts/provision-vm.sh --steps ssh`. Keep a session open.",
+      "expect": "From a second terminal a plain key is refused and the security key logs in."
+    },
+    {
+      "title": "Fill the env files",
+      "actor": "Developer",
+      "body": "Replace every `CHANGE_ME` and placeholder host in `/etc/velexis/*.env` and `caddy.env` (`PLATFORM_BASE_DOMAIN`, `STOREFRONT_BASE_DOMAIN`, `ACME_EMAIL`); `sudo systemctl restart caddy`.",
+      "expect": "`https://platform.<domain>/` serves the maintenance page with a valid certificate."
+    },
+    {
+      "title": "Backups and logs",
+      "actor": "Developer",
+      "body": "age public keys in `/etc/velexis/backup/*-recipients.txt`, `rclone.conf`, `RCLONE_REMOTE`; `sudo systemctl start velexis-backup`, `sudo systemctl start velexis-ship-logs && sudo velexis-shiplogs --status`.",
+      "expect": "The five `.age` files and `MANIFEST.txt` under `daily/<date>/`; a delete of a canary object fails with AccessDenied."
+    },
+    {
+      "title": "Check everything",
+      "actor": "Developer",
+      "body": "`sudo bash /tmp/deploy/scripts/check-vm.sh` (or `--only firewall,ssh`).",
+      "expect": "Every line `PASS`, exit 0. No value is printed."
+    },
+    {
+      "title": "Back up /etc/velexis offline",
+      "actor": "Developer",
+      "body": "Encrypted copy to your password manager: it holds the master key.",
+      "expect": "You can restore the master key without the VM."
+    }
+  ]
+}

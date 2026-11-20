@@ -1,0 +1,34 @@
+{
+  "id": "flow-queues",
+  "type": "flow",
+  "title": "Read an office queue",
+  "caption": "queues/page.tsx and queues/[queueId]/page.tsx. queues:read (owner, admin, agent). Monitored queues are set in the portal and polled every 15 min by the OTA worker.",
+  "steps": [
+    {
+      "title": "List",
+      "actor": "Agent",
+      "screen": "/queues",
+      "url": "http://localhost:3002/queues",
+      "body": "See the newest reads grouped by office, queue and category.",
+      "expect": "Each row: last read time, reader (\"Monitored\" for the poller), PNR count."
+    },
+    {
+      "title": "Open a queue",
+      "actor": "Agent",
+      "body": "**Open a queue**: number 0-99, category 0-254, office; press **Open queue**.",
+      "expect": "The last stored read with its PNRs; no Amadeus call; invalid values named at their fields."
+    },
+    {
+      "title": "Read now",
+      "actor": "Agent",
+      "body": "Press **Read now from Amadeus**.",
+      "expect": "A fresh read (`?read=1`), one new `queue_snapshots` row with `fetched_by_staff_id` = you; **Next page** pages it without calling Amadeus."
+    },
+    {
+      "title": "Orphan PNR",
+      "actor": "Agent",
+      "body": "A PNR marked \"No booking\" → **Import**.",
+      "expect": "`/pnr?recordLocator=…` (never prefetched)."
+    }
+  ]
+}

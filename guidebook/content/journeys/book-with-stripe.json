@@ -1,0 +1,82 @@
+{
+  "id": "book-with-stripe",
+  "title": "Search and book with a Stripe test card and 3-D Secure",
+  "summary": "A guest pays by card on the Stripe Payment Element with the 3-D Secure test card; the PaymentIntent is authorised, the order created and the payment captured; the sold-out path voids the authorisation.",
+  "apps": ["storefront", "sdk", "ota-api", "tools"],
+  "roles": ["Traveller (guest)"],
+  "duration": "25 min",
+  "prerequisites": [
+    "Real Stripe **test** keys in `ota/backend/.env.local` and `bash tools/dev/stripe-listen.sh --only ota` running with its signing secret in `.env.local` ([[journey:amadeus-and-stripe-connections]], steps \"stripe-keys\").",
+    "Stripe's documented test cards only: `4000 0027 6000 3184` (3-D Secure) and `4242 4242 4242 4242`."
+  ],
+  "steps": [
+    {
+      "id": "price",
+      "app": "storefront",
+      "title": "Search, choose a fare and open checkout",
+      "url": "http://localhost:5173/search.html?trip=oneway&from=MAD&to=PAR&depart=YYYY-MM-DD&adults=1&children=0&infants=0&cabin=ECONOMY",
+      "actions": "Search, keep a fare, press **Continue to checkout**.",
+      "expect": "As in [[journey:book-with-airline-card]] up to `/checkout.html?id=chk_…`.",
+      "code": ["ota/frontend/src/pages/price.js"]
+    },
+    {
+      "id": "checkout",
+      "app": "storefront",
+      "title": "Travellers, contacts and one extra bag",
+      "url": "http://localhost:5173/checkout.html?id=chk_…",
+      "actions": "Fill the traveller and contact; in **Extras and special requests** add one checked bag and press **Confirm the new total, €…**; in **Payment** choose **Card**; accept the terms; **Continue to payment**.",
+      "expect": "Adding the bag re-prices the trip: \"With these extras the airline's total is …\" and the new total is confirmed before payment (\"Extras saved. Your total is …\"). The card page opens at `/checkout/pay-card.html?id=chk_…&payment=pay_…`.",
+      "data": "`checkout_ancillaries`; a child `priced_offers` row (`parent_priced_offer_id`); `checkouts.priced_offer_id` points at it; a `payments` row with `provider = stripe`, `capture_method = manual` and `provider_payment_id = pi_…`.",
+      "code": [
+        "ota/backend/src/checkout/ancillaries.service.ts",
+        "ota/backend/src/payments/stripe/stripe.gateway.ts",
+        "ota/backend/src/payments/payments.service.ts"
+      ]
+    },
+    {
+      "id": "card-page",
+      "app": "storefront",
+      "title": "Review the total with the 3-D Secure test card",
+      "url": "http://localhost:5173/checkout/pay-card.html?id=chk_…&payment=pay_…",
+      "actions": "Type `4000 0027 6000 3184`, any future expiry and any CVC into Stripe's Payment Element, then press **Review total**.",
+      "expect": "Only this page loads Stripe.js. **Review total** lets Stripe check the form, then the API quotes the card fee of the brand and **Your final total** shows it; the button reads **Pay €…**. Changing the card afterwards drops the review.",
+      "data": "`payments.card_fee_amount` and `card_fee_lines` updated; the PaymentIntent amount at Stripe equals the total (minor units).",
+      "code": ["ota/frontend/src/pages/checkout-pay-card.js", "ota/backend/src/payments/card-fees.ts"]
+    },
+    {
+      "id": "pay",
+      "app": "storefront",
+      "title": "Pay and pass the challenge",
+      "actions": "Press **Pay €…**; complete Stripe's 3-D Secure test challenge.",
+      "expect": "`/checkout/complete.html` completes the checkout, then `/confirmation.html?booking=bkg_…` shows the reference and the ticketing state (issued under the default *issue after payment* policy).",
+      "data": "`SELECT status, amount_authorized, amount_captured FROM tenant_<key>.payments WHERE booking_id = 'bkg_…';` → `captured`. `payment_events`: `payment_intent.amount_capturable_updated`, then `succeeded` (from the listener). The listener shows `<-- [200]` for each event. Booking `confirmed` → `ticketed`.",
+      "code": [
+        "ota/frontend/src/pages/checkout-complete.js",
+        "ota/backend/src/checkout/checkout.controller.ts",
+        "ota/backend/src/bookings/booking-orchestrator.service.ts",
+        "ota/backend/src/payments/stripe-events.processor.ts"
+      ]
+    },
+    {
+      "id": "email",
+      "app": "storefront",
+      "title": "Confirmation e-mail and the booking page",
+      "url": "http://localhost:8025",
+      "actions": "Open the confirmation e-mail; open the booking page from the confirmation.",
+      "expect": "The e-mail carries the itinerary PDF; the booking page opens through the guest cookie; a browser without that cookie cannot open it.",
+      "code": ["ota/backend/src/notifications/notifications.processor.ts"]
+    },
+    {
+      "id": "sold-out",
+      "app": "storefront",
+      "title": "Sold out at completion: nothing is charged",
+      "actions": "Book again with `4242 4242 4242 4242`, adding `X-Stub-Scenario: sold-out` to the `POST /api/v1/checkouts/chk_…/complete` request only.",
+      "expect": "The complete page says the flight is no longer available and that you have not been charged.",
+      "data": "The payment is `canceled` in `tenant_<key>.payments` and its PaymentIntent is `canceled` in the Stripe dashboard (test mode); the booking is `failed` (visible in the console only).",
+      "code": [
+        "ota/backend/src/bookings/booking-orchestrator.service.ts",
+        "ota/backend/src/payments/payments.processor.ts"
+      ]
+    }
+  ]
+}

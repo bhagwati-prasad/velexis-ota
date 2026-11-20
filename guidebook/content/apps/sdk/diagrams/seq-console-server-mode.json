@@ -1,0 +1,96 @@
+{
+  "id": "seq-console-server-mode",
+  "type": "sequence",
+  "title": "Server mode on the console: staff sign-in, staff calls, key-only calls",
+  "caption": "What the server-mode smoke test does with dev:seed's console automation key (sk_test_…, scopes console:automation + amadeus:read). The OTA admin does the same with OTA_ADMIN_SERVICE_KEY plus X-Velexis-Environment (environment option), which a normal secret key may not send. test/smoke/server-mode.smoke.test.js, smoke-env.js.",
+  "actors": [
+    { "id": "test", "label": "Smoke test / custom console", "kind": "worker" },
+    { "id": "redis", "label": "Redis", "kind": "cache" },
+    { "id": "sdk", "label": "SDK (server mode, sessionKind staff)", "kind": "lib" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "pg", "label": "PostgreSQL", "kind": "db" }
+  ],
+  "steps": [
+    {
+      "from": "test",
+      "to": "pg",
+      "label": "as velexis_migrator: INSERT platform.accounts + platform.tenant_memberships (role agent) for tenant demo",
+      "kind": "call"
+    },
+    {
+      "from": "test",
+      "to": "redis",
+      "label": "SET ptk:<sha256(portalToken)> <grant json> EX 60 NX (what the platform's createConsoleToken does)",
+      "kind": "call"
+    },
+    {
+      "from": "test",
+      "to": "sdk",
+      "label": "console.auth.signIn({ grantType: \"portal_token\", portalToken })",
+      "kind": "call"
+    },
+    {
+      "from": "sdk",
+      "to": "api",
+      "label": "POST /v1/console/auth/sign-in  X-Api-Key: sk_test_… (console:automation), Idempotency-Key",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "GETDEL ptk:<sha256> (single use); staffsess:<familyId>",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "sdk",
+      "label": "200 ConsoleStaffSession { session, staff, tenant, permissions, environments }",
+      "kind": "return"
+    },
+    {
+      "from": "test",
+      "to": "sdk",
+      "label": "automation.withOptions({ accessToken: staffToken }).console.bookings.list()",
+      "kind": "call"
+    },
+    {
+      "from": "sdk",
+      "to": "api",
+      "label": "GET /v1/console/bookings  X-Api-Key + Bearer staffToken (role agent decides)",
+      "kind": "call"
+    },
+    { "from": "api", "to": "sdk", "label": "200 Page<ConsoleBooking>", "kind": "return" },
+    {
+      "from": "test",
+      "to": "sdk",
+      "label": "key alone: console.amadeus.getFlightOffers / getQueue (amadeus:read)",
+      "kind": "call"
+    },
+    {
+      "from": "sdk",
+      "to": "api",
+      "label": "GET /v1/console/amadeus/… (key permissions decide)",
+      "kind": "call"
+    },
+    { "from": "test", "to": "sdk", "label": "key alone: console.bookings.list()", "kind": "call" },
+    {
+      "from": "api",
+      "to": "sdk",
+      "label": "403 FORBIDDEN details.requiredPermission = bookings:read → PermissionError",
+      "kind": "return"
+    },
+    { "from": "test", "to": "sdk", "label": "storefront sk_ key: console.auth.signIn(…)", "kind": "call" },
+    {
+      "from": "api",
+      "to": "sdk",
+      "label": "403 SCOPE_NOT_ALLOWED details.reason = storefront_key",
+      "kind": "return"
+    },
+    {
+      "from": "test",
+      "to": "pg",
+      "label": "clean-up: console.auth.signOut, DELETE FROM platform.accounts (membership cascades)",
+      "kind": "call"
+    }
+  ]
+}

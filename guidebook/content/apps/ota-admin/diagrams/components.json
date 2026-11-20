@@ -1,0 +1,137 @@
+{
+  "id": "components",
+  "type": "component",
+  "title": "Inside the OTA admin",
+  "caption": "Pages are server components, mutations are server actions; only lib/velexis.ts touches the SDK and only lib/session.ts the cookies. Client components (filters, dialogs) get plain values and never import either.",
+  "groups": [
+    { "id": "browser", "label": "Browser" },
+    { "id": "request", "label": "Request pipeline" },
+    { "id": "app", "label": "App (src/app)" },
+    { "id": "lib", "label": "Server libraries (src/lib)" },
+    { "id": "backend", "label": "OTA backend" }
+  ],
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Staff browser",
+      "group": "browser",
+      "kind": "user",
+      "detail": "HTML, RSC payloads, server action POSTs. `document.cookie` is empty: every cookie is HttpOnly."
+    },
+    {
+      "id": "client",
+      "label": "Client components",
+      "group": "browser",
+      "kind": "ui",
+      "detail": "`filters.tsx`, `confirm-dialog.tsx`, `*-dialog.tsx`, `theme-editor.tsx`, `console-nav.tsx`. Zod is never in their chunks."
+    },
+    {
+      "id": "middleware",
+      "label": "middleware.ts",
+      "group": "request",
+      "kind": "edge",
+      "detail": "Node runtime. Refresh 60 s before expiry, redirect without session, CSP nonce, `x-velexis-page-path`."
+    },
+    {
+      "id": "routes",
+      "label": "Route handlers",
+      "group": "request",
+      "kind": "api",
+      "detail": "`POST /sso`, `GET /auth/refresh`, `POST /auth/sign-out`, `/health/live`, `/health/ready`."
+    },
+    {
+      "id": "shell",
+      "label": "(console)/layout.tsx",
+      "group": "app",
+      "kind": "ui",
+      "detail": "Shell: navigation by `can()`, TEST/LIVE switch, billing notice, suspended page."
+    },
+    {
+      "id": "pages",
+      "label": "Pages (RSC)",
+      "group": "app",
+      "kind": "ui",
+      "detail": "Dashboard, bookings, PNR, queues, shopping, payments, customers, settings, supplier log, portal links."
+    },
+    {
+      "id": "actions",
+      "label": "Server actions",
+      "group": "app",
+      "kind": "ui",
+      "detail": "`bookings/[bookingId]/actions.ts`, `pnr/actions.ts`, `shopping/actions.ts`, `payments/[paymentId]/actions.ts`, `settings/*actions.ts`, `env-actions.ts`.",
+      "term": "server-action"
+    },
+    {
+      "id": "velexis",
+      "label": "lib/velexis.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "`createConsoleClient`, `getConsoleRequest` (one `console.auth.me` per request), `refreshStaffSession`."
+    },
+    {
+      "id": "session",
+      "label": "lib/session.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Four `__Host-` cookies, `requireStaff(permission)`, `redirectOnSessionError`, `safeNextPath`.",
+      "term": "staff-session"
+    },
+    {
+      "id": "dedup",
+      "label": "lib/refresh-dedup.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "One refresh per refresh token in the process (SHA-256 key, 30 s), shared on `globalThis`.",
+      "term": "single-flight-refresh"
+    },
+    {
+      "id": "perms",
+      "label": "lib/permissions.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Role matrix, `can()`, `canOpenEnvironment()`. Importable by client components (no secrets).",
+      "term": "staff-permission"
+    },
+    {
+      "id": "errs",
+      "label": "lib/errors.ts + action-state.ts",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Code → message, field errors, `withNextActionKey`.",
+      "term": "action-key"
+    },
+    {
+      "id": "sdk",
+      "label": "@velexis/ota-sdk console",
+      "group": "lib",
+      "kind": "lib",
+      "detail": "Server mode: `secretKey`, `accessToken`, `sessionKind: \"staff\"`, `environment`; retries 2 (0 for shopping).",
+      "app": "sdk"
+    },
+    {
+      "id": "api",
+      "label": "OTA API /v1/console",
+      "group": "backend",
+      "kind": "api",
+      "detail": "Permission guard, environment, audit interceptor (`staff_actions`), idempotency.",
+      "app": "ota-api"
+    }
+  ],
+  "edges": [
+    { "from": "browser", "to": "middleware", "label": "every request", "kind": "sync" },
+    { "from": "middleware", "to": "dedup", "label": "refresh if < 60 s", "kind": "sync" },
+    { "from": "middleware", "to": "shell", "label": "rewritten Cookie header", "kind": "sync" },
+    { "from": "browser", "to": "routes", "label": "/sso, sign-out", "kind": "sync" },
+    { "from": "routes", "to": "session", "label": "write cookies", "kind": "sync" },
+    { "from": "shell", "to": "velexis", "label": "getConsoleRequest", "kind": "sync" },
+    { "from": "pages", "to": "velexis", "label": "getConsole()", "kind": "sync" },
+    { "from": "pages", "to": "perms", "label": "can()", "kind": "sync" },
+    { "from": "client", "to": "actions", "label": "POST server action", "kind": "sync" },
+    { "from": "actions", "to": "session", "label": "requireStaff(permission)", "kind": "sync" },
+    { "from": "actions", "to": "errs", "label": "ActionState", "kind": "sync" },
+    { "from": "session", "to": "dedup", "label": "refresh in actions", "kind": "sync" },
+    { "from": "dedup", "to": "velexis", "label": "refreshStaffSession", "kind": "sync" },
+    { "from": "velexis", "to": "sdk", "label": "createVelexisClient().console", "kind": "sync" },
+    { "from": "sdk", "to": "api", "label": "X-Api-Key, Bearer, X-Velexis-Environment", "kind": "sync" }
+  ]
+}

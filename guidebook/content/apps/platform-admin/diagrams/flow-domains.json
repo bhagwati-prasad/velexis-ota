@@ -1,0 +1,25 @@
+{
+  "id": "flow-domains",
+  "type": "flow",
+  "title": "Re-check and remove a custom domain",
+  "caption": "Needs FEATURE_CUSTOM_DOMAINS. Mirrors admin-domains.e2e.ts.",
+  "steps": [
+    {
+      "title": "Find pending domains",
+      "screen": "/",
+      "body": "**To review** → 'custom domains wait for their DNS records' (→ `/domains?kind=custom&verificationStatus=pending`).",
+      "expect": "Host, OTA, kind, DNS verification with the 72-hour window end, last DNS check in words, TLS state, added."
+    },
+    {
+      "title": "Re-check",
+      "screen": "/domains",
+      "body": "**Re-check** → **Check now**.",
+      "expect": "'checks are queued, reload in a minute'; after reload the last check time moved; `domain.recheck_requested` in the audit."
+    },
+    {
+      "title": "Remove",
+      "body": "**Remove** → reason → **Remove domain** (an empty reason shows 'Enter a reason.').",
+      "expect": "Row gone at once; owners get '<host> was removed from <OTA>' without the reason; sub-domain primary again; no Remove on sub-domains."
+    }
+  ]
+}

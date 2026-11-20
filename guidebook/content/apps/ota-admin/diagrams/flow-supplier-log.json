@@ -1,0 +1,34 @@
+{
+  "id": "flow-supplier-log",
+  "type": "flow",
+  "title": "Trace a failed action to its Amadeus call",
+  "caption": "supplier-log/page.tsx. supplier_requests:read (owner, admin, agent, finance). Not an audited read.",
+  "steps": [
+    {
+      "title": "Copy the request id",
+      "actor": "Agent",
+      "body": "A failed action shows the admin's message and a request id.",
+      "expect": "The request id is the Velexis `X-Request-Id` of the console call."
+    },
+    {
+      "title": "Filter the log",
+      "actor": "Agent",
+      "screen": "/supplier-log",
+      "url": "http://localhost:3002/supplier-log?requestId=<id>",
+      "body": "Paste it into **Request id** (or open the URL).",
+      "expect": "The Amadeus call(s) behind it: API, operation, office, outcome, HTTP status, error codes, duration, Amadeus `correlationId`."
+    },
+    {
+      "title": "Read the bodies",
+      "actor": "Agent",
+      "body": "**Show the redacted bodies**.",
+      "expect": "At most 20 calls a page; request and response in collapsed JSON views; card numbers masked; \"truncated\" above 64 KB."
+    },
+    {
+      "title": "As a viewer",
+      "actor": "Viewer",
+      "body": "Open `/supplier-log`.",
+      "expect": "Not in the navigation; the page names the missing permission and sends no request."
+    }
+  ]
+}

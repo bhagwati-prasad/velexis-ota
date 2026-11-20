@@ -1,0 +1,144 @@
+{
+  "id": "book-with-airline-card",
+  "title": "Search and book with the airline card, then get tickets and documents",
+  "summary": "A guest traveller searches, picks a fare, checks out and pays with the airline card against the Amadeus stub (no Stripe needed); the booking is ticketed, e-mailed with PDFs and readable through the guest cookie. Declines, validation and a lost airline answer are tried too.",
+  "apps": ["storefront", "sdk", "ota-api", "ota-admin"],
+  "roles": ["Traveller (guest)", "OTA owner"],
+  "duration": "30 min",
+  "prerequisites": [
+    "Your OTA's storefront on the dev server (`STOREFRONT_DEV_HOST=<key>.ota.example.com`) with *Offer the airline card in the test environment* on ([[journey:storefront-settings-and-markups]], step \"switches\").",
+    "`AIRLINE_CARD_ENABLED=true` in `ota/backend/.env.local` (the value of `ota/backend/.env.example`); the OTA worker and Mailpit running.",
+    "Test card numbers only: `4111 1111 1111 1111` (accepted by the stub), `4000 0000 0000 0002` (declined). Replace `YYYY-MM-DD` with a date about 40 days ahead."
+  ],
+  "steps": [
+    {
+      "id": "search",
+      "app": "storefront",
+      "title": "Search and filter",
+      "url": "http://localhost:5173/search.html?trip=oneway&from=MAD&to=PAR&depart=YYYY-MM-DD&adults=1&children=0&infants=0&cabin=ECONOMY",
+      "actions": "Open the URL (or use the home page form). Try the filters and the sort, then open the cheapest offer.",
+      "expect": "The address gains `&search=srch_…`; the heading counts 5 flights; prices include the OTA's markup. Filters and sort change the list without a new Amadeus call.",
+      "data": "`tenant_<key>.flight_searches` (`completed`) and `flight_offers` rows with selling prices; one `supplier_requests` row for the search.",
+      "code": [
+        "ota/frontend/src/pages/search.js",
+        "ota/backend/src/shopping/searches.service.ts",
+        "ota/backend/src/shopping/offers.service.ts"
+      ]
+    },
+    {
+      "id": "offer",
+      "app": "storefront",
+      "title": "Choose a fare on the offer page",
+      "url": "http://localhost:5173/offer.html?offer=off_…",
+      "actions": "Read the itinerary; compare the fare families; keep one with **Continue with this fare**.",
+      "expect": "Segments with local times of each airport; the fare families BASIC, CLASSIC and FLEXIBLE (from the stub's upsell) with their prices; the chosen fare leads to `/price.html?priced=prc_…`.",
+      "data": "`tenant_<key>.offer_upsells` and a `priced_offers` row after pricing.",
+      "code": [
+        "ota/frontend/src/pages/offer.js",
+        "ota/backend/src/shopping/upsell.service.ts",
+        "ota/backend/src/shopping/priced-offers.service.ts"
+      ]
+    },
+    {
+      "id": "price",
+      "app": "storefront",
+      "title": "Review the confirmed price",
+      "url": "http://localhost:5173/price.html?priced=prc_…",
+      "actions": "Read **Price details** (*Price per traveller*, *What the total includes*) and open **Changes and refunds**. Press **Continue to checkout**.",
+      "expect": "The heading **Your price**; *What the total includes* lists fares, taxes and every fee line with its label (for example the €7.50 service fee of your fee rule) and the API's total; the **Total** box shows the same string. Checkout opens at `/checkout.html?id=chk_…`.",
+      "code": ["ota/frontend/src/pages/price.js", "ota/backend/src/pricing/pricing-engine.ts"]
+    },
+    {
+      "id": "checkout",
+      "app": "storefront",
+      "title": "Fill in travellers, contacts and the payment method",
+      "url": "http://localhost:5173/checkout.html?id=chk_…",
+      "actions": "First press **Continue** with empty fields. Then fill **Traveller 1: Adult** (*First and middle names*, *Last name*, *Date of birth*, *Gender, as in the travel document*) and press **Continue**; in **Contact details** (*First name* is prefilled from the traveller) fill *E-mail address*, *Country calling code* and *Mobile phone number*, press **Continue**; press **Continue** in **Extras and special requests**; in **Payment** choose *Card, charged by the airline*, tick *I accept the terms and conditions, the privacy policy and the fare rules.* and press **Continue to payment**.",
+      "expect": "Empty fields: the browser's own \"Please fill out this field\" bubble on the first empty field; nothing is sent. Under the airline-card choice: \"The airline charges your card at its own price, shown on the next page.\" Valid data: `/checkout/pay-airline.html?id=chk_…&payment=pay_…` opens with the heading **Pay with your card**, the notice \"The airline charges your card. The price is the airline's price.\" and *Your trip* with the airline's total.",
+      "data": "`tenant_<key>.checkouts` (`open` → `payment_pending`), `checkout_travelers` (documents encrypted in `*_ciphertext`), `checkout_contacts`, a `payments` row (`provider = airline`).",
+      "code": [
+        "ota/frontend/src/pages/checkout.js",
+        "ota/backend/src/checkout/checkout.service.ts",
+        "ota/backend/src/checkout/requirements.ts"
+      ]
+    },
+    {
+      "id": "card-validation",
+      "app": "storefront",
+      "title": "A card the page refuses is never sent",
+      "url": "http://localhost:5173/checkout/pay-airline.html?id=chk_…&payment=pay_…",
+      "actions": "With DevTools → Network open, type *Name on the card*, *Card number* `4111 1111 1111 1112` (fails the Luhn check), *Month (MM)*, *Year (YYYY)* and *Security code*; wait for the fee review, then press **Pay €…**.",
+      "expect": "Only the fee quote has left the page (`PATCH /api/v1/payments/pay_…` with the brand and the first 6 digits, sent once six digits were typed); no `airline-card-completion` request. The summary \"Check the card details\" gets the focus with the link \"Check the card number\", the field is marked invalid, the values stay in the inputs and no message repeats a card value. The page loads no third-party script and, in the production preview only, sends `Cross-Origin-Opener-Policy: same-origin` and `Cache-Control: no-store`.",
+      "code": ["ota/frontend/src/pages/checkout-pay-airline.js", "ota/frontend/checkout/pay-airline.html"]
+    },
+    {
+      "id": "pay",
+      "app": "storefront",
+      "title": "Pay with the test card",
+      "url": "http://localhost:5173/checkout/pay-airline.html?id=chk_…&payment=pay_…",
+      "actions": "Type `4111 1111 1111 1111` and valid other fields. Check **Your final total**, then press **Pay €…** once.",
+      "expect": "Before you pay, **Your final total** shows *Visa*, the stub's card fee €1.20 and the total, and the button reads **Pay** with that total. After paying, `/confirmation.html?booking=bkg_…` shows the reference `VX…` (6 characters after `VX`, no look-alike letters), *Your tickets are issued* and **Ticket numbers** (`000-…: <name>`).",
+      "data": "`SELECT reference, status, ticketing_status, record_locator, total_amount, card_fee_amount FROM tenant_<key>.bookings ORDER BY created_at DESC LIMIT 1;` → `ticketed` (or `confirmed` then `ticketed`), `issued`. `booking_tickets` rows. `SELECT provider, status, card_brand, card_bin FROM tenant_<key>.payments WHERE booking_id = 'bkg_…';` → `airline`, `captured`, the brand and the BIN (the payment keeps brand, BIN and last 4 only, no expiry). The request `POST /api/v1/checkouts/chk_…/airline-card-completion` is the only one carrying the card; search the OTA API log for `4111111111111111`: nothing.",
+      "code": [
+        "ota/backend/src/payments/airline-card/airline-card-completion.controller.ts",
+        "ota/backend/src/payments/airline-card/airline-card-completion.service.ts",
+        "ota/backend/src/bookings/booking-orchestrator.service.ts",
+        "ota/backend/src/bookings/order-recorder.ts"
+      ]
+    },
+    {
+      "id": "documents",
+      "app": "ota-api",
+      "title": "E-mails and PDF documents",
+      "url": "http://localhost:8025",
+      "actions": "Open Mailpit. Open the confirmation e-mail and its attachment; then the e-mail with the e-ticket receipts.",
+      "expect": "\"Your booking `VX…` with `<OTA name>` is confirmed\" with the itinerary PDF, and a ticketed e-mail with one e-ticket receipt per ticket. Names, flights, times and totals match the confirmation page; links point at the storefront.",
+      "data": "`SELECT template_key, status, attempts FROM tenant_<key>.notifications WHERE booking_id = 'bkg_…';` → `booking.confirmed`, `booking.ticketed`, `sent`. `SELECT kind, status FROM tenant_<key>.booking_documents WHERE booking_id = 'bkg_…';` → `itinerary` (`ready`, the first one `superseded`) and `e_ticket_receipt` (`ready`); files under `.local/storage/`.",
+      "code": [
+        "ota/backend/src/notifications/notifications.processor.ts",
+        "ota/backend/src/notifications/attachments.ts",
+        "ota/backend/src/documents/documents.processor.ts",
+        "ota/backend/src/documents/renderers"
+      ]
+    },
+    {
+      "id": "guest-booking-page",
+      "app": "storefront",
+      "title": "Open the booking as the guest who booked it",
+      "url": "http://localhost:5173/booking.html?id=bkg_…",
+      "actions": "From the confirmation open the booking page; download the itinerary. Copy the page address into a private window.",
+      "expect": "The booking page shows the itinerary, tickets, documents and timeline; the download is a same-origin link `/api/v1/files/…?exp=…&sig=…` valid for 5 minutes. The private window cannot open the booking (no guest cookie `__Host-vx_bt`) and points to the lookup.",
+      "code": [
+        "ota/frontend/src/pages/booking.js",
+        "ota/backend/src/documents/document-downloads.service.ts",
+        "ota/backend/src/documents/files.controller.ts",
+        "ota/backend/src/bookings/guest-access.service.ts"
+      ]
+    },
+    {
+      "id": "declines",
+      "app": "storefront",
+      "title": "A declined card, then the attempt limit",
+      "actions": "Book another trip the same way, but pay with `4000 0000 0000 0002` three times.",
+      "expect": "Twice *The airline declined the card* with \"Nothing was booked. Check the card details or use another card: a booking takes at most three attempts.\" (`402 PAYMENT_DECLINED`), the inputs emptied; the third time *Too many attempts* (`403 PAYMENT_ATTEMPTS_EXCEEDED`) with links **Pay by card** and **Search flights**, the card form hidden. No booking is confirmed.",
+      "data": "The payment stays unpaid (`failed` or `requires_payment_method`); `supplier_requests` shows the refused Flight Create Orders calls.",
+      "code": [
+        "ota/backend/src/payments/airline-card/abuse-limits.ts",
+        "ota/backend/src/amadeus/error-mapper.ts"
+      ]
+    },
+    {
+      "id": "lost-answer",
+      "app": "storefront",
+      "title": "Optional: the airline's answer is lost",
+      "actions": "Book once more, and add the header `X-Stub-Scenario: server-error` to the completion request only (a header extension limited to `*/airline-card-completion`). Wait on the confirmation page. After 15 minutes look at the booking in the console.",
+      "expect": "The completion answers `504 SUPPLIER_TIMEOUT`; the page opens `/confirmation.html?booking=bkg_…&pending=1` with *We are confirming your booking with the airline* and \"Please do not book again: this page updates by itself…\", and polls; the card is never sent again. Nothing is retried blindly: the booking stays `pending` until the reconciliation decides (a new OTA has no booking queue, so it ends in the console's **Reconciliation review**).",
+      "data": "`SELECT status, reconcile_until, reconcile_outcome, failure_code FROM tenant_<key>.bookings WHERE id = 'bkg_…';` → `pending` with `reconcile_until` 15 minutes ahead, later `reconcile_outcome = manual_review`. The payment stays `processing`. Exactly one Flight Create Orders row in `supplier_requests`.",
+      "code": [
+        "ota/backend/src/bookings/reconcile.service.ts",
+        "ota/backend/src/bookings/reconcile.processor.ts",
+        "ota/docs/runbooks/supplier-timeout-and-reconciliation.md"
+      ]
+    }
+  ]
+}

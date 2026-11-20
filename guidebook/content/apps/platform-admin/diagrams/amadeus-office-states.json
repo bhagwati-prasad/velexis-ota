@@ -1,0 +1,41 @@
+{
+  "id": "amadeus-office-states",
+  "type": "state",
+  "title": "Office of the pool",
+  "caption": "platform.amadeus_offices.status; assigned and releasing always carry assigned_tenant_id (amadeus_offices_assignment_ck). Code: (app)/amadeus/offices/*.",
+  "states": [
+    { "id": "start", "label": "added", "kind": "initial" },
+    {
+      "id": "available",
+      "label": "available",
+      "kind": "normal",
+      "detail": "**Assign** (OTA key or tenant id), **Retire** (reason), **Edit notes**."
+    },
+    {
+      "id": "assigned",
+      "label": "assigned",
+      "kind": "normal",
+      "detail": "Backs the OTA's `velexis` connection. **Release** only while that connection is not active (else `409 connection_active`)."
+    },
+    {
+      "id": "releasing",
+      "label": "releasing",
+      "kind": "normal",
+      "detail": "The OTA moved to its own credentials and keeps the office for old orders (`release_requested_at`). **Release** with the 'no open bookings' box and a reason."
+    },
+    {
+      "id": "retired",
+      "label": "retired",
+      "kind": "final",
+      "detail": "Never assigned again; no buttons but notes."
+    }
+  ],
+  "transitions": [
+    { "from": "start", "to": "available", "label": "Add offices (bulk, 9 chars, ≤ 500)" },
+    { "from": "available", "to": "assigned", "label": "Assign / provisioning / live request" },
+    { "from": "assigned", "to": "releasing", "label": "OTA's own credentials applied" },
+    { "from": "releasing", "to": "available", "label": "Release (confirmNoOpenBookings + reason)" },
+    { "from": "assigned", "to": "available", "label": "Release (connection not active)" },
+    { "from": "available", "to": "retired", "label": "Retire (reason)" }
+  ]
+}

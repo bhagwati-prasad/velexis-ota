@@ -1,0 +1,120 @@
+{
+  "id": "cancel-dialog-states",
+  "type": "state",
+  "title": "Cancel dialog on /booking.html",
+  "caption": "`src/components/cancel-dialog.js` (docs/pages-account.md §3). While the request is on its way the dialog cannot be closed.",
+  "states": [
+    {
+      "id": "closed",
+      "label": "Closed",
+      "kind": "initial"
+    },
+    {
+      "id": "quoting",
+      "label": "Quoting",
+      "kind": "normal"
+    },
+    {
+      "id": "quoted",
+      "label": "Refund preview",
+      "kind": "normal",
+      "detail": "Mode sentence (release, void + deadline, refund, request_only), refund, kept amounts, per-traveller lines, quote validity; reason required."
+    },
+    {
+      "id": "notallowed",
+      "label": "Can no longer be cancelled online",
+      "kind": "error",
+      "detail": "`not_allowed`, `409 BOOKING_NOT_MODIFIABLE`, `403 FEATURE_DISABLED`; support address shown."
+    },
+    {
+      "id": "submitting",
+      "label": "Cancelling",
+      "kind": "normal"
+    },
+    {
+      "id": "cancelled",
+      "label": "This booking is cancelled",
+      "kind": "final"
+    },
+    {
+      "id": "requested",
+      "label": "Request sent",
+      "kind": "final",
+      "detail": "`202` for `request_only`: staff finish it in the console."
+    },
+    {
+      "id": "changed",
+      "label": "The refund changed from X to Y",
+      "kind": "error",
+      "detail": "`409 REFUND_AMOUNT_CHANGED`: quote again, ask again (new key)."
+    },
+    {
+      "id": "unconfirmed",
+      "label": "Airline has not confirmed yet",
+      "kind": "error",
+      "detail": "`504`: booking reloaded, never sent again."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "closed",
+      "to": "quoting",
+      "label": "Cancel booking"
+    },
+    {
+      "from": "quoting",
+      "to": "quoted",
+      "label": "quote"
+    },
+    {
+      "from": "quoting",
+      "to": "notallowed",
+      "label": "not_allowed"
+    },
+    {
+      "from": "quoted",
+      "to": "submitting",
+      "label": "Confirm"
+    },
+    {
+      "from": "submitting",
+      "to": "cancelled",
+      "label": "200"
+    },
+    {
+      "from": "submitting",
+      "to": "requested",
+      "label": "202"
+    },
+    {
+      "from": "submitting",
+      "to": "changed",
+      "label": "409 REFUND_AMOUNT_CHANGED"
+    },
+    {
+      "from": "changed",
+      "to": "quoted",
+      "label": "re-quoted"
+    },
+    {
+      "from": "submitting",
+      "to": "quoting",
+      "label": "412 / 409 VERSION_CONFLICT: reload, quote again"
+    },
+    {
+      "from": "submitting",
+      "to": "notallowed",
+      "label": "409 BOOKING_NOT_MODIFIABLE"
+    },
+    {
+      "from": "submitting",
+      "to": "unconfirmed",
+      "label": "504"
+    },
+    {
+      "from": "submitting",
+      "to": "quoted",
+      "label": "503: Retry (same key)"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "flow-reference-data",
+  "type": "flow",
+  "title": "Check, fix or refresh the reference data",
+  "caption": "tools/reference-data/README.md, ADR-0024. Refreshes are quarterly pull requests; CI, deploys and tests never download.",
+  "steps": [
+    {
+      "title": "Check offline",
+      "actor": "Developer",
+      "body": "`node tools/reference-data/scripts/fetch.mjs --check`.",
+      "expect": "Exit 0; non-zero if a file breaks a rule, its SHA-256 differs from `SOURCES.md` (hand edit) or `data/` reaches 3 MB."
+    },
+    {
+      "title": "Urgent fix of one value",
+      "actor": "Developer",
+      "body": "Add `airports,XYZ,name,Example International Airport` to `data/overrides.csv` (never edit the generated CSVs).",
+      "expect": "`validate.mjs` accepts it (key must exist, value must pass the column rules)."
+    },
+    {
+      "title": "Load",
+      "actor": "Developer",
+      "body": "`pnpm --filter @velexis/reference-data build && pnpm db:seed:reference`.",
+      "expect": "`reference.loaded` with `overrides: 1` and `updated: 1` for that table; a second load reports zeros."
+    },
+    {
+      "title": "Refresh (quarterly)",
+      "actor": "Developer",
+      "body": "`NODE_USE_ENV_PROXY=1 node tools/reference-data/scripts/fetch.mjs` on Node 24, review `git diff --stat tools/reference-data`, run the tests, open a PR.",
+      "expect": "Stops, writing nothing, if a licence changed or a table is below its minimum rows."
+    },
+    {
+      "title": "On the VM",
+      "actor": "velexis-deploy",
+      "body": "Reloads only when the SHA-256 of `data/` changed (`/var/lib/velexis/reference-data.sha256`).",
+      "expect": "A failed load stops the deploy before the switch."
+    }
+  ]
+}

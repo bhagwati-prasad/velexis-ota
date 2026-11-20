@@ -1,0 +1,74 @@
+{
+  "id": "seq-close-review",
+  "type": "sequence",
+  "title": "Close a reconciliation review",
+  "caption": "OAD-022 / OBE-099. Admin: bookings/[bookingId]/review-dialog.tsx and actions.ts closeBookingReview. API: ota/backend/src/console/review-closure.service.ts. Runbook supplier-timeout-and-reconciliation.md §4.3.",
+  "actors": [
+    { "id": "staff", "label": "Staff", "kind": "user" },
+    { "id": "act", "label": "closeBookingReview", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "ama", "label": "Amadeus", "kind": "external" },
+    { "id": "pg", "label": "tenant_<key>", "kind": "db" },
+    { "id": "worker", "label": "OTA worker", "kind": "worker" }
+  ],
+  "steps": [
+    {
+      "from": "staff",
+      "to": "act",
+      "label": "Order found + record locator, or Not booked + note (≤ 2,000 characters)",
+      "kind": "call"
+    },
+    { "from": "act", "to": "act", "label": "requireStaff(\"bookings:cancel\"); Zod", "kind": "self" },
+    {
+      "from": "act",
+      "to": "api",
+      "label": "POST /v1/console/bookings/{id}/review-closure — If-Match, Idempotency-Key",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "booking pending with reconcile_outcome = manual_review? else 409 not_in_review",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "order_found: read the order in the booking's queuing office",
+      "kind": "call",
+      "note": "Accepted only with the remark VELEXIS <reference> (BACKOFFICE) of this booking, else remark_mismatch; 409 ORDER_ALREADY_IMPORTED; 403 OFFICE_NOT_ALLOWED"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "order_found: booking confirmed, reconcile_outcome = found, checkout completed",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "not_booked: booking failed (SUPPLIER_TIMEOUT), reconcile_outcome = not_found, checkout reopened or expired",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "both: booking.reconcile_closed (staff-only), staff.note, staff_actions booking.reconcile_close (note as reason)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "worker",
+      "label": "found + Stripe: payment.capture_retry → issuance per ticketing policy; not booked + Stripe: payment.void + booking.not_confirmed e-mail",
+      "kind": "async",
+      "note": "Airline card, not booked: payment failed, no e-mail; the agent asks the airline about a charge"
+    },
+    { "from": "api", "to": "act", "label": "ConsoleBooking", "kind": "return" },
+    {
+      "from": "act",
+      "to": "staff",
+      "label": "revalidate: new status, no Close the review, gone from the Reconciliation review view",
+      "kind": "return"
+    }
+  ]
+}

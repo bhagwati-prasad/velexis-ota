@@ -1,0 +1,66 @@
+{
+  "id": "seq-request-logging",
+  "type": "sequence",
+  "title": "One request, one log line (pinoHttpOptions + REDACT_PATHS)",
+  "caption": "packages/logger/src/http.ts and redact-paths.ts. Bodies, headers and query strings are never logged; /health and /health/* are not logged at all.",
+  "actors": [
+    {
+      "id": "caddy",
+      "label": "Caddy / caller",
+      "kind": "edge"
+    },
+    {
+      "id": "app",
+      "label": "NestJS app (nestjs-pino)",
+      "kind": "api"
+    },
+    {
+      "id": "ph",
+      "label": "pino-http options",
+      "kind": "lib"
+    },
+    {
+      "id": "out",
+      "label": "stdout → journald",
+      "kind": "external"
+    }
+  ],
+  "steps": [
+    {
+      "from": "caddy",
+      "to": "app",
+      "label": "GET /v1/bookings/:id with X-Request-Id",
+      "kind": "call"
+    },
+    {
+      "from": "app",
+      "to": "ph",
+      "label": "resolveRequestId: keep if ^[A-Za-z0-9._-]{8,128}$ else randomUUID()",
+      "kind": "call"
+    },
+    {
+      "from": "ph",
+      "to": "app",
+      "label": "req.id; X-Request-Id response header; req.log child { requestId }",
+      "kind": "return"
+    },
+    {
+      "from": "app",
+      "to": "out",
+      "label": "event lines during the request carry requestId; REDACT_PATHS censor '[REDACTED]'",
+      "kind": "async"
+    },
+    {
+      "from": "app",
+      "to": "caddy",
+      "label": "response",
+      "kind": "return"
+    },
+    {
+      "from": "ph",
+      "to": "out",
+      "label": "on finish: { method, route template, status, durationMs } at info, or error for 5xx with err",
+      "kind": "async"
+    }
+  ]
+}

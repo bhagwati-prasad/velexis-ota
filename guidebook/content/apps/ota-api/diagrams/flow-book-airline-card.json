@@ -1,0 +1,61 @@
+{
+  "id": "flow-book-airline-card",
+  "type": "flow",
+  "title": "Book as a guest with the airline card (no Stripe needed)",
+  "caption": "Mirrors tools/e2e/specs/storefront/checkout-airline-card.e2e.ts. Needs AIRLINE_CARD_ENABLED=true (the .env.example value) and storefront_settings.airline_card_enabled_test switched on for the demo OTA (off for a new OTA). Test card 4111 1111 1111 1111 (stub); 4000 0000 0000 0002 is declined.",
+  "steps": [
+    {
+      "title": "Switch the airline card on (development only)",
+      "actor": "Developer",
+      "body": "The demo OTA has no staff member, so use SQL as `velexis_ota_app`: `psql postgres://velexis_ota_app:dev_ota@127.0.0.1:5432/velexis -c \"UPDATE tenant_demo.storefront_settings SET airline_card_enabled_test = true, version = version + 1, updated_at = now()\"`, then drop the 5-minute storefront cache: `redis-cli -a dev_redis --scan --pattern \"t:*:test:sf:*\" | xargs -r redis-cli -a dev_redis del`. On an OTA you own, use the OTA admin settings instead (it deletes the cache itself).",
+      "expect": "`GET /v1/storefront` now lists the airline-card payment method."
+    },
+    {
+      "title": "Search and price",
+      "actor": "Traveller",
+      "screen": "/search.html → /offer.html → /price.html",
+      "url": "http://localhost:5173/",
+      "body": "Search Madrid → Paris, open an offer, choose a fare, continue to price.",
+      "expect": "Priced offer shown with total; `priced_offers` row."
+    },
+    {
+      "title": "Checkout as guest",
+      "actor": "Traveller",
+      "screen": "/checkout.html",
+      "body": "Fill one traveller and the contact e-mail, accept the terms.",
+      "expect": "`checkouts` row `open`; `checkout_travelers` with `documents_ciphertext` (never clear text); `checkout_contacts`."
+    },
+    {
+      "title": "Choose \"Card, charged by the airline\"",
+      "actor": "Traveller",
+      "screen": "/checkout/pay-airline.html",
+      "body": "The airline-card page opens with the airline's notice and price.",
+      "expect": "`POST …/payments {method: airline_card}`: checkout `pricing_mode = net` (no markup, no OTA fees), `payments` row provider `airline`, method `airline_card`."
+    },
+    {
+      "title": "Type the card",
+      "actor": "Traveller",
+      "body": "Type 4111 1111 1111 1111, any future expiry, CVC, holder.",
+      "expect": "After six digits `PATCH /v1/payments/{id}` with `{card: {brand, bin}}` re-quotes the airline card fee; totals update."
+    },
+    {
+      "title": "Pay",
+      "actor": "Traveller",
+      "body": "Press Pay.",
+      "expect": "`POST /api/v1/checkouts/{id}/airline-card-completion` → `201`; confirmation page with reference `VX…` and tickets. Booking `ticketed`, payment `captured` with `card_brand`, `card_bin`, `card_last4` only; cookie `__Host-vx_bt` (HttpOnly)."
+    },
+    {
+      "title": "Check e-mails and PDFs",
+      "actor": "Tester",
+      "url": "http://127.0.0.1:8025",
+      "body": "Open Mailpit.",
+      "expect": "`booking.confirmed` / `booking.ticketed` e-mails with the itinerary and e-ticket receipts attached; `booking_documents` rows `ready`; `notifications` rows `sent`."
+    },
+    {
+      "title": "Declines and limits",
+      "actor": "Tester",
+      "body": "Repeat with 4000 0000 0000 0002 three times on one checkout.",
+      "expect": "`402 PAYMENT_DECLINED` twice, then `403 PAYMENT_ATTEMPTS_EXCEEDED`; staff alert `staff.airline_card_alert`; Redis `t:<tenantId>:test:ac:chk:<chk>` = 3. No card number anywhere (DB, Redis, logs)."
+    }
+  ]
+}

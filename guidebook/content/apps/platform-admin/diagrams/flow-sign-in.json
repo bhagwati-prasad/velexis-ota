@@ -1,0 +1,32 @@
+{
+  "id": "flow-sign-in",
+  "type": "flow",
+  "title": "Sign in with password and TOTP",
+  "caption": "Mirrors tools/e2e/specs/admin-signin.e2e.ts.",
+  "steps": [
+    {
+      "title": "Open a console page while signed out",
+      "screen": "/tenants",
+      "url": "http://localhost:3001/tenants",
+      "body": "Any console URL.",
+      "expect": "303 to `/sign-in?next=/tenants`; heading 'Sign in'; no `__Host-vxa_*` cookie."
+    },
+    {
+      "title": "Password step",
+      "screen": "/sign-in",
+      "body": "Fill **E-mail address** and **Password**, press **Continue**.",
+      "expect": "Redirect to `/sign-in/mfa?next=/tenants`; only `__Host-vxa_mfa` is set. A non-admin or wrong password shows 'The e-mail address or password is not correct, or the account is not an active platform admin.'"
+    },
+    {
+      "title": "Code step",
+      "screen": "/sign-in/mfa",
+      "body": "Type the 6-digit **Authentication code** and press **Verify and sign in** (or **Use a recovery code instead**).",
+      "expect": "Back on `/tenants`; `__Host-vxa_at` and `__Host-vxa_rt` HttpOnly + Secure; audit row `admin.sign_in`. A wrong code shows 'The code is not correct.' at the field."
+    },
+    {
+      "title": "Sign out",
+      "body": "**Sign out** in the header.",
+      "expect": "`/sign-in?signedOut=1` with 'You are signed out.'; cookies gone; the next sign-in asks for a code again."
+    }
+  ]
+}

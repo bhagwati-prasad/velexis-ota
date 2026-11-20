@@ -1,0 +1,51 @@
+{
+  "id": "velexis",
+  "label": "Velexis",
+  "description": "The whole system.",
+  "children": [
+    {
+      "id": "platform",
+      "label": "Platform",
+      "description": "Sign-up, tenants, billing.",
+      "apps": ["portal", "platform-api"],
+      "children": [
+        {
+          "id": "identity",
+          "label": "Identity",
+          "terms": ["account", "membership", "role", "session-cookie", "mfa", "csrf"]
+        },
+        {
+          "id": "tenancy",
+          "label": "Tenancy",
+          "terms": [
+            "tenant",
+            "tenant-schema",
+            "schema-per-tenant",
+            "tenant-tx",
+            "platform-schema",
+            "provisioning"
+          ]
+        },
+        { "id": "billing", "label": "Billing", "terms": ["subscription", "stripe"] }
+      ]
+    },
+    {
+      "id": "ota-product",
+      "label": "OTA",
+      "description": "Selling flights.",
+      "children": [
+        { "id": "travel", "label": "Travel", "terms": ["ota", "pnr", "offer", "booking", "amadeus"] },
+        { "id": "api", "label": "API", "terms": ["api-key", "openapi-contract"] }
+      ]
+    },
+    {
+      "id": "engineering",
+      "label": "Engineering",
+      "children": [
+        { "id": "architecture", "label": "Architecture", "terms": ["bff", "bullmq", "reference-data"] },
+        { "id": "operations", "label": "Operations", "terms": ["mailpit"] },
+        { "id": "process", "label": "Process", "terms": ["definition-of-done"] }
+      ]
+    }
+  ]
+}

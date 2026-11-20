@@ -1,0 +1,564 @@
+{
+  "id": "storefront",
+  "name": "Storefront",
+  "kind": "frontend",
+  "product": "ota",
+  "summary": "The hosted multi-tenant storefront where an OTA's travellers search, price, book (Stripe card or airline card) and manage Amadeus flights: static HTML pages, Tailwind CSS 4 and vanilla ES modules built by Vite, served for every OTA from one build, with every booking function going through the JS SDK in cookie mode against the same-origin /api.",
+  "audience": [
+    "Travellers of every OTA (visitors, guests, signed-in customers)",
+    "OTA owners and staff checking what their customers see",
+    "Velexis developers and the owner hunting bugs"
+  ],
+  "repoPath": "ota/frontend",
+  "package": "@velexis/ota-frontend",
+  "stack": [
+    "Static HTML pages + partials (no framework)",
+    "Tailwind CSS 4 (@tailwindcss/vite 4.1.18)",
+    "Vanilla ES2022 modules, one entry module per page",
+    "Vite 6.4.6 multi-page build, dev server and preview",
+    "@velexis/ota-sdk in cookie mode (baseUrl /api)",
+    "Stripe.js v3 on the card page only",
+    "Vitest 4 + happy-dom (unit), Playwright + axe (e2e in tools/e2e)",
+    "Lighthouse 13.6.0 + puppeteer-core (performance script)"
+  ],
+  "local": {
+    "url": "http://localhost:5173",
+    "port": 5173,
+    "command": "pnpm --filter @velexis/ota-frontend dev",
+    "notes": "Serves the demo OTA (demo.ota.example.com, tenant_demo) through a Caddy-like dev proxy: /api/* to OTA_API_URL (http://127.0.0.1:4000) with X-Velexis-Edge, X-Velexis-Host and Origin. Needs the OTA API (pnpm --filter @velexis/ota-backend dev), the Amadeus stub (pnpm stub:amadeus), Mailpit and both dev:seed commands. Production-like: build, then `pnpm --filter @velexis/ota-frontend preview` on http://localhost:4173. Another OTA: STOREFRONT_DEV_HOST in ota/frontend/.env.local. Use Chromium or Firefox (Safari refuses __Host- cookies on http://localhost)."
+  },
+  "production": {
+    "host": "<key>.ota.example.com and every verified custom domain (e.g. demo.ota.example.com); files from /srv/velexis/current/storefront"
+  },
+  "dependsOn": ["sdk", "ota-api", "deploy"],
+  "talksTo": [
+    {
+      "app": "ota-api",
+      "how": "Same-origin /api/v1/* through Caddy (prod) or the Vite proxy (dev): edge caller, httpOnly __Host- cookie sessions, X-CSRF-Token on writes"
+    },
+    {
+      "app": "sdk",
+      "how": "Bundles @velexis/ota-sdk (createVelexisClient({ baseUrl: \"/api\", session: \"cookie\" })) for every API call"
+    },
+    {
+      "app": "deploy",
+      "how": "Caddy serves dist/, rewrites /p/* to p.html, adds the edge headers and the CSP"
+    },
+    {
+      "app": "ota-admin",
+      "how": "Indirect: storefront settings, pages, assets, markups and the airline-card switch made in the OTA admin change what storefront.get returns (within about 5 minutes)"
+    }
+  ],
+  "data": [
+    "tenant.storefront_settings (read)",
+    "tenant.storefront_pages (read)",
+    "tenant.storefront_assets (read)",
+    "tenant.flight_searches",
+    "tenant.flight_offers",
+    "tenant.offer_upsells",
+    "tenant.priced_offers",
+    "tenant.checkouts",
+    "tenant.checkout_travelers",
+    "tenant.checkout_contacts",
+    "tenant.checkout_ancillaries",
+    "tenant.checkout_remarks",
+    "tenant.payments",
+    "tenant.bookings (+ booking_* children)",
+    "tenant.booking_access_tokens",
+    "tenant.booking_events",
+    "tenant.customers",
+    "tenant.customer_identities",
+    "tenant.customer_sessions",
+    "tenant.customer_password_resets",
+    "tenant.customer_consents",
+    "tenant.notifications",
+    "tenant.idempotency_keys",
+    "platform.tenants (read, via the OTA API)",
+    "platform.tenant_domains (read, via the OTA API)",
+    "redis t:<tenantId>:<env>:sf:<locale>",
+    "redis rl:ota_*",
+    "browser sessionStorage vx.storefront.config, vx.storefront.pages",
+    "browser localStorage vx.currency",
+    "cookies __Host-vx_csrf, __Host-vx_at, __Host-vx_rt, __Host-vx_bt"
+  ],
+  "docs": [
+    "ota/frontend/README.md",
+    "ota/frontend/docs/pages.md",
+    "ota/frontend/docs/pages-account.md",
+    "ota/frontend/docs/build-your-own-frontend.md",
+    "ota/docs/storefront-accessibility.md",
+    "ota/docs/flows/search-and-price.md",
+    "ota/docs/flows/checkout-stripe.md",
+    "ota/docs/flows/checkout-airline-card.md",
+    "ota/docs/flows/my-bookings-and-guest-lookup.md",
+    "ota/docs/flows/change-and-cancel.md",
+    "docs/mvp/local-development.md",
+    "tools/e2e/README.md"
+  ],
+  "adrs": [
+    "docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md",
+    "docs/mvp/adr/0018-hosted-storefront-custom-domains.md",
+    "docs/mvp/adr/0011-payments-stripe-and-airline-card.md",
+    "docs/mvp/adr/0008-identity-accounts-customers-sessions.md",
+    "ota/docs/adr/0006-storefront-cookie-sessions-and-csrf.md",
+    "ota/docs/adr/0009-caller-and-tenant-resolution.md",
+    "ota/docs/adr/0012-storefront-settings-assets-and-pages.md",
+    "ota/docs/adr/0015-storefront-build-urls-and-hosting.md",
+    "ota/docs/adr/0017-airline-card-form-isolation.md",
+    "ota/docs/adr/0004-airline-card-data-handling.md"
+  ],
+  "roles": [
+    {
+      "name": "Visitor",
+      "can": "Search, price, check out as a guest (when guest checkout is on), look up a booking, sign up or sign in, read content pages"
+    },
+    {
+      "name": "Guest",
+      "can": "Everything a visitor can, plus open, change and cancel the up to 5 bookings whose tokens are in the httpOnly __Host-vx_bt cookie"
+    },
+    {
+      "name": "Customer",
+      "can": "My bookings (upcoming, past, cancelled), its own booking pages and self-service actions, the account page (profile, e-mail, password, sign out everywhere, delete account)"
+    }
+  ],
+  "screens": [
+    {
+      "route": "/",
+      "title": "Home: search flights",
+      "purpose": "Search form (one-way, return, multi-city) with location autocomplete, passengers and cabin",
+      "code": "ota/frontend/src/pages/index.js"
+    },
+    {
+      "route": "/search.html",
+      "title": "Results",
+      "purpose": "Runs the search once (search=srch_… kept in the address), filters, sort, load more",
+      "code": "ota/frontend/src/pages/search.js"
+    },
+    {
+      "route": "/offer.html?offer=off_…",
+      "title": "Flight details",
+      "purpose": "One offer, baggage, branded fares (upsell); prices the chosen fare",
+      "code": "ota/frontend/src/pages/offer.js"
+    },
+    {
+      "route": "/price.html?priced=prc_…",
+      "title": "Your price",
+      "purpose": "Confirmed price, breakdown, requirements, extras, fare rules, countdown; starts the checkout",
+      "code": "ota/frontend/src/pages/price.js"
+    },
+    {
+      "route": "/checkout.html?id=chk_…&step=…",
+      "title": "Checkout",
+      "purpose": "Travellers, contact details, extras and special requests, payment method and terms",
+      "code": "ota/frontend/src/pages/checkout.js"
+    },
+    {
+      "route": "/checkout/pay-card.html?id=chk_…&payment=pay_…",
+      "title": "Pay by card",
+      "purpose": "Stripe Payment Element, card-fee review, Pay (the only page with Stripe.js)",
+      "code": "ota/frontend/src/pages/checkout-pay-card.js"
+    },
+    {
+      "route": "/checkout/pay-airline.html?id=chk_…&payment=pay_…",
+      "title": "Pay with your card (airline card)",
+      "purpose": "The page's own card form, the airline's fee review, Pay; built on its own, no third-party script",
+      "code": "ota/frontend/src/pages/checkout-pay-airline.js"
+    },
+    {
+      "route": "/checkout/complete.html?id=chk_…&payment=pay_…",
+      "title": "Completing your booking",
+      "purpose": "Stripe's return URL: waits for the payment, then checkout.complete",
+      "code": "ota/frontend/src/pages/checkout-complete.js"
+    },
+    {
+      "route": "/confirmation.html?booking=bkg_…",
+      "title": "Confirmation",
+      "purpose": "Reference, tickets, ticketing status polling, pending mode",
+      "code": "ota/frontend/src/pages/confirmation.js"
+    },
+    {
+      "route": "/bookings.html?tab=upcoming|past|cancelled",
+      "title": "My bookings",
+      "purpose": "A signed-in customer's trips in three tabs, 20 at a time",
+      "code": "ota/frontend/src/pages/bookings.js"
+    },
+    {
+      "route": "/booking.html?id=bkg_…",
+      "title": "Booking detail",
+      "purpose": "Trip, tickets, documents, contact change, cancellation with refund preview, history, fare rules",
+      "code": "ota/frontend/src/pages/booking.js"
+    },
+    {
+      "route": "/lookup.html",
+      "title": "Find your booking",
+      "purpose": "Guest lookup by reference and last name; sets the guest cookie",
+      "code": "ota/frontend/src/pages/lookup.js"
+    },
+    {
+      "route": "/account/sign-in.html?next=…",
+      "title": "Sign in",
+      "purpose": "Customer sign-in; goes to next (a safe path) or /account/",
+      "code": "ota/frontend/src/pages/account-sign-in.js"
+    },
+    {
+      "route": "/account/sign-up.html",
+      "title": "Create an account",
+      "purpose": "Customer sign-up with the OTA's password rules and terms",
+      "code": "ota/frontend/src/pages/account-sign-up.js"
+    },
+    {
+      "route": "/account/verify.html?token=vt_…",
+      "title": "Confirm your e-mail address",
+      "purpose": "E-mail verification link target; claims guest bookings",
+      "code": "ota/frontend/src/pages/account-verify.js"
+    },
+    {
+      "route": "/account/forgot-password.html",
+      "title": "Reset your password",
+      "purpose": "Asks for a reset link (same answer for every address)",
+      "code": "ota/frontend/src/pages/account-forgot-password.js"
+    },
+    {
+      "route": "/account/reset-password.html?token=pr_…",
+      "title": "Choose a new password",
+      "purpose": "Sets a new password with the e-mailed token",
+      "code": "ota/frontend/src/pages/account-reset-password.js"
+    },
+    {
+      "route": "/account/",
+      "title": "My account",
+      "purpose": "Profile, e-mail change, password change, sign out everywhere, delete account",
+      "code": "ota/frontend/src/pages/account-index.js"
+    },
+    {
+      "route": "/p/<slug>",
+      "title": "Content page",
+      "purpose": "The OTA's pages (about, terms, privacy, FAQ…) from storefront_pages, served by p.html",
+      "code": "ota/frontend/src/pages/p.js"
+    },
+    {
+      "route": "/404.html",
+      "title": "Page not found",
+      "purpose": "Caddy's handle_errors 404 with the branded header and footer",
+      "code": "ota/frontend/src/pages/404.js"
+    }
+  ],
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/api/v1/storefront",
+      "operationId": "getStorefront",
+      "purpose": "Runtime configuration (every page, cached 5 min)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/storefront/pages",
+      "operationId": "listStorefrontPages",
+      "purpose": "Footer links of content pages"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/storefront/pages/{slug}",
+      "operationId": "getStorefrontPage",
+      "purpose": "Content page /p/<slug>"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/reference/locations",
+      "operationId": "searchLocations",
+      "purpose": "Airport/city autocomplete"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/reference/airports/{iataCode}",
+      "operationId": "getAirport",
+      "purpose": "Label of a pre-filled code"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/reference/airlines",
+      "operationId": "listAirlines",
+      "purpose": "Airline names of the result facets"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/reference/countries",
+      "operationId": "listCountries",
+      "purpose": "Nationality and issuing-country selects"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/flight-searches",
+      "operationId": "createFlightSearch",
+      "purpose": "Run a search (60 s)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/flight-searches/{searchId}",
+      "operationId": "getFlightSearch",
+      "purpose": "Rebuild the summary from a bookmark"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/flight-searches/{searchId}/offers",
+      "operationId": "listFlightSearchResults",
+      "purpose": "Results page: filters, sort, cursor"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/flight-offers/{offerId}",
+      "operationId": "getFlightOffer",
+      "purpose": "Offer page"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/flight-offers/{offerId}/upsells",
+      "operationId": "upsellFlightOffer",
+      "purpose": "Fare families"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/priced-offers",
+      "operationId": "priceFlightOffers",
+      "purpose": "Price the chosen fare"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/priced-offers/{pricedOfferId}",
+      "operationId": "getPricedOffer",
+      "purpose": "Price page"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/priced-offers/{pricedOfferId}/ancillaries",
+      "operationId": "getPricedOfferAncillaries",
+      "purpose": "Extras (price page and checkout)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/priced-offers/{pricedOfferId}/fare-rules",
+      "operationId": "getPricedOfferFareRules",
+      "purpose": "Changes and refunds"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/checkouts",
+      "operationId": "createCheckout",
+      "purpose": "Continue to checkout"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/checkouts/{checkoutId}",
+      "operationId": "getCheckout",
+      "purpose": "Checkout state, version, progress"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/checkouts/{checkoutId}/travelers",
+      "operationId": "setCheckoutTravelers",
+      "purpose": "Travellers step (If-Match)"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/checkouts/{checkoutId}/contacts",
+      "operationId": "setCheckoutContacts",
+      "purpose": "Contact step (If-Match)"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/checkouts/{checkoutId}/ancillaries",
+      "operationId": "setCheckoutAncillaries",
+      "purpose": "Extras step (If-Match, expectedTotal)"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/checkouts/{checkoutId}/remarks",
+      "operationId": "setCheckoutRemarks",
+      "purpose": "Special requests (If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/checkouts/{checkoutId}/payments",
+      "operationId": "createCheckoutPayment",
+      "purpose": "Payment step: card or airline_card"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/payments/{paymentId}",
+      "operationId": "updatePayment",
+      "purpose": "Card-fee quote (brand, BIN)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/payments/{paymentId}",
+      "operationId": "getPayment",
+      "purpose": "Payment state (card, complete pages)"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/checkouts/{checkoutId}/complete",
+      "operationId": "completeCheckout",
+      "purpose": "Book after Stripe (Idempotency-Key from the ids)"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/checkouts/{checkoutId}/airline-card-completion",
+      "operationId": "completeCheckoutWithAirlineCard",
+      "purpose": "Book and pay with the airline card (edge only)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings",
+      "operationId": "listBookings",
+      "purpose": "My bookings tabs"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}",
+      "operationId": "getBooking",
+      "purpose": "Confirmation and booking pages (refresh=true: from airline)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}/ticketing",
+      "operationId": "getBookingTicketingStatus",
+      "purpose": "Ticketing polling"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/bookings/lookup",
+      "operationId": "lookupBooking",
+      "purpose": "Guest lookup"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/bookings/{bookingId}",
+      "operationId": "updateBooking",
+      "purpose": "Change contact details (If-Match)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}/cancellation-quote",
+      "operationId": "quoteBookingCancellation",
+      "purpose": "Refund preview"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/bookings/{bookingId}/cancellation",
+      "operationId": "cancelBooking",
+      "purpose": "Cancel (If-Match, Idempotency-Key)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}/documents",
+      "operationId": "listBookingDocuments",
+      "purpose": "Documents list"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}/documents/{documentId}/download-url",
+      "operationId": "getBookingDocumentDownloadUrl",
+      "purpose": "Signed download URL (5 min)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}/fare-rules",
+      "operationId": "getBookingFareRules",
+      "purpose": "Booking fare rules"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/bookings/{bookingId}/events",
+      "operationId": "listBookingEvents",
+      "purpose": "Booking history"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/sign-up",
+      "operationId": "signUp",
+      "purpose": "Create an account"
+    },
+    { "method": "POST", "path": "/api/v1/auth/sign-in", "operationId": "signIn", "purpose": "Sign in" },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/sign-out",
+      "operationId": "signOut",
+      "purpose": "Sign out (scope all: everywhere)"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/auth/session",
+      "operationId": "getSession",
+      "purpose": "Account menu (401 = signed out)"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/refresh",
+      "operationId": "refreshSession",
+      "purpose": "SDK refresh after 401 TOKEN_EXPIRED"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/email-verification/confirm",
+      "operationId": "verifyEmail",
+      "purpose": "Verify page"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/email-verification/resend",
+      "operationId": "resendEmailVerification",
+      "purpose": "Send the link again"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/password-resets",
+      "operationId": "requestPasswordReset",
+      "purpose": "Forgot password"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/password-resets/confirm",
+      "operationId": "resetPassword",
+      "purpose": "Reset password"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/auth/password/change",
+      "operationId": "changePassword",
+      "purpose": "Account page password change"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/account",
+      "operationId": "getAccount",
+      "purpose": "Account page profile"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/account",
+      "operationId": "updateAccount",
+      "purpose": "Profile and e-mail change (If-Match)"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/account/deletion",
+      "operationId": "deleteAccount",
+      "purpose": "Delete account"
+    }
+  ],
+  "tags": [
+    "storefront",
+    "multi-tenant",
+    "static",
+    "vanilla-js",
+    "tailwind",
+    "vite",
+    "sdk-cookie-mode",
+    "csrf",
+    "stripe",
+    "airline-card",
+    "pci",
+    "accessibility",
+    "wcag-2.2"
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "id": "suspend-and-resume-ota",
+  "title": "Platform admin suspends and resumes an OTA",
+  "summary": "Velexis staff find an OTA, suspend it with a reason, watch the job reach the OTA worker, the owner's banner and e-mail, the storefront and console refuse it within 60 seconds; then resume it and check the audit trail, the jobs and the queues.",
+  "apps": ["platform-admin", "platform-api", "ota-api", "portal", "storefront", "ota-admin"],
+  "roles": ["Velexis staff", "OTA owner", "Traveller"],
+  "duration": "20 min",
+  "prerequisites": [
+    "The platform admin signed in ([[journey:run-the-stack]]); your OTA active with its storefront on the dev server; its owner signed in to the portal in another browser.",
+    "Do not suspend the demo OTA if you rely on it for other journeys; use your own."
+  ],
+  "steps": [
+    {
+      "id": "find",
+      "app": "platform-admin",
+      "title": "Find the OTA by its owner's address",
+      "url": "http://localhost:3001/tenants",
+      "actions": "Search the tenants by the owner's e-mail address (or the key) and open the OTA.",
+      "expect": "`/tenants/ten_…` with the OTA's name as heading, status *Active*, plan, environment, connections, members and tabs (audit, jobs).",
+      "code": [
+        "platform/admin/src/app/(app)/tenants/[tenantId]/page.tsx",
+        "platform/backend/src/admin/admin-tenants.service.ts"
+      ]
+    },
+    {
+      "id": "storefront-before",
+      "app": "storefront",
+      "title": "The storefront works before the suspension",
+      "url": "http://localhost:5173",
+      "actions": "Open the OTA's storefront in a traveller's tab and keep the tab open.",
+      "expect": "*Search flights* with the OTA's name and the *Test mode* note; `/api/v1/storefront` answers 200.",
+      "code": ["ota/frontend/src/pages/index.js"]
+    },
+    {
+      "id": "suspend",
+      "app": "platform-admin",
+      "title": "Suspend with a reason",
+      "url": "http://localhost:3001/tenants/ten_…",
+      "actions": "Press **Suspend**; in the dialog choose **Kind of suspension** (for example *request*) and write a **Reason**; press **Suspend OTA**. Note the time.",
+      "expect": "A status message *The OTA is suspended.* with the status *Suspended*; the button becomes **Resume**. The suspension job appears under the OTA's jobs and becomes done once the OTA worker answered.",
+      "data": "`SELECT status, suspended_at, suspension_reason FROM platform.tenants WHERE id = 'ten_…';` → `suspended`. `platform.provisioning_jobs` `kind = suspend` → `succeeded`. Redis: `staffdeny:tenant:<tenantId>` (written by the OTA worker on `tenant.suspend`). Audit `tenant.suspended` with your reason; `vx:invalidate {type: \"tenant\"}`.",
+      "code": [
+        "platform/admin/src/app/(app)/tenants/[tenantId]/suspend-form.tsx",
+        "platform/backend/src/provisioning/suspension.service.ts",
+        "ota/backend/src/provisioning/tenant-ops.processor.ts"
+      ]
+    },
+    {
+      "id": "storefront-suspended",
+      "app": "storefront",
+      "title": "Travellers see the OTA unavailable within 60 seconds",
+      "actions": "Open the storefront in a **new** tab. In the tab you kept open, run a search.",
+      "expect": "The new tab shows *This travel site is temporarily unavailable*, no Retry button, no search form, and a `noindex` robots tag; `/api/v1/storefront` answers `403 TENANT_SUSPENDED`. The old tab still shows its 5-minute copy of the home page, but its search is answered `403 TENANT_SUSPENDED` and replaced by the same page.",
+      "code": [
+        "ota/backend/src/tenancy/tenant-resolver.ts",
+        "ota/frontend/src/lib/errors.js",
+        "ota/frontend/partials/states.html"
+      ]
+    },
+    {
+      "id": "owner-sees",
+      "app": "portal",
+      "title": "The owner sees the banner and the e-mail",
+      "url": "http://localhost:3000/otas/ten_…",
+      "actions": "As the owner reload the OTA's page; open Mailpit; try **Open console**.",
+      "expect": "A suspended banner on the OTA's pages; Mailpit: \"`<OTA>` has been suspended\". No console token is issued for a suspended OTA; an already open console gets `TENANT_SUSPENDED`.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/layout.tsx",
+        "platform/backend/src/memberships/console-token.service.ts"
+      ]
+    },
+    {
+      "id": "resume",
+      "app": "platform-admin",
+      "title": "Resume with a reason",
+      "url": "http://localhost:3001/tenants/ten_…",
+      "actions": "Press **Resume**, write a **Reason**, press **Resume OTA**.",
+      "expect": "*The OTA is active again.* with status *Active*; the button is **Suspend** again. Mailpit: \"`<OTA>` is active again\". A new storefront tab works within 60 seconds, and the old tab's next call (for example the From field's airport suggestions) is answered again.",
+      "data": "`tenants.status = active`; a `resume` job `succeeded`; `staffdeny:tenant:<tenantId>` deleted; audit `tenant.resumed`.",
+      "code": ["platform/backend/src/provisioning/suspension.service.ts"]
+    },
+    {
+      "id": "audit-jobs",
+      "app": "platform-admin",
+      "title": "Audit, jobs and queues",
+      "url": "http://localhost:3001/provisioning-jobs",
+      "actions": "Open the OTA's audit tab; **Provisioning jobs** filtered by the OTA (the filter is kept in the URL) and one job; **Queues** and the `ota-tenant-ops` and `platform-tenant-events` queues; **Audit** with a filter and its CSV export.",
+      "expect": "Both actions are listed with you as actor and their reasons; the jobs show their steps and attempts; OTA queues are view-only (no retry); the CSV downloads with the same rows.",
+      "code": [
+        "platform/admin/src/app/(app)/provisioning-jobs/[jobId]/page.tsx",
+        "platform/admin/src/app/(app)/queues/[queue]/page.tsx",
+        "platform/admin/src/app/(app)/audit/export.csv/route.ts",
+        "platform/backend/src/admin/admin-jobs.service.ts"
+      ]
+    }
+  ]
+}

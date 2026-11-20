@@ -1,0 +1,38 @@
+{
+  "id": "document-states",
+  "type": "state",
+  "title": "Booking document status (booking_documents.status)",
+  "caption": "src/documents/documents.processor.ts and documents.repository.ts: no pending rows are written (a document without a row is not ready yet); a new ready version supersedes the older ones; a failed row supersedes nothing, so the last ready version stays downloadable.",
+  "states": [
+    {
+      "id": "requested",
+      "label": "document.render queued",
+      "kind": "initial",
+      "detail": "On booking.created, booking.ticketed, booking.schedule_changed, booking.cancelled, … (kind, bookingVersion)."
+    },
+    {
+      "id": "ready",
+      "label": "ready",
+      "kind": "normal",
+      "detail": "PDF stored at `storage_key` (tenant_<key>/…), `content_hash` SHA-256, downloadable through a signed URL."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Renderer, storage or DB error: nothing stored, `size_bytes` null; BullMQ retries (5 attempts)."
+    },
+    {
+      "id": "superseded",
+      "label": "superseded",
+      "kind": "final",
+      "detail": "An older version replaced by a newer ready one."
+    }
+  ],
+  "transitions": [
+    { "from": "requested", "to": "ready", "label": "rendered and stored" },
+    { "from": "requested", "to": "failed", "label": "error" },
+    { "from": "failed", "to": "superseded", "label": "next ready version" },
+    { "from": "ready", "to": "superseded", "label": "next ready version" }
+  ]
+}

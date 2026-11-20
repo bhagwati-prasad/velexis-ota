@@ -1,0 +1,26 @@
+{
+  "id": "flow-go-live",
+  "type": "flow",
+  "title": "Go live",
+  "caption": "Owner only, FEATURE_LIVE_SWITCH on, step-up within 15 minutes.",
+  "steps": [
+    {
+      "title": "Step-up",
+      "actor": "Owner",
+      "body": "`POST /v1/auth/step-up {code}`.",
+      "expect": "New tokens with `mfa_at` = now."
+    },
+    {
+      "title": "Go live",
+      "actor": "Owner",
+      "body": "`POST /v1/tenants/{tenantId}/go-live {confirm: true}`.",
+      "expect": "All met: `storefront_environment = 'live'`, live payment connection created from the test one, audit `tenant.went_live`. Missing: `422 LIVE_PRECONDITIONS_UNMET` with `details.missing` among amadeus_live, payments_live, payout_account, plan_live_mode, subscription, mfa."
+    },
+    {
+      "title": "After",
+      "actor": "Tester",
+      "body": "Create a live key; check `MfaEnrolmentGuard`.",
+      "expect": "Live keys allowed; every owner/admin without MFA now gets `403 MFA_REQUIRED` (`enrolment_required`)."
+    }
+  ]
+}

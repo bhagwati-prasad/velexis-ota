@@ -1,0 +1,73 @@
+{
+  "id": "tenant-fanout-states",
+  "type": "state",
+  "title": "One tenant schema in a deploy fan-out",
+  "caption": "packages/db/src/migrate/tenants.ts. Every target ends in exactly one list of the report; the run exits 3 when failed / total > max-failure-ratio (default 0.1: 1 of 10 passes, 1 of 3 does not).",
+  "states": [
+    {
+      "id": "target",
+      "label": "Target (status provisioning / active / suspended)",
+      "kind": "initial"
+    },
+    {
+      "id": "queued",
+      "label": "Waiting for a slot (concurrency 4)",
+      "kind": "normal"
+    },
+    {
+      "id": "running",
+      "label": "Migrating (own connection, advisory xact lock on the schema)",
+      "kind": "normal"
+    },
+    {
+      "id": "applied",
+      "label": "applied[] (now at target)",
+      "kind": "final",
+      "detail": "Lists the files this run applied; none on a re-run."
+    },
+    {
+      "id": "skipped",
+      "label": "skipped[]",
+      "kind": "final",
+      "detail": "A provisioning tenant whose schema does not exist yet: provisioning applies every file."
+    },
+    {
+      "id": "failed",
+      "label": "failed[]",
+      "kind": "error",
+      "detail": "Failing file (or null for a lock timeout), SQLSTATE, exitCode 2 for a checksum mismatch. Active/suspended without a schema also fails."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "target",
+      "to": "queued",
+      "label": "SELECT … ORDER BY key"
+    },
+    {
+      "from": "queued",
+      "to": "running",
+      "label": "slot free"
+    },
+    {
+      "from": "target",
+      "to": "skipped",
+      "label": "provisioning, no schema"
+    },
+    {
+      "from": "running",
+      "to": "applied",
+      "label": "COMMIT"
+    },
+    {
+      "from": "running",
+      "to": "failed",
+      "label": "error / checksum mismatch / foreign schema"
+    },
+    {
+      "from": "failed",
+      "to": "target",
+      "label": "next deploy repeats the fan-out"
+    }
+  ]
+}

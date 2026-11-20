@@ -1,0 +1,42 @@
+{
+  "id": "domain-states",
+  "type": "state",
+  "title": "Custom domain as /domains shows it",
+  "caption": "platform.tenant_domains.verification_status (DNS) plus tls_status (pending, issued, failed, expired). Re-check queues the checks; Remove deletes the row at once. Sub-domains can only be re-checked (TLS).",
+  "states": [
+    { "id": "added", "label": "added by the owner", "kind": "initial" },
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "normal",
+      "detail": "72-hour window (`verification_deadline_at`); `last_check_error` in words. **Re-check**, **Remove**."
+    },
+    {
+      "id": "verified",
+      "label": "verified",
+      "kind": "normal",
+      "detail": "Daily re-check; failures counted '2 of 3'. TLS issued on demand by Caddy."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Window passed or 3 failed daily re-checks. Re-check probes the certificate only."
+    },
+    {
+      "id": "removed",
+      "label": "removed (row deleted)",
+      "kind": "final",
+      "detail": "Owners e-mailed without the reason; sub-domain primary again; `tlsask:` cache dropped."
+    }
+  ],
+  "transitions": [
+    { "from": "added", "to": "pending", "label": "addDomain (portal)" },
+    { "from": "pending", "to": "verified", "label": "DNS records found (5-min run or Re-check)" },
+    { "from": "pending", "to": "failed", "label": "72 h pass" },
+    { "from": "verified", "to": "failed", "label": "3 failed daily re-checks" },
+    { "from": "pending", "to": "removed", "label": "Remove (reason)" },
+    { "from": "verified", "to": "removed", "label": "Remove (reason)" },
+    { "from": "failed", "to": "removed", "label": "Remove (reason)" }
+  ]
+}

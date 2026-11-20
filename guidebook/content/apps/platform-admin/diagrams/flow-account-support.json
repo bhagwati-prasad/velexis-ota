@@ -1,0 +1,31 @@
+{
+  "id": "flow-account-support",
+  "type": "flow",
+  "title": "Account support: unlock, disable, enable, reset two-factor",
+  "caption": "Mirrors admin-signin.e2e.ts. Never reset MFA only because someone asks: identity check first (runbook §6).",
+  "steps": [
+    {
+      "title": "Find the account",
+      "screen": "/accounts",
+      "url": "http://localhost:3001/accounts?q=user@example.com",
+      "body": "Search by part of the e-mail or name; open the account.",
+      "expect": "Fields, active session count, memberships with OTA status and role, last 50 audit rows, links to the audit log by actor and by target."
+    },
+    {
+      "title": "Unlock",
+      "screen": "/accounts/[accountId]",
+      "body": "After 5 wrong portal passwords the page shows 'Locked until …'. **Unlock** → **Unlock account** (no reason).",
+      "expect": "'The account is unlocked.' and 'Not locked'; the next sign-in reaches the code step."
+    },
+    {
+      "title": "Disable and enable",
+      "body": "**Disable** → reason → **Disable account**; then **Enable** → reason → **Enable account**.",
+      "expect": "Disabled sign-ins answer `ACCOUNT_DISABLED`; sessions revoked and `staffdeny:acct:<id>` written; enable restores sign-in (revoked sessions stay revoked)."
+    },
+    {
+      "title": "Reset two-factor",
+      "body": "**Reset two-factor** → reason that says how identity was checked → **Reset two-factor authentication** → code.",
+      "expect": "'Two-factor authentication is turned off for this account, and the person got an e-mail.'; e-mail about two-factor in Mailpit; the next sign-in needs no code. Not offered for platform admins."
+    }
+  ]
+}

@@ -518,13 +518,16 @@ jobs:
         run: pnpm dev:keys
 
       # The scripts in tools/ci and tools/perf have no package.json, so Turborepo does not lint or test them. tools/perf
-      # (the pure helpers of platform-smoke.mjs) since lead decision (13c) of 2026-11-10, approved by the owner.
-      - name: Lint and test the CI checks and tools/perf
+      # (the pure helpers of platform-smoke.mjs) since lead decision (13c) of 2026-11-10, approved by the owner; the
+      # guidebook since lead decision (35e) of 2026-11-20, approved by the owner.
+      - name: Lint and test the CI checks, tools/perf and the guidebook
         run: |
           pnpm exec eslint tools/ci
           node --test tools/ci/*.test.mjs
           pnpm exec eslint tools/perf
           node --test tools/perf/*.test.mjs
+          pnpm exec eslint guidebook
+          node --test guidebook/tools/guidebook.test.mjs
 
       - name: Format
         run: pnpm format:check

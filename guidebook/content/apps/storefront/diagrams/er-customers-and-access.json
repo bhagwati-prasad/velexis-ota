@@ -1,0 +1,427 @@
+{
+  "id": "er-customers-and-access",
+  "type": "er",
+  "title": "Customers, sessions, guest access and the caches around them",
+  "caption": "Customer accounts (tenant schema), the platform rows that map a host to a tenant (read only for the OTA API), and the Redis keys that shape what a storefront page sees. Redis entities are key patterns, not tables.",
+  "entities": [
+    {
+      "id": "customers",
+      "label": "customers",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (cus_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "email",
+          "type": "text"
+        },
+        {
+          "name": "email_verified_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "pending_email",
+          "type": "text"
+        },
+        {
+          "name": "first_name / last_name",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "pending_verification|active|disabled|deleted"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "version",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "id": "customer_identities",
+      "label": "customer_identities",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "password_hash",
+          "type": "argon2id"
+        },
+        {
+          "name": "verification_token_hash",
+          "type": "text"
+        },
+        {
+          "name": "failed_attempts",
+          "type": "integer"
+        },
+        {
+          "name": "locked_until",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "customer_sessions",
+      "label": "customer_sessions",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "refresh_token_hash",
+          "type": "text"
+        },
+        {
+          "name": "family_id",
+          "type": "text"
+        },
+        {
+          "name": "remember_me",
+          "type": "boolean"
+        },
+        {
+          "name": "family_expires_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "revoked_at / revoke_reason",
+          "type": "timestamptz / text"
+        }
+      ]
+    },
+    {
+      "id": "customer_password_resets",
+      "label": "customer_password_resets",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "token_hash",
+          "type": "text"
+        },
+        {
+          "name": "expires_at / used_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "customer_consents",
+      "label": "customer_consents",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "kind",
+          "type": "terms|privacy|marketing"
+        },
+        {
+          "name": "policy_version",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "bookings",
+      "label": "bookings",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id (bkg_)",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "customer_id",
+          "type": "text (NULL = guest)",
+          "key": "fk"
+        },
+        {
+          "name": "reference / record_locator",
+          "type": "text"
+        },
+        {
+          "name": "lead_last_name",
+          "type": "text"
+        },
+        {
+          "name": "environment",
+          "type": "test|live"
+        }
+      ]
+    },
+    {
+      "id": "booking_access_tokens",
+      "label": "booking_access_tokens",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "booking_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "token_hash",
+          "type": "text"
+        },
+        {
+          "name": "issued_via",
+          "type": "booking_created|lookup|email_link|staff"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "schema_name",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "provisioning|active|suspended|…"
+        },
+        {
+          "name": "storefront_environment",
+          "type": "test|live"
+        }
+      ]
+    },
+    {
+      "id": "tenant_domains",
+      "label": "platform.tenant_domains",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "hostname",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "kind",
+          "type": "subdomain|custom"
+        },
+        {
+          "name": "purpose",
+          "type": "storefront|…"
+        },
+        {
+          "name": "is_primary",
+          "type": "boolean"
+        },
+        {
+          "name": "verification_status / tls_status",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "id": "redis_sf",
+      "label": "t:<tenantId>:<env>:sf:<locale>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "storefront.get (caller-independent part)",
+          "type": "JSON"
+        },
+        {
+          "name": "dropped by settings changes and domain invalidations",
+          "type": "TTL ~5 min"
+        }
+      ]
+    },
+    {
+      "id": "redis_host",
+      "label": "host:<hostname> / tenantkey:<key>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "tenant id (or unknown, 10 s)",
+          "type": "string"
+        },
+        {
+          "name": "TTL 60 s, dropped by vx:invalidate",
+          "type": "cache"
+        }
+      ]
+    },
+    {
+      "id": "redis_rl",
+      "label": "rl:ota_<throttler>:<digest>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "ota_lookup_ip / ota_lookup_reference (5)",
+          "type": "counter"
+        },
+        {
+          "name": "ota_sign_in (10), ota_shopping (30)",
+          "type": "counter"
+        },
+        {
+          "name": "ota_airline_card_ip (5), ota_checkout_payment (10)",
+          "type": "counter"
+        }
+      ]
+    },
+    {
+      "id": "redis_authfail",
+      "label": "t:<tenantId>:<env>:authfail:<sha256(email)>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "sign-in failures (5 → 423 ACCOUNT_LOCKED 15 min)",
+          "type": "counter"
+        }
+      ]
+    },
+    {
+      "id": "redis_cust",
+      "label": "t:<tenantId>:<env>:cust:<customerId>",
+      "schema": "redis",
+      "fields": [
+        {
+          "name": "1 = may act, 0 = revoked (account deleted)",
+          "type": "flag"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "customers",
+      "to": "customer_identities",
+      "label": "customer_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customers",
+      "to": "customer_sessions",
+      "label": "customer_id (refresh families)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customers",
+      "to": "customer_password_resets",
+      "label": "customer_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customers",
+      "to": "customer_consents",
+      "label": "customer_id",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customers",
+      "to": "bookings",
+      "label": "customer_id (claimed guest bookings too)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "bookings",
+      "to": "booking_access_tokens",
+      "label": "booking_id (__Host-vx_bt entries)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenants",
+      "to": "tenant_domains",
+      "label": "tenant_id (host → tenant)",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "tenant_domains",
+      "to": "redis_host",
+      "label": "cached as",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "tenants",
+      "to": "redis_sf",
+      "label": "storefront.get cache",
+      "cardinality": "1-n"
+    },
+    {
+      "from": "customer_identities",
+      "to": "redis_authfail",
+      "label": "failure counter",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "customers",
+      "to": "redis_cust",
+      "label": "access flag",
+      "cardinality": "1-1"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "id": "seq-guest-lookup",
+  "type": "sequence",
+  "title": "Guest lookup and the booking cookie",
+  "caption": "`src/pages/lookup.js` and the booking access guard. Every mismatch answers the same `404`; five failures per 15 minutes per IP and per reference are allowed.",
+  "actors": [
+    {
+      "id": "g",
+      "label": "Guest",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "lookup page",
+      "kind": "ui"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "g",
+      "to": "b",
+      "label": "reference (spaces removed, upper case) + last name",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "format checks: 5-10 letters/digits, last name ≤ 60",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/bookings/lookup (new Idempotency-Key per submit)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "rl:ota_lookup_ip, rl:ota_lookup_reference",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "match reference / record locator + any traveller's last name, environment",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "booking_access_tokens (issued_via lookup), booking_events booking.lookup",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "200 + Set-Cookie __Host-vx_bt (prepended, max 5 entries)",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "location.assign(/booking.html?id=bkg_…)",
+      "kind": "self"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "or 404 (one message, no field marked) / 429 (button disabled until Retry-After)",
+      "kind": "return"
+    }
+  ]
+}

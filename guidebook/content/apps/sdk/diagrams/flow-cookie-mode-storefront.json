@@ -1,0 +1,48 @@
+{
+  "id": "flow-cookie-mode-storefront",
+  "type": "flow",
+  "title": "Watch cookie mode at work in the hosted storefront",
+  "caption": "The storefront's single client (ota/frontend/src/lib/client.js) runs in cookie mode. Use the browser's DevTools (Network and Application tabs) on the local storefront; the Vite dev server proxies /api/* to the OTA API with the edge headers.",
+  "steps": [
+    {
+      "title": "Open the storefront",
+      "actor": "Owner",
+      "screen": "/",
+      "url": "http://localhost:5173/",
+      "body": "Start the storefront (`pnpm --filter @velexis/ota-frontend dev`) with the OTA API running. Open DevTools → Network, filter `api/v1`.",
+      "expect": "`GET /api/v1/storefront` answers 200 and sets `__Host-vx_csrf` (Application → Cookies). No request carries `X-Api-Key` or `Authorization`."
+    },
+    {
+      "title": "Search and price",
+      "actor": "Owner",
+      "screen": "/search.html → /price.html",
+      "body": "Search PAR → NYC for a date a month ahead, open an offer and continue to the price page.",
+      "expect": "`POST /api/v1/flight-searches` and `POST /api/v1/priced-offers` carry `X-CSRF-Token` equal to the cookie value and an `Idempotency-Key`; requests use `credentials: same-origin` (cookies sent automatically)."
+    },
+    {
+      "title": "Delete the CSRF cookie, then write",
+      "actor": "Owner",
+      "body": "Application → Cookies → delete `__Host-vx_csrf`, then trigger a write (continue to checkout).",
+      "expect": "Exactly one extra `GET /api/v1/storefront` (sent with `cache: no-store`) before the write; the write then succeeds."
+    },
+    {
+      "title": "Sign in and let the access token expire",
+      "actor": "Owner",
+      "screen": "/account/sign-in.html",
+      "body": "Sign in as a customer. Delete `__Host-vx_at` (the browser also drops it by itself after its 900 s `Max-Age`) and open *My trips*.",
+      "expect": "The page call answers `401 TOKEN_EXPIRED` (a refresh cookie without an access cookie counts as an expired session), then one `POST /api/v1/auth/refresh` with an empty body and `X-CSRF-Token`, then the call again. The refresh response body has no `accessToken` / `refreshToken` (AuthSessionInfo)."
+    },
+    {
+      "title": "Break the refresh",
+      "actor": "Owner",
+      "body": "Signed in, copy the value of `__Host-vx_rt` (Application → Cookies), sign out, then add `__Host-vx_rt` back with the copied value (no `__Host-vx_at`) and open *My trips*. Separately: delete both cookies and open *My trips*.",
+      "expect": "First case: `401 TOKEN_EXPIRED`, one refresh refused with `401` (the session was revoked at sign-out), both cookies cleared, the signed-out state shown (`onSessionExpired`), no loop of refreshes. Second case: `401 UNAUTHENTICATED` and no refresh at all (only `TOKEN_EXPIRED` triggers one)."
+    },
+    {
+      "title": "Check the database",
+      "actor": "Owner",
+      "body": "`SELECT id, rotated_at, replaced_by_id, revoked_at, revoke_reason FROM tenant_demo.customer_sessions ORDER BY created_at DESC LIMIT 5;`",
+      "expect": "Each successful refresh rotated one row (`rotated_at`, `replaced_by_id`) and added the next one in the same `family_id`; nothing is `rotation_reuse` unless a refresh cookie was presented twice."
+    }
+  ]
+}

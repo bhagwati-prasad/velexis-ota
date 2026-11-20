@@ -1,0 +1,95 @@
+{
+  "id": "seq-migrate-tenants",
+  "type": "sequence",
+  "title": "Deploy fan-out: migrate.js tenants, then the report to the platform",
+  "caption": "packages/db/src/migrate/tenants.ts; deploy/scripts/deploy.sh section 2; ota/backend/src/provisioning/report-migrations.command.ts. The runner never writes platform.tenant_schema_migrations itself.",
+  "actors": [
+    {
+      "id": "deploy",
+      "label": "velexis-deploy",
+      "kind": "edge"
+    },
+    {
+      "id": "cli",
+      "label": "migrate.js tenants",
+      "kind": "lib"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL",
+      "kind": "db"
+    },
+    {
+      "id": "ota",
+      "label": "OTA CLI tenants:report-migrations",
+      "kind": "worker"
+    },
+    {
+      "id": "q",
+      "label": "Redis vx:platform-tenant-events",
+      "kind": "queue"
+    },
+    {
+      "id": "pw",
+      "label": "Platform worker",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "deploy",
+      "to": "cli",
+      "label": "--dir migrations/tenant --concurrency 4 --max-failure-ratio 0.1 --report migrate-<sha>.json",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "SELECT schema_name FROM platform.tenants WHERE status IN ('provisioning','active','suspended') ORDER BY key",
+      "kind": "call"
+    },
+    {
+      "from": "cli",
+      "to": "pg",
+      "label": "per schema (≤ 4 at once): BEGIN; SET LOCAL ROLE velexis_provisioner; pg_advisory_xact_lock(hashtext(schema)); set_config search_path; pending files + ledger rows; COMMIT",
+      "kind": "call",
+      "note": "Provisioning tenant without schema → skipped; active/suspended without schema → failed."
+    },
+    {
+      "from": "cli",
+      "to": "deploy",
+      "label": "report {target, total, applied[], failed[], skipped[]} (mode 0600); exit 3 when failed/total > 0.1",
+      "kind": "return"
+    },
+    {
+      "from": "deploy",
+      "to": "ota",
+      "label": "tenants:report-migrations --report …",
+      "kind": "call"
+    },
+    {
+      "from": "ota",
+      "to": "q",
+      "label": "tenant.migrated / tenant.migration_failed (jobId null) per schema",
+      "kind": "async"
+    },
+    {
+      "from": "pw",
+      "to": "q",
+      "label": "consume, validateJob",
+      "kind": "call"
+    },
+    {
+      "from": "pw",
+      "to": "pg",
+      "label": "write platform.tenant_schema_migrations",
+      "kind": "call"
+    },
+    {
+      "from": "deploy",
+      "to": "deploy",
+      "label": "switch release only after both succeeded",
+      "kind": "self"
+    }
+  ]
+}

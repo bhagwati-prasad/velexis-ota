@@ -1,0 +1,54 @@
+{
+  "id": "seq-healthcheck",
+  "type": "sequence",
+  "title": "On-VM health check: one e-mail per state change",
+  "caption": "deploy/scripts/healthcheck.sh (velexis-healthcheck), timer every 5 minutes. State per check in /var/lib/velexis/healthcheck/<check>.state.",
+  "actors": [
+    { "id": "hc", "label": "velexis-healthcheck (root, no capabilities)", "kind": "worker" },
+    { "id": "lock", "label": "/proc/locks (deploy lock)", "kind": "db" },
+    { "id": "units", "label": "127.0.0.1:<port>/health/ready", "kind": "api" },
+    { "id": "sys", "label": "df, redis-cli INFO, backup marker, openssl s_client", "kind": "worker" },
+    { "id": "sf", "label": "Caddy: demo storefront payment pages", "kind": "edge" },
+    { "id": "state", "label": "/var/lib/velexis/healthcheck/", "kind": "db" },
+    { "id": "alert", "label": "velexis-alert message (SMTP of alert.env)", "kind": "external" }
+  ],
+  "steps": [
+    {
+      "from": "hc",
+      "to": "lock",
+      "label": "is velexis-deploy holding /run/velexis-deploy.lock? (read, never taken)",
+      "kind": "call"
+    },
+    {
+      "from": "hc",
+      "to": "units",
+      "label": "ready-<unit> for enabled units (5 s); workers' queues → failed-jobs (> 20/h), queue-age (> 10 min)",
+      "kind": "call"
+    },
+    {
+      "from": "hc",
+      "to": "sys",
+      "label": "disk-root / disk-var-lib-postgresql (> 80 %), redis-memory (> 70 %), backup-age (> 26 h), tls-<host> (< 14 days)",
+      "kind": "call"
+    },
+    {
+      "from": "hc",
+      "to": "sf",
+      "label": "once a UTC day: pay-card.html, pay-airline.html vs payment-page-inventory.json",
+      "kind": "call"
+    },
+    { "from": "hc", "to": "state", "label": "compare with the last state (ok / fail)", "kind": "call" },
+    {
+      "from": "hc",
+      "to": "alert",
+      "label": "ok→fail: '[velexis][host] health check failed: <check>: <first problem>'; fail→ok: 'health check recovered'",
+      "kind": "async"
+    },
+    {
+      "from": "alert",
+      "to": "hc",
+      "label": "send failed → state kept, run exits 1 → velexis-alert@velexis-healthcheck.service",
+      "kind": "return"
+    }
+  ]
+}

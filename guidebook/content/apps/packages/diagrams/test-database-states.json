@@ -1,0 +1,87 @@
+{
+  "id": "test-database-states",
+  "type": "state",
+  "title": "A test database (velexis_test_*)",
+  "caption": "packages/testing/src/test-database.ts. pg_database.datconnlimit = -2 marks a database PostgreSQL 16 is dropping (or whose drop was interrupted).",
+  "states": [
+    {
+      "id": "tpl",
+      "label": "Template velexis_test_tpl_<runId> (migrated)",
+      "kind": "initial"
+    },
+    {
+      "id": "clone",
+      "label": "Clone velexis_test_<runId>_<random> (grants re-applied)",
+      "kind": "normal"
+    },
+    {
+      "id": "inuse",
+      "label": "In use by one test file",
+      "kind": "normal"
+    },
+    {
+      "id": "closing",
+      "label": "ALLOW_CONNECTIONS false; sessions terminated",
+      "kind": "normal"
+    },
+    {
+      "id": "invalid",
+      "label": "Invalid (datconnlimit -2)",
+      "kind": "error",
+      "detail": "Only DROP DATABASE IF EXISTS … WITH (FORCE) works on it."
+    },
+    {
+      "id": "dropped",
+      "label": "Dropped",
+      "kind": "final"
+    },
+    {
+      "id": "leftover",
+      "label": "Left over after Ctrl-C / crashed machine",
+      "kind": "error",
+      "detail": "Harmless; the next run does not remove it. Drop by hand when no run is active."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "tpl",
+      "to": "clone",
+      "label": "createTestDatabase()"
+    },
+    {
+      "from": "clone",
+      "to": "inuse",
+      "label": "beforeAll"
+    },
+    {
+      "from": "inuse",
+      "to": "closing",
+      "label": "drop() in afterAll / teardown"
+    },
+    {
+      "from": "closing",
+      "to": "dropped",
+      "label": "DROP DATABASE … WITH (FORCE)"
+    },
+    {
+      "from": "closing",
+      "to": "invalid",
+      "label": "drop interrupted"
+    },
+    {
+      "from": "invalid",
+      "to": "dropped",
+      "label": "DROP … IF EXISTS WITH (FORCE)"
+    },
+    {
+      "from": "inuse",
+      "to": "leftover",
+      "label": "run killed before teardown"
+    },
+    {
+      "from": "leftover",
+      "to": "dropped",
+      "label": "manual psql DROP"
+    }
+  ]
+}

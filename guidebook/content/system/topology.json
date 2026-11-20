@@ -1,0 +1,882 @@
+{
+  "layers": [
+    {
+      "id": "users",
+      "label": "People"
+    },
+    {
+      "id": "edge",
+      "label": "Edge"
+    },
+    {
+      "id": "frontends",
+      "label": "Frontends"
+    },
+    {
+      "id": "apis-workers",
+      "label": "APIs and workers"
+    },
+    {
+      "id": "data",
+      "label": "Data"
+    },
+    {
+      "id": "external",
+      "label": "External services"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "owner",
+      "label": "OTA owner and team",
+      "layer": "users",
+      "kind": "user",
+      "detail": "Signs up, creates and runs OTAs in the **portal**; opens the OTA admin with \"Open console\". Portal accounts in `platform.accounts`."
+    },
+    {
+      "id": "velexis-staff",
+      "label": "Velexis staff",
+      "layer": "users",
+      "kind": "user",
+      "detail": "Platform admins (`is_platform_admin`, MFA mandatory): tenants, plans, subscriptions, Amadeus pool, settlements, jobs, audit."
+    },
+    {
+      "id": "ota-staff",
+      "label": "OTA staff",
+      "layer": "users",
+      "kind": "user",
+      "detail": "Portal accounts with a membership (owner, admin, agent, finance, viewer); work in the OTA admin after SSO."
+    },
+    {
+      "id": "traveller",
+      "label": "Traveller",
+      "layer": "users",
+      "kind": "user",
+      "detail": "Guest or signed-in customer of one OTA (`tenant_<key>.customers`); searches, books, pays, manages bookings."
+    },
+    {
+      "id": "developer",
+      "label": "Third-party developer",
+      "layer": "users",
+      "kind": "user",
+      "detail": "Builds an own storefront or automation with the JS SDK and `pk_`/`sk_` keys against `api.ota.example.com`."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy + WAF",
+      "layer": "edge",
+      "app": "deploy",
+      "kind": "edge",
+      "detail": "Caddy 2.8.4 with Coraza and the OWASP Core Rule Set: TLS (automatic and on-demand), host routing, edge headers (`X-Velexis-Edge`, `X-Velexis-Host`) on storefront `/api/*`, CSP, blocks `/internal/*`. Locally the Vite dev server plays its storefront role."
+    },
+    {
+      "id": "portal",
+      "label": "Portal",
+      "layer": "frontends",
+      "app": "portal",
+      "kind": "ui",
+      "detail": "`platform/frontend`, Next.js 15 BFF on :3000 (`platform.example.com`): sign-up, OTA creation, set-up, keys, domains, team, billing, go-live, Open console."
+    },
+    {
+      "id": "platform-admin",
+      "label": "Platform admin",
+      "layer": "frontends",
+      "app": "platform-admin",
+      "kind": "ui",
+      "detail": "`platform/admin`, Next.js 15 BFF on :3001 (`admin.platform.example.com`) for Velexis staff."
+    },
+    {
+      "id": "ota-admin",
+      "label": "OTA admin",
+      "layer": "frontends",
+      "app": "ota-admin",
+      "kind": "ui",
+      "detail": "`ota/admin`, Next.js 15 BFF on :3002 (`admin.ota.example.com`); calls the OTA API with the SDK on the server (service key + staff token)."
+    },
+    {
+      "id": "storefront",
+      "label": "Hosted storefront",
+      "layer": "frontends",
+      "app": "storefront",
+      "kind": "ui",
+      "detail": "`ota/frontend`, static HTML + Tailwind + vanilla JS on `<key>.ota.example.com` and custom domains; the SDK in cookie mode, same-origin `/api`. Dev server :5173."
+    },
+    {
+      "id": "third-party",
+      "label": "Third-party frontend (SDK)",
+      "layer": "frontends",
+      "app": "sdk",
+      "kind": "ui",
+      "detail": "Any framework using `@velexis/ota-sdk` in token mode (publishable key + customer tokens) or server mode (secret key)."
+    },
+    {
+      "id": "platform-api",
+      "label": "Platform API",
+      "layer": "apis-workers",
+      "app": "platform-api",
+      "kind": "api",
+      "detail": "`platform/backend` `dist/main.js` on :3100 (`api.platform.example.com`): accounts, MFA, tenants, keys, domains, connections, billing, admin, `/internal/tls/ask`, Stripe billing webhooks."
+    },
+    {
+      "id": "platform-worker",
+      "label": "Platform worker",
+      "layer": "apis-workers",
+      "app": "platform-api",
+      "kind": "worker",
+      "detail": "`platform/backend` `dist/worker.js` (health :3101): provisioning post-steps, e-mails, Stripe events, DNS and TLS checks, credential checks, settlements, purges, key-usage flush."
+    },
+    {
+      "id": "ota-api",
+      "label": "OTA API",
+      "layer": "apis-workers",
+      "app": "ota-api",
+      "kind": "api",
+      "detail": "`ota/backend` `dist/main.js` on :4000 (`api.ota.example.com` and `/api/*` on storefront hosts): the 136-operation booking contract (117 implemented, 19 deferred with `501`), Amadeus, Stripe, payment webhooks."
+    },
+    {
+      "id": "ota-worker",
+      "label": "OTA worker",
+      "layer": "apis-workers",
+      "app": "ota-api",
+      "kind": "worker",
+      "detail": "`ota/backend` `dist/worker.js` (health :4001): tenant provisioning and migrations, ticketing retries, reconciliation, booking sync, payments, notifications, documents, queue polling."
+    },
+    {
+      "id": "pg-platform",
+      "label": "PostgreSQL: platform",
+      "layer": "data",
+      "app": "packages",
+      "kind": "db",
+      "detail": "Schema `platform` (accounts, tenants, memberships, keys, domains, connections, Amadeus accounts and offices, plans, subscriptions, settlements, jobs, outbox, audit). Written by the platform backend only; read-only for the OTA role."
+    },
+    {
+      "id": "pg-reference",
+      "label": "PostgreSQL: reference",
+      "layer": "data",
+      "app": "packages",
+      "kind": "db",
+      "detail": "Schema `reference`: airports, airlines, cities, countries, currencies, time zones, aircraft. Loaded by `pnpm db:seed:reference`."
+    },
+    {
+      "id": "pg-tenant",
+      "label": "PostgreSQL: tenant_<key>",
+      "layer": "data",
+      "app": "ota-api",
+      "kind": "db",
+      "detail": "One schema per OTA (about 45 tables: searches, offers, checkouts, bookings, payments, customers, settings, templates, staff actions). Only the OTA backend, always through `tenantTx`."
+    },
+    {
+      "id": "redis-cache",
+      "label": "Redis: caches and tokens",
+      "layer": "data",
+      "kind": "cache",
+      "detail": "Redis 7.4: platform-row caches (`tenant:`, `host:`, `apikey:`, `conn:`, `member:`, 60 s), `t:<tenantId>:…`, `ptk:` SSO tokens, staff sessions, `staffdeny:`, Amadeus tokens and rate buckets, the `vx:invalidate` channel."
+    },
+    {
+      "id": "redis-queues",
+      "label": "Redis: BullMQ queues",
+      "layer": "data",
+      "kind": "queue",
+      "detail": "Prefix `vx:`. `ota-tenant-ops`, `platform-tenant-events`, `platform-*` (emails, stripe-events, domains, connections, settlements, maintenance) and `ota-*` (stripe-events, payments, bookings, ticketing, notifications, documents, maintenance)."
+    },
+    {
+      "id": "storage",
+      "label": "Local storage",
+      "layer": "data",
+      "app": "ota-api",
+      "kind": "storage",
+      "detail": "`STORAGE_DIR` (`.local/storage` locally, `/var/lib/velexis/storage` on the VM): booking PDFs and storefront assets, served through signed URLs."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus Enterprise",
+      "layer": "external",
+      "app": "tools",
+      "kind": "external",
+      "detail": "Twelve flight operations (search, price, upsell, orders, issue, queues) for the OTA backend; OAuth token checks only for the platform worker. Locally the Amadeus stub on :4900."
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "layer": "external",
+      "kind": "external",
+      "detail": "Billing subscriptions, Checkout, Customer Portal and Connect for the platform; PaymentIntents (manual capture), refunds and webhooks for OTA customer payments. Test mode only locally (Stripe CLI)."
+    },
+    {
+      "id": "smtp",
+      "label": "SMTP (Mailpit locally)",
+      "layer": "external",
+      "kind": "external",
+      "detail": "Outgoing e-mail of both workers. Locally Mailpit catches everything on 1025 (UI :8025)."
+    },
+    {
+      "id": "lets-encrypt",
+      "label": "Let's Encrypt",
+      "layer": "external",
+      "kind": "external",
+      "detail": "Certificates for the named hosts and, on demand, storefront sub-domains and verified custom domains."
+    },
+    {
+      "id": "dns",
+      "label": "Public DNS resolvers",
+      "layer": "external",
+      "kind": "external",
+      "detail": "`DNS_RESOLVERS` (1.1.1.1, 8.8.8.8): TXT and CNAME/A checks of custom domains by the platform worker."
+    },
+    {
+      "id": "backup",
+      "label": "Off-site backups",
+      "layer": "external",
+      "app": "deploy",
+      "kind": "storage",
+      "detail": "Nightly age-encrypted PostgreSQL dumps and key backups copied off the VM (`velexis-backup.timer`)."
+    }
+  ],
+  "links": [
+    {
+      "from": "owner",
+      "to": "caddy",
+      "label": "HTTPS platform.example.com",
+      "kind": "sync"
+    },
+    {
+      "from": "velexis-staff",
+      "to": "caddy",
+      "label": "HTTPS admin.platform.example.com",
+      "kind": "sync"
+    },
+    {
+      "from": "ota-staff",
+      "to": "caddy",
+      "label": "HTTPS admin.ota.example.com",
+      "kind": "sync"
+    },
+    {
+      "from": "traveller",
+      "to": "caddy",
+      "label": "HTTPS <key>.ota.example.com",
+      "kind": "sync"
+    },
+    {
+      "from": "developer",
+      "to": "third-party",
+      "label": "builds with the SDK",
+      "kind": "sync"
+    },
+    {
+      "from": "third-party",
+      "to": "caddy",
+      "label": "HTTPS api.ota.example.com with pk_/sk_",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "portal",
+      "label": "reverse proxy :3000",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "platform-admin",
+      "label": "reverse proxy :3001",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "ota-admin",
+      "label": "reverse proxy :3002",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "storefront",
+      "label": "static files",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "ota-api",
+      "label": "/api/* with edge headers; api.ota.example.com",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "platform-api",
+      "label": "api.platform.example.com; GET /internal/tls/ask",
+      "kind": "sync"
+    },
+    {
+      "from": "caddy",
+      "to": "lets-encrypt",
+      "label": "ACME orders",
+      "kind": "sync"
+    },
+    {
+      "from": "storefront",
+      "to": "ota-api",
+      "label": "SDK cookie mode, same-origin /api",
+      "kind": "sync"
+    },
+    {
+      "from": "third-party",
+      "to": "ota-api",
+      "label": "SDK token or server mode",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "platform-api",
+      "label": "server side, BFF key + bearer token",
+      "kind": "sync"
+    },
+    {
+      "from": "platform-admin",
+      "to": "platform-api",
+      "label": "server side, admin token",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "ota-admin",
+      "label": "Open console: POST portal token to /sso",
+      "kind": "sync"
+    },
+    {
+      "from": "ota-admin",
+      "to": "ota-api",
+      "label": "SDK server side: service key + staff token",
+      "kind": "sync"
+    },
+    {
+      "from": "platform-api",
+      "to": "pg-platform",
+      "label": "read + write",
+      "kind": "data"
+    },
+    {
+      "from": "platform-api",
+      "to": "pg-reference",
+      "label": "read + write",
+      "kind": "data"
+    },
+    {
+      "from": "platform-worker",
+      "to": "pg-platform",
+      "label": "read + write",
+      "kind": "data"
+    },
+    {
+      "from": "ota-api",
+      "to": "pg-tenant",
+      "label": "tenantTx",
+      "kind": "data"
+    },
+    {
+      "from": "ota-api",
+      "to": "pg-platform",
+      "label": "read-only role, cached 60 s",
+      "kind": "data"
+    },
+    {
+      "from": "ota-api",
+      "to": "pg-reference",
+      "label": "read",
+      "kind": "data"
+    },
+    {
+      "from": "ota-worker",
+      "to": "pg-tenant",
+      "label": "provisioning DDL, jobs",
+      "kind": "data"
+    },
+    {
+      "from": "platform-api",
+      "to": "redis-queues",
+      "label": "enqueue tenant ops, e-mails, billing events",
+      "kind": "async"
+    },
+    {
+      "from": "redis-queues",
+      "to": "platform-worker",
+      "label": "platform-* and platform-tenant-events jobs",
+      "kind": "async"
+    },
+    {
+      "from": "platform-worker",
+      "to": "redis-queues",
+      "label": "ota-tenant-ops dispatch",
+      "kind": "async"
+    },
+    {
+      "from": "redis-queues",
+      "to": "ota-worker",
+      "label": "ota-tenant-ops and ota-* jobs",
+      "kind": "async"
+    },
+    {
+      "from": "ota-worker",
+      "to": "redis-queues",
+      "label": "platform-tenant-events results",
+      "kind": "async"
+    },
+    {
+      "from": "ota-api",
+      "to": "redis-queues",
+      "label": "payments, notifications, documents, bookings jobs",
+      "kind": "async"
+    },
+    {
+      "from": "platform-api",
+      "to": "redis-cache",
+      "label": "vx:invalidate, ptk tokens, staffdeny",
+      "kind": "async"
+    },
+    {
+      "from": "platform-worker",
+      "to": "redis-cache",
+      "label": "vx:invalidate, key-usage flush",
+      "kind": "async"
+    },
+    {
+      "from": "ota-api",
+      "to": "redis-cache",
+      "label": "caches, Amadeus tokens, rate buckets, staff sessions",
+      "kind": "data"
+    },
+    {
+      "from": "ota-worker",
+      "to": "redis-cache",
+      "label": "Amadeus tokens, staffdeny:tenant",
+      "kind": "data"
+    },
+    {
+      "from": "ota-api",
+      "to": "storage",
+      "label": "assets, document downloads",
+      "kind": "data"
+    },
+    {
+      "from": "ota-worker",
+      "to": "storage",
+      "label": "rendered PDFs",
+      "kind": "data"
+    },
+    {
+      "from": "ota-api",
+      "to": "amadeus",
+      "label": "flight operations",
+      "kind": "sync"
+    },
+    {
+      "from": "ota-worker",
+      "to": "amadeus",
+      "label": "issue, sync, reconcile, queues",
+      "kind": "sync"
+    },
+    {
+      "from": "platform-worker",
+      "to": "amadeus",
+      "label": "OAuth token check only",
+      "kind": "sync"
+    },
+    {
+      "from": "ota-api",
+      "to": "stripe",
+      "label": "PaymentIntents, capture, refunds",
+      "kind": "sync"
+    },
+    {
+      "from": "stripe",
+      "to": "ota-api",
+      "label": "payment webhooks /webhooks/stripe/velexis/*, /connect/*, /c/<connectionId> (via Caddy)",
+      "kind": "async"
+    },
+    {
+      "from": "platform-api",
+      "to": "stripe",
+      "label": "Checkout, Customer Portal, Connect",
+      "kind": "sync"
+    },
+    {
+      "from": "stripe",
+      "to": "platform-api",
+      "label": "webhooks /webhooks/stripe/billing and /connect-accounts (via Caddy)",
+      "kind": "async"
+    },
+    {
+      "from": "platform-worker",
+      "to": "stripe",
+      "label": "re-fetch subscriptions, invoices, balance",
+      "kind": "sync"
+    },
+    {
+      "from": "platform-worker",
+      "to": "smtp",
+      "label": "platform e-mail outbox",
+      "kind": "async"
+    },
+    {
+      "from": "ota-worker",
+      "to": "smtp",
+      "label": "booking e-mails with PDFs",
+      "kind": "async"
+    },
+    {
+      "from": "platform-worker",
+      "to": "dns",
+      "label": "custom domain checks",
+      "kind": "sync"
+    },
+    {
+      "from": "pg-tenant",
+      "to": "backup",
+      "label": "nightly encrypted dump",
+      "kind": "async"
+    },
+    {
+      "from": "pg-platform",
+      "to": "backup",
+      "label": "nightly encrypted dump",
+      "kind": "async"
+    }
+  ],
+  "flows": [
+    {
+      "id": "search-and-book",
+      "title": "Search and book",
+      "summary": "A traveller searches, prices and pays on the hosted storefront; the OTA API calls Amadeus and Stripe, records the booking and the worker e-mails the documents.",
+      "path": [
+        {
+          "from": "traveller",
+          "to": "caddy",
+          "label": "Open <key>.ota.example.com"
+        },
+        {
+          "from": "caddy",
+          "to": "storefront",
+          "label": "Static HTML, JS and CSS"
+        },
+        {
+          "from": "storefront",
+          "to": "ota-api",
+          "label": "storefront.get, flights.search via /api"
+        },
+        {
+          "from": "ota-api",
+          "to": "redis-cache",
+          "label": "Host and tenant from the cache"
+        },
+        {
+          "from": "ota-api",
+          "to": "amadeus",
+          "label": "Flight Offers Search, Upsell, Price"
+        },
+        {
+          "from": "ota-api",
+          "to": "pg-tenant",
+          "label": "Searches, offers, priced offer, checkout"
+        },
+        {
+          "from": "ota-api",
+          "to": "stripe",
+          "label": "PaymentIntent with manual capture"
+        },
+        {
+          "from": "ota-api",
+          "to": "amadeus",
+          "label": "Flight Create Orders"
+        },
+        {
+          "from": "ota-api",
+          "to": "stripe",
+          "label": "Capture the authorisation"
+        },
+        {
+          "from": "ota-api",
+          "to": "pg-tenant",
+          "label": "Booking, payment, events, outbox"
+        },
+        {
+          "from": "ota-api",
+          "to": "redis-queues",
+          "label": "Notification and document jobs"
+        },
+        {
+          "from": "redis-queues",
+          "to": "ota-worker",
+          "label": "Worker picks the jobs"
+        },
+        {
+          "from": "ota-worker",
+          "to": "storage",
+          "label": "Render the itinerary PDF"
+        },
+        {
+          "from": "ota-worker",
+          "to": "smtp",
+          "label": "Confirmation e-mail with the itinerary"
+        }
+      ]
+    },
+    {
+      "id": "ota-provisioning",
+      "title": "OTA provisioning",
+      "summary": "An owner creates an OTA; the platform records it and asks the OTA worker to create the tenant schema; the platform worker finishes the set-up and activates the OTA.",
+      "path": [
+        {
+          "from": "owner",
+          "to": "caddy",
+          "label": "Create OTA in the portal"
+        },
+        {
+          "from": "caddy",
+          "to": "portal",
+          "label": "Wizard submit"
+        },
+        {
+          "from": "portal",
+          "to": "platform-api",
+          "label": "createTenant with Idempotency-Key"
+        },
+        {
+          "from": "platform-api",
+          "to": "pg-platform",
+          "label": "Tenant, owner, subscription, domain, job"
+        },
+        {
+          "from": "platform-api",
+          "to": "redis-queues",
+          "label": "tenant.provision (job_…-1)"
+        },
+        {
+          "from": "redis-queues",
+          "to": "ota-worker",
+          "label": "OTA worker consumes ota-tenant-ops"
+        },
+        {
+          "from": "ota-worker",
+          "to": "pg-tenant",
+          "label": "CREATE SCHEMA, migrations, grants, seeds"
+        },
+        {
+          "from": "ota-worker",
+          "to": "redis-queues",
+          "label": "tenant.provisioned"
+        },
+        {
+          "from": "redis-queues",
+          "to": "platform-worker",
+          "label": "Platform worker consumes the event"
+        },
+        {
+          "from": "platform-worker",
+          "to": "pg-platform",
+          "label": "Office, payment connection, keys, active"
+        },
+        {
+          "from": "platform-worker",
+          "to": "redis-cache",
+          "label": "vx:invalidate tenant and connection"
+        },
+        {
+          "from": "platform-worker",
+          "to": "smtp",
+          "label": "Welcome e-mail"
+        }
+      ]
+    },
+    {
+      "id": "staff-sso",
+      "title": "Staff SSO into the OTA admin",
+      "summary": "Open console mints a single-use portal token in Redis, the portal posts it to the OTA admin, and the OTA API turns it into a staff session.",
+      "path": [
+        {
+          "from": "ota-staff",
+          "to": "caddy",
+          "label": "Open console on the portal"
+        },
+        {
+          "from": "caddy",
+          "to": "portal",
+          "label": "POST /otas/<id>/console/launch"
+        },
+        {
+          "from": "portal",
+          "to": "platform-api",
+          "label": "createConsoleToken"
+        },
+        {
+          "from": "platform-api",
+          "to": "pg-platform",
+          "label": "Check membership and MFA"
+        },
+        {
+          "from": "platform-api",
+          "to": "redis-cache",
+          "label": "SET ptk:<sha256> EX 60 NX"
+        },
+        {
+          "from": "portal",
+          "to": "ota-admin",
+          "label": "Auto-submitted POST /sso"
+        },
+        {
+          "from": "ota-admin",
+          "to": "ota-api",
+          "label": "console.auth.signIn (portal_token)"
+        },
+        {
+          "from": "ota-api",
+          "to": "redis-cache",
+          "label": "GETDEL ptk, new staff family"
+        },
+        {
+          "from": "ota-api",
+          "to": "pg-platform",
+          "label": "Membership, role, account status"
+        }
+      ]
+    },
+    {
+      "id": "stripe-webhook",
+      "title": "Stripe payment webhook",
+      "summary": "Stripe reports a payment event; the OTA API verifies it, stores it once and the worker applies the new state.",
+      "path": [
+        {
+          "from": "stripe",
+          "to": "ota-api",
+          "label": "payment_intent.succeeded, signed"
+        },
+        {
+          "from": "ota-api",
+          "to": "pg-tenant",
+          "label": "payment_events (unique provider event id)"
+        },
+        {
+          "from": "ota-api",
+          "to": "redis-queues",
+          "label": "ota-stripe-events job"
+        },
+        {
+          "from": "redis-queues",
+          "to": "ota-worker",
+          "label": "Worker applies the event"
+        },
+        {
+          "from": "ota-worker",
+          "to": "pg-tenant",
+          "label": "Payment captured / refunded / disputed"
+        }
+      ]
+    },
+    {
+      "id": "platform-billing",
+      "title": "Platform billing (Stripe Billing)",
+      "summary": "With Stripe Billing on, create OTA goes through Stripe Checkout; the billing webhook opens the provisioning gate.",
+      "path": [
+        {
+          "from": "owner",
+          "to": "caddy",
+          "label": "Create OTA"
+        },
+        {
+          "from": "caddy",
+          "to": "portal",
+          "label": "Wizard submit"
+        },
+        {
+          "from": "portal",
+          "to": "platform-api",
+          "label": "createTenant"
+        },
+        {
+          "from": "platform-api",
+          "to": "stripe",
+          "label": "Checkout Session (subscription)"
+        },
+        {
+          "from": "stripe",
+          "to": "platform-api",
+          "label": "checkout.session.completed"
+        },
+        {
+          "from": "platform-api",
+          "to": "pg-platform",
+          "label": "stripe_events inbox row"
+        },
+        {
+          "from": "platform-api",
+          "to": "redis-queues",
+          "label": "platform-stripe-events job"
+        },
+        {
+          "from": "redis-queues",
+          "to": "platform-worker",
+          "label": "Process the event"
+        },
+        {
+          "from": "platform-worker",
+          "to": "stripe",
+          "label": "Re-fetch the subscription"
+        },
+        {
+          "from": "platform-worker",
+          "to": "pg-platform",
+          "label": "Subscription trialing or active"
+        },
+        {
+          "from": "platform-worker",
+          "to": "redis-queues",
+          "label": "tenant.provision"
+        }
+      ]
+    },
+    {
+      "id": "custom-domain-tls",
+      "title": "Custom domain and on-demand TLS",
+      "summary": "A verified custom domain gets its certificate on the first visit and serves the OTA's storefront.",
+      "path": [
+        {
+          "from": "platform-worker",
+          "to": "dns",
+          "label": "Verify TXT and CNAME"
+        },
+        {
+          "from": "platform-worker",
+          "to": "pg-platform",
+          "label": "Domain verified"
+        },
+        {
+          "from": "platform-worker",
+          "to": "redis-cache",
+          "label": "vx:invalidate domain"
+        },
+        {
+          "from": "traveller",
+          "to": "caddy",
+          "label": "TLS handshake for travel.example.net"
+        },
+        {
+          "from": "caddy",
+          "to": "platform-api",
+          "label": "GET /internal/tls/ask?domain=…"
+        },
+        {
+          "from": "caddy",
+          "to": "lets-encrypt",
+          "label": "ACME order"
+        },
+        {
+          "from": "caddy",
+          "to": "storefront",
+          "label": "Storefront files"
+        },
+        {
+          "from": "storefront",
+          "to": "ota-api",
+          "label": "storefront.get with X-Velexis-Host"
+        }
+      ]
+    }
+  ]
+}

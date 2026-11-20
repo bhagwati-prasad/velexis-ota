@@ -1,0 +1,34 @@
+{
+  "id": "flow-guest-lookup",
+  "type": "flow",
+  "title": "Find a booking as a guest",
+  "caption": "`tools/e2e/specs/storefront/account-bookings.e2e.ts` (last two tests) and `src/pages/lookup.js`.",
+  "steps": [
+    {
+      "title": "Open the lookup in a fresh browser",
+      "actor": "Guest",
+      "screen": "/lookup.html",
+      "url": "http://localhost:5173/lookup.html",
+      "body": "Use a private window (no `__Host-vx_bt`).",
+      "expect": "\"Find your booking\" with Booking reference and Last name; below it \"Sign in\" to My bookings (only with customer accounts)."
+    },
+    {
+      "title": "Wrong name, then wrong reference",
+      "actor": "Guest",
+      "body": "Correct reference + wrong last name; then a wrong reference + correct name.",
+      "expect": "Both show exactly \"We could not find a booking with these details\" with neither field marked and the typed values kept."
+    },
+    {
+      "title": "Correct details",
+      "actor": "Guest",
+      "body": "Reference (lower case or with spaces is fine) + any traveller's last name; **Find my booking**.",
+      "expect": "`/booking.html?id=bkg_…` opens. DB: `booking_access_tokens` row `issued_via = 'lookup'`; `booking_events` `booking.lookup`; cookie `__Host-vx_bt` gains an entry."
+    },
+    {
+      "title": "Too many attempts",
+      "actor": "Guest",
+      "body": "Six wrong submits within 15 minutes.",
+      "expect": "\"Too many attempts, try again in N minutes\" and the button disabled until the wait ends, then \"You can try again now\". Redis: `rl:ota_lookup_ip:*` and `rl:ota_lookup_reference:*` keys."
+    }
+  ]
+}

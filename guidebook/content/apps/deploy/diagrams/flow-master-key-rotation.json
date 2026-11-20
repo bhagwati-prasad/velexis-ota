@@ -1,0 +1,32 @@
+{
+  "id": "flow-master-key-rotation",
+  "type": "flow",
+  "title": "Rotate the master key (KEK)",
+  "caption": "docs/mvp/runbooks/master-key-rotation.md and deployment §7. Both backend zones hold identical copies.",
+  "steps": [
+    {
+      "title": "Add the new key",
+      "actor": "Developer",
+      "body": "`sudo NEW_MASTER_KEY=v2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps keys`",
+      "expect": "`master-v2.key` 0400 in `/etc/velexis/keys/platform/` and `/etc/velexis/keys/ota/`; a lower version is refused."
+    },
+    {
+      "title": "Switch new writes",
+      "actor": "Developer",
+      "body": "Set `MASTER_KEY_CURRENT=local:v2` in `platform-backend.env` and `ota-backend.env`; restart the four backend units.",
+      "expect": "New secrets carry `encryption_key_id = local:v2`."
+    },
+    {
+      "title": "Re-wrap",
+      "actor": "Developer",
+      "body": "Run each backend's `secrets:rewrap` through `velexis-run platform …` and `velexis-run ota …`.",
+      "expect": "Both report zero rows left under `local:v1`."
+    },
+    {
+      "title": "Remove v1 and back up",
+      "actor": "Developer",
+      "body": "Remove `master-v1.key` from both folders; back up `/etc/velexis` offline again.",
+      "expect": "check-vm.sh `files` group PASS (identical copies)."
+    }
+  ]
+}

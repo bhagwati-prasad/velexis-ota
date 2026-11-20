@@ -37,6 +37,7 @@ Then, depending on what you do:
 | `ota/docs/` | OTA-specific documentation and plans. |
 | `packages/` | Shared TypeScript libraries: `config`, `logger`, `db` (Kysely, tenancy, migrations, storage), `crypto` (envelope encryption), `errors`, `api-types` (generated contract types), and `testing` (test support, devDependency only). |
 | `deploy/` | Single-VM deployment: Caddyfile, systemd units, VM provisioning, deploy and backup scripts, environment templates. No Docker. |
+| [`guidebook/`](guidebook/README.md) | The Velexis Guidebook: an interactive static site with the usage and architecture guide of every app, journeys, the known issues, a glossary, taxonomy, knowledge graph and ontology. Open `guidebook/index.html` in a browser (or run `node guidebook/tools/serve.mjs`); rebuild it with `node guidebook/tools/build.mjs` after changing `guidebook/content/`. |
 | [`tools/`](tools/) | Developer tools: [`plan-lint`](tools/plan-lint/plan-lint.mjs) (validates the task plans), `reference-data` (vendored reference datasets and their loader, shipped in releases), `amadeus-stub` (Amadeus test double), `e2e` (Playwright suite). |
 | [`AGENTS.md`](AGENTS.md), [`CLAUDE.md`](CLAUDE.md) | Operating manual for AI coding agents, and its short pointer. |
 

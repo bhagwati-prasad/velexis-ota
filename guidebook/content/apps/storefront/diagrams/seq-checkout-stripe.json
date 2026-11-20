@@ -1,0 +1,177 @@
+{
+  "id": "seq-checkout-stripe",
+  "type": "sequence",
+  "title": "Checkout and pay by card (Stripe)",
+  "caption": "`checkout.js` → `checkout/pay-card.js` → `checkout/complete.js` → `confirmation.js` (ota/docs/flows/checkout-stripe.md). The authorisation is captured only after the Amadeus order exists.",
+  "actors": [
+    {
+      "id": "t",
+      "label": "Traveller",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "Page module + SDK",
+      "kind": "ui"
+    },
+    {
+      "id": "sjs",
+      "label": "Stripe.js (iframes)",
+      "kind": "external"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "kind": "external"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus",
+      "kind": "external"
+    },
+    {
+      "id": "w",
+      "label": "OTA worker",
+      "kind": "worker"
+    }
+  ],
+  "steps": [
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/checkouts {pricedOfferId} (Continue to checkout)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "checkouts (open, expires_at), requirements from priced_offers",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "PUT travelers / contacts / ancillaries / remarks (If-Match: version)",
+      "kind": "call",
+      "note": "412 → reload the checkout and re-apply the step once; extras re-price into a child priced offer."
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "checkout_travelers (documents encrypted), checkout_contacts, version + 1",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/checkouts/{id}/payments {method: card, termsAccepted: true, returnUrl}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "PaymentIntent (capture_method manual, idem pi:create:<pay_id>)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "payments (requires_payment_method), checkout payment_pending",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "→ /checkout/pay-card.html?id=chk_…&payment=pay_…",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "sjs",
+      "label": "mount Payment Element (providerPublicKey, clientSecret, stripeAccount)",
+      "kind": "call"
+    },
+    {
+      "from": "t",
+      "to": "sjs",
+      "label": "types the card (never seen by the page)",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "Review total: PATCH /v1/payments/{id} {card: {brand}} → card fee",
+      "kind": "call"
+    },
+    {
+      "from": "t",
+      "to": "b",
+      "label": "Pay",
+      "kind": "call"
+    },
+    {
+      "from": "sjs",
+      "to": "stripe",
+      "label": "confirmPayment (3-D Secure challenge if needed)",
+      "kind": "call"
+    },
+    {
+      "from": "stripe",
+      "to": "api",
+      "label": "webhook payment_intent.amount_capturable_updated → payment_events",
+      "kind": "async"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "→ /checkout/complete.html (Stripe params removed from the address)",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "GET /v1/payments/{id} every 2 s while processing (max 60 s)",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "api",
+      "label": "POST /v1/checkouts/{id}/complete, Idempotency-Key complete-<chk>-<pay>, 90 s",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Create Orders, then capture, then issue per ticketing policy",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "db",
+      "label": "bookings (+ children), booking_access_tokens (guest), booking_events, outbox",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "201 + Set-Cookie __Host-vx_bt (guest) → location.replace(/confirmation.html?booking=bkg_…)",
+      "kind": "return"
+    },
+    {
+      "from": "w",
+      "to": "w",
+      "label": "booking.confirmed e-mail with itinerary PDF; booking.ticketed with e-tickets",
+      "kind": "async"
+    }
+  ]
+}

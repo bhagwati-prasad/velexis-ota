@@ -1,0 +1,168 @@
+{
+  "id": "seq-checkout-stripe",
+  "type": "sequence",
+  "title": "Checkout and Stripe booking (checkout.complete)",
+  "caption": "From createCheckout to a ticketed booking with the default policy issue_after_payment (ota/docs/architecture-booking.md §1-§2, src/checkout, src/payments, src/bookings/booking-orchestrator.service.ts). Lock order: checkout, booking, payment, refund.",
+  "actors": [
+    {
+      "id": "c",
+      "label": "Storefront + SDK",
+      "kind": "user"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "tenant_<key>",
+      "kind": "db"
+    },
+    {
+      "id": "stripe",
+      "label": "Stripe",
+      "kind": "external"
+    },
+    {
+      "id": "ama",
+      "label": "Amadeus",
+      "kind": "external"
+    },
+    {
+      "id": "q",
+      "label": "BullMQ (worker)",
+      "kind": "queue"
+    }
+  ],
+  "steps": [
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/checkouts {pricedOfferId} (guest or customer)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "checkouts (open, expires_at = now + checkout_ttl_minutes), checkout_contacts",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "PUT …/travelers, …/contacts, …/ancillaries (re-price), …/remarks (If-Match: version)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "checkout_travelers (documents encrypted), checkout_ancillaries, totals, version + 1",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/checkouts/{id}/payments {method: card}",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "payments (requires_payment_method), checkout payment_pending",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "create PaymentIntent (manual capture, idem pi:create:pay_…)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "201 clientSecret + publishableKey (+ stripeAccount in Connect mode)",
+      "kind": "return"
+    },
+    {
+      "from": "c",
+      "to": "stripe",
+      "label": "Payment Element confirmPayment (3-D Secure)",
+      "kind": "call"
+    },
+    {
+      "from": "c",
+      "to": "api",
+      "label": "POST /v1/checkouts/{id}/complete {paymentId, expectedTotal} + Idempotency-Key",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "retrieve PaymentIntent: requires_capture for exactly the total, else 402 PAYMENT_REQUIRED / PAYMENT_DECLINED or 409 PAYMENT_AMOUNT_MISMATCH; total above expectedTotal 409 PRICE_CHANGED",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "T1 claim: lock checkout, insert bookings (pending, reference VX…, create_order_started_at)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "(re-price when the priced offer expired or is older than 10 min) Flight Create Orders: remark VELEXIS <ref>, booking queue, issue=false",
+      "kind": "call"
+    },
+    {
+      "from": "ama",
+      "to": "api",
+      "label": "order id + record locator",
+      "kind": "return",
+      "note": "Timeout / 5xx: booking stays pending, reconcile_until = +15 min, 504 SUPPLIER_TIMEOUT (see seq-supplier-timeout)."
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "T2 record: booking confirmed, children, order_snapshot, booking_events, guest token, outbox, checkout completed",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "stripe",
+      "label": "capture (idempotency key pi:capture:<pay_id>:<amount>)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "T3 payment captured, payment_events",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "ama",
+      "label": "Flight Order Issue",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "pg",
+      "label": "T4 booking_tickets, booking ticketed, ticketing_status issued",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "q",
+      "label": "notify {tenantId}, document.render (itinerary, receipts)",
+      "kind": "async"
+    },
+    {
+      "from": "api",
+      "to": "c",
+      "label": "201 CheckoutCompletion (booking, reference; Set-Cookie __Host-vx_bt in edge mode)",
+      "kind": "return",
+      "note": "Issue failed: 201, ticketing_status failed, ticketing job retries until the deadline. Capture failed: 201 with a warning, manual_review, payment.capture_retry."
+    }
+  ]
+}

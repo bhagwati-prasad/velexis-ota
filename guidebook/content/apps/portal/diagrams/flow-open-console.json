@@ -1,0 +1,34 @@
+{
+  "id": "flow-open-console",
+  "type": "flow",
+  "title": "Open the OTA admin (console)",
+  "caption": "PF-22. Any role of an active OTA; MFA needed when the OTA is live.",
+  "steps": [
+    {
+      "title": "Open console",
+      "actor": "Member",
+      "screen": "My OTAs / Overview",
+      "body": "Click **Open console** next to the OTA.",
+      "expect": "A brief \"Opening the OTA admin…\" page, then the OTA admin's `/bookings` of that OTA (locally http://localhost:3002)."
+    },
+    {
+      "title": "Refusals",
+      "actor": "Tester",
+      "body": "Try with a provisioning, failed or suspended OTA, or a live OTA without MFA.",
+      "expect": "Back on the overview with `?console=provisioning|failed|suspended&reason=…` explained; live without MFA: `/account/security?console=mfa_required&tenant=…`."
+    },
+    {
+      "title": "Replay",
+      "actor": "Tester",
+      "body": "Post the same hand-off form twice (DevTools: copy the form).",
+      "expect": "The second post is refused by the OTA admin (\"This console link expired or was already used.\"): the `ptk:` key is single-use, 60 s."
+    },
+    {
+      "title": "From the OTA admin",
+      "actor": "Member",
+      "url": "http://localhost:3000/console?tenant=<tenantId>",
+      "body": "Open the OTA admin without a session.",
+      "expect": "The portal's picker \"Open the OTA admin\" with that OTA selected; a tenant you are not a member of gets a note."
+    }
+  ]
+}

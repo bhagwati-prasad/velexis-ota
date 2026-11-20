@@ -1,0 +1,113 @@
+{
+  "id": "boot-states",
+  "type": "state",
+  "title": "Page start-up states (boot)",
+  "caption": "What `boot()` of `src/boot.js` shows while and after `storefront.get` answers. Texts from `lib/i18n.js` (`state.*`); templates in `partials/states.html`. Pages render the same inline states for their own calls with `renderState`.",
+  "states": [
+    {
+      "id": "loading",
+      "label": "Loading",
+      "kind": "initial",
+      "detail": "Static page painted; the live region says \"Loading\" if the configuration takes a moment."
+    },
+    {
+      "id": "ready",
+      "label": "Ready",
+      "kind": "normal",
+      "detail": "Theme, header, footer, test banner applied; the page module runs."
+    },
+    {
+      "id": "primary",
+      "label": "Sent to the primary host",
+      "kind": "final",
+      "detail": "Sign-in or sign-up opened on `<key>.ota.example.com` while a verified custom domain is primary: `location.replace` to the same path there, before any session."
+    },
+    {
+      "id": "suspended",
+      "label": "Temporarily unavailable",
+      "kind": "error",
+      "detail": "`403 TENANT_SUSPENDED`: \"This travel site is temporarily unavailable\", no Retry, `noindex`."
+    },
+    {
+      "id": "unknown",
+      "label": "Storefront does not exist",
+      "kind": "error",
+      "detail": "`403 HOST_NOT_ALLOWED`: unknown host, unverified domain, or custom domain of an inactive tenant."
+    },
+    {
+      "id": "unavailable",
+      "label": "Service unavailable",
+      "kind": "error",
+      "detail": "`503`, connection failure, timeout: Retry puts the page back untouched."
+    },
+    {
+      "id": "busy",
+      "label": "Busy",
+      "kind": "error",
+      "detail": "`429 RATE_LIMITED`: Retry enabled after `Retry-After`."
+    },
+    {
+      "id": "unexpected",
+      "label": "Something went wrong",
+      "kind": "error",
+      "detail": "Any other error, with the request id."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "loading",
+      "to": "ready",
+      "label": "config from sessionStorage (< 5 min) or 200"
+    },
+    {
+      "from": "loading",
+      "to": "primary",
+      "label": "auth page on the sub-domain, custom primary"
+    },
+    {
+      "from": "loading",
+      "to": "suspended",
+      "label": "403 TENANT_SUSPENDED"
+    },
+    {
+      "from": "loading",
+      "to": "unknown",
+      "label": "403 HOST_NOT_ALLOWED"
+    },
+    {
+      "from": "loading",
+      "to": "unavailable",
+      "label": "503 / network"
+    },
+    {
+      "from": "loading",
+      "to": "busy",
+      "label": "429"
+    },
+    {
+      "from": "loading",
+      "to": "unexpected",
+      "label": "other error"
+    },
+    {
+      "from": "unavailable",
+      "to": "loading",
+      "label": "Retry"
+    },
+    {
+      "from": "busy",
+      "to": "loading",
+      "label": "Retry after the wait"
+    },
+    {
+      "from": "unexpected",
+      "to": "loading",
+      "label": "Retry"
+    },
+    {
+      "from": "ready",
+      "to": "suspended",
+      "label": "any call answers 403 TENANT_SUSPENDED: cache dropped, next page"
+    }
+  ]
+}

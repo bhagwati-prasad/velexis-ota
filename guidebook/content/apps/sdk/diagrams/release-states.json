@@ -1,0 +1,67 @@
+{
+  "id": "release-states",
+  "type": "state",
+  "title": "Release of @velexis/ota-sdk 1.0.0",
+  "caption": "README §9, ota/sdk/release/CHANGES.md. Today (2026-11-20) the package is prepared (version 1.0.0, CHANGELOG \"1.0.0 (unreleased)\") but private: true and licence UNLICENSED, and the publish workflow is a draft that never runs. Target: tag and publish by about 18 December 2026, 31 December at the latest.",
+  "states": [
+    {
+      "id": "workspace",
+      "label": "0.x in the workspace only",
+      "kind": "initial",
+      "detail": "`workspace:*` in the storefront and the OTA admin."
+    },
+    {
+      "id": "prepared",
+      "label": "1.0.0 prepared, private (now)",
+      "kind": "normal",
+      "detail": "SDK-015: `package.json` and `src/version.js` say 1.0.0; `\"private\": true` makes npm refuse a publish; `ota/sdk/release/sdk-publish.draft.yml` waits for the owner's line-by-line approval (by SHA-256 in CHANGES.md)."
+    },
+    {
+      "id": "approved",
+      "label": "licence chosen, draft approved, npm org ready",
+      "kind": "normal",
+      "detail": "The draft moves to `.github/workflows/sdk-publish.yml` deleting only its two DRAFT header lines (lead decision 33c)."
+    },
+    {
+      "id": "release-commit",
+      "label": "release commit on main",
+      "kind": "normal",
+      "detail": "Removes `private`, sets `license` and the `repository` field, dates the CHANGELOG section."
+    },
+    { "id": "tagged", "label": "tag sdk-v1.0.0", "kind": "normal" },
+    {
+      "id": "dryrun",
+      "label": "dry run of SDK publish",
+      "kind": "normal",
+      "detail": "`dry_run` (default true): tests, build, pack, `npm publish --dry-run`, no release."
+    },
+    {
+      "id": "published",
+      "label": "published with provenance + GitHub release",
+      "kind": "normal",
+      "detail": "1.0.0 only with `credential: npm-token` (environment `npm`'s `NPM_TOKEN`); the release names the tarball integrity and the IIFE's SRI hash."
+    },
+    {
+      "id": "trusted",
+      "label": "trusted publishing only",
+      "kind": "final",
+      "detail": "Owner adds the trusted publisher on npmjs.com; later versions use `credential: trusted-publishing`; the token is revoked."
+    },
+    {
+      "id": "refused",
+      "label": "workflow refuses",
+      "kind": "error",
+      "detail": "Not a tag of main, wrong version, still private or UNLICENSED, repository mismatch, undated CHANGELOG, or `npm-token` for a version other than 1.0.0."
+    }
+  ],
+  "transitions": [
+    { "from": "workspace", "to": "prepared", "label": "SDK-015 (2026-11-18)" },
+    { "from": "prepared", "to": "approved", "label": "owner decisions (H-14 licence, draft SHA-256)" },
+    { "from": "approved", "to": "release-commit", "label": "merge into main (about 4 December)" },
+    { "from": "release-commit", "to": "tagged", "label": "git tag -a sdk-v1.0.0" },
+    { "from": "tagged", "to": "dryrun", "label": "Run workflow (dry_run on)" },
+    { "from": "dryrun", "to": "published", "label": "Run workflow (dry_run off)" },
+    { "from": "dryrun", "to": "refused", "label": "readiness check fails" },
+    { "from": "published", "to": "trusted", "label": "trusted publisher configured, token revoked" }
+  ]
+}

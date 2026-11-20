@@ -1,0 +1,133 @@
+{
+  "id": "storefront-settings-and-markups",
+  "title": "Configure the storefront, markups and fees in the OTA admin",
+  "summary": "The owner opens the console, sets a 10 % markup and a booking service fee, changes the brand colour, publishes a content page, tries a broken e-mail template, limits offers per search and turns on the airline card and self-service cancellation; each change is checked where travellers see it.",
+  "apps": ["portal", "ota-admin", "ota-api", "storefront"],
+  "roles": ["OTA owner"],
+  "duration": "30 min",
+  "prerequisites": [
+    "An active OTA of your own and its storefront on the dev server (`STOREFRONT_DEV_HOST=<key>.ota.example.com`, [[journey:signup-and-provision]]).",
+    "Signed in to the portal as the OTA's owner."
+  ],
+  "steps": [
+    {
+      "id": "open-console",
+      "app": "portal",
+      "title": "Open the console from the portal",
+      "url": "http://localhost:3000/otas/ten_…",
+      "actions": "On the OTA's page press **Open console**.",
+      "expect": "A brief hand-off page, then `http://localhost:3002/bookings` with the OTA's name in the shell and the TEST badge. Page titles end with `· Velexis OTA admin`.",
+      "data": "Redis: the `ptk:*` key is gone (single use); a `staffsess:*` key exists. OTA admin cookies `__Host-vx_staff_at`, `__Host-vx_staff_rt`, `__Host-vx_env`, `__Host-vx_tenant` are httpOnly.",
+      "code": [
+        "platform/frontend/src/app/(app)/otas/[tenantId]/console/launch/route.ts",
+        "platform/backend/src/memberships/console-token.service.ts",
+        "ota/admin/src/app/sso/route.ts",
+        "ota/backend/src/identity/staff/staff-auth.service.ts"
+      ]
+    },
+    {
+      "id": "baseline-search",
+      "app": "storefront",
+      "title": "Note the net prices first",
+      "url": "http://localhost:5173",
+      "actions": "Search MAD → PAR for a date 45 days ahead and note the five prices.",
+      "expect": "Under the seeded default markup of 0 % the prices equal the stub's net prices.",
+      "code": ["ota/backend/src/pricing/pricing-engine.ts"]
+    },
+    {
+      "id": "markup",
+      "app": "ota-admin",
+      "title": "Set the default markup rule to 10 %",
+      "url": "http://localhost:3002/settings/markups",
+      "actions": "Open the rule **Default** (badge Default, priority 1000); keep *Percentage of the net price*; type **Percentage** `10`; press **Save changes**. Then search the storefront again for a **different** date (46 days ahead: identical searches are shared for 30 s).",
+      "expect": "A saved status message. Each of the five offers now costs its net price plus 10 %, rounded half-up to the cent.",
+      "data": "`SELECT name, calculation, percentage, is_default, version FROM tenant_<key>.markup_rules;` → `Default`, `percentage`, `10.0000`, version + 1. `SELECT action, outcome FROM tenant_<key>.staff_actions ORDER BY created_at DESC LIMIT 1;` → `settings.markupRules.update`, `succeeded`. No cache is involved: rules are read by the next search.",
+      "code": [
+        "ota/admin/src/app/(console)/settings/markups/[id]/page.tsx",
+        "ota/backend/src/settings/pricing-rules.service.ts",
+        "ota/backend/src/pricing/rule-matcher.ts"
+      ]
+    },
+    {
+      "id": "fee",
+      "app": "ota-admin",
+      "title": "Add a booking service fee of €7.50",
+      "url": "http://localhost:3002/settings/fees",
+      "actions": "Press **New fee rule**: **Name** `Service fee`, **Label** `Service fee`, **Fee type** *Booking service fee*, **Calculation** *Fixed amount*, **Fixed amount** `7.50`, **Currency of the amounts** `EUR`, **Computed** *Per booking*; press **Create fee rule**. On the storefront open the cheapest offer, keep its fare and look at the price page.",
+      "expect": "The rule's page opens. On `/price.html` the **Price details** list *Service fee €7.50* and the total is €7.50 above the offer's price.",
+      "data": "`SELECT name, label, fee_type, calculation, fixed_amount, currency, applies_per, refundable, is_active FROM tenant_<key>.fee_rules;`",
+      "code": [
+        "ota/admin/src/app/(console)/settings/fees/new/page.tsx",
+        "ota/backend/src/settings/fee-rules.controller.ts"
+      ]
+    },
+    {
+      "id": "theme",
+      "app": "ota-admin",
+      "title": "Change the primary colour",
+      "url": "http://localhost:3002/settings/storefront",
+      "actions": "On **Brand and theme** set the primary colour to `#7c2d12` (the editor shows the contrast verdict) and press **Save branding and theme**. Reload the storefront in the tab you already had open, then open it in a **new** tab.",
+      "expect": "\"Saved. The storefront shows the change within 5 minutes.\" The old tab keeps its 5-minute copy of the configuration (old colour) until that copy expires; the new tab shows the new colour on the search button (`--vx-primary`).",
+      "data": "`SELECT primary_color, version FROM tenant_<key>.storefront_settings;`",
+      "code": [
+        "ota/admin/src/app/(console)/settings/storefront/sections.tsx",
+        "ota/backend/src/settings/storefront-settings.service.ts",
+        "ota/frontend/src/lib/config-cache.js",
+        "ota/frontend/src/lib/theme.js"
+      ]
+    },
+    {
+      "id": "page",
+      "app": "ota-admin",
+      "title": "Publish a content page",
+      "url": "http://localhost:3002/settings/pages",
+      "actions": "On **Pages** press **New page**: **Address** `about`, **Language**, **Title**, a **Body**, tick \"Published on the storefront\" and \"Listed in the storefront footer\"; press **Create page**. Open `http://localhost:5173/p/about` (or **View on storefront**).",
+      "expect": "The storefront shows the page's title and text, and its footer links it. An unpublished page or an unknown slug answers the storefront's not-found page.",
+      "data": "`SELECT slug, locale, kind, title, is_published, show_in_footer FROM tenant_<key>.storefront_pages;`",
+      "code": [
+        "ota/admin/src/app/(console)/settings/pages/[pageId]/page.tsx",
+        "ota/backend/src/settings/pages.service.ts",
+        "ota/backend/src/storefront/public-pages.service.ts",
+        "ota/frontend/src/pages/p.js"
+      ]
+    },
+    {
+      "id": "template",
+      "app": "ota-admin",
+      "title": "Try an e-mail template that does not compile",
+      "url": "http://localhost:3002/settings/templates",
+      "actions": "Open `booking.confirmed` (e-mail, your locale). On line 2 of the **HTML body** open a mustache `{{` without closing it; press **Save**. Reload.",
+      "expect": "*The template does not compile*, one problem *HTML body, line 2: …* with the link *Go to line 2 of the HTML body*; nothing saved; after the reload the previous body is back.",
+      "data": "`tenant_<key>.notification_templates` unchanged; a `staff_actions` row `settings.templates.put` with `outcome = failed`.",
+      "code": [
+        "ota/admin/src/app/(console)/settings/templates/[key]/[channel]/[locale]/page.tsx",
+        "ota/backend/src/settings/templates.service.ts"
+      ]
+    },
+    {
+      "id": "offers-per-search",
+      "app": "ota-admin",
+      "title": "Limit the offers per search",
+      "url": "http://localhost:3002/settings/storefront",
+      "actions": "On **Features and search**, in the **Search** section, set **Offers per search** to `40`, press **Save search**, run a storefront search, then open **Supplier log** (`/supplier-log`) and find that search's Flight Offers Search call. Press **Use the default** and **Save search** again.",
+      "expect": "\"Saved. The storefront's next search asks Amadeus for this number of offers.\" The field shows \"Default: 150 offers per search\" beside it. The supplier log shows the Amadeus call with `max=40`; after **Use the default**, the next search asks for `max=150`. Saving the same value twice: \"Nothing to save: the offers per search are as shown.\"",
+      "code": [
+        "ota/admin/src/app/(console)/supplier-log/page.tsx",
+        "ota/backend/src/shopping/searches.service.ts"
+      ]
+    },
+    {
+      "id": "switches",
+      "app": "ota-admin",
+      "title": "Turn on the airline card and self-service cancellation",
+      "url": "http://localhost:3002/settings/storefront",
+      "actions": "On **Payments** tick *Offer the airline card in the test environment* and press **Save airline card**. On **Features and search** tick *Self-service cancellation* and press **Save features**. Look at the live airline-card box.",
+      "expect": "Both sections answer \"Saved…\"; the airline card's save says \"Saved with warnings:\" with the API's `airline_card_net_price` warning, because the active 10 % markup and the fee do not apply to airline-card bookings. The live airline-card box stays unavailable with the explanation that the platform turns it on after its security review. These switches are needed by [[journey:book-with-airline-card]] and [[journey:my-bookings-change-and-cancel]].",
+      "data": "`SELECT airline_card_enabled_test, airline_card_enabled_live, features FROM tenant_<key>.storefront_settings;`",
+      "code": [
+        "ota/admin/src/app/(console)/settings/storefront/settings-rules.ts",
+        "ota/backend/src/settings/storefront-settings.mapper.ts"
+      ]
+    }
+  ]
+}

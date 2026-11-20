@@ -1,0 +1,73 @@
+{
+  "id": "invoice-states",
+  "type": "state",
+  "title": "Invoice status (mirrored from Stripe)",
+  "caption": "`platform.invoices.status`, copied from Stripe's re-fetched invoice by the handler of `invoice.finalized`, `invoice.paid`, `invoice.payment_failed` and `invoice.voided` (no audit row); listed by listInvoices and adminListInvoices. Draft invoices are never stored.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "open",
+      "label": "open",
+      "kind": "normal",
+      "detail": "The first stored state: a finalized invoice. `invoice.payment_failed` while still unpaid queues `billing.payment_failed` to every active owner (once per attempt)."
+    },
+    {
+      "id": "paid",
+      "label": "paid",
+      "kind": "final"
+    },
+    {
+      "id": "void",
+      "label": "void",
+      "kind": "final"
+    },
+    {
+      "id": "uncollectible",
+      "label": "uncollectible",
+      "kind": "error",
+      "detail": "Marked in Stripe; the row shows it at the next handled event of the invoice."
+    },
+    {
+      "id": "draft",
+      "label": "draft (CHECK only)",
+      "kind": "normal",
+      "detail": "Allowed by the CHECK; a draft invoice ends the event `ignored` with `INVOICE_DRAFT`."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "open",
+      "label": "invoice.finalized (re-fetch)"
+    },
+    {
+      "from": "open",
+      "to": "paid",
+      "label": "invoice.paid"
+    },
+    {
+      "from": "open",
+      "to": "void",
+      "label": "invoice.voided"
+    },
+    {
+      "from": "open",
+      "to": "uncollectible",
+      "label": "re-fetch shows uncollectible"
+    },
+    {
+      "from": "uncollectible",
+      "to": "paid",
+      "label": "invoice.paid"
+    },
+    {
+      "from": "uncollectible",
+      "to": "void",
+      "label": "invoice.voided"
+    }
+  ]
+}

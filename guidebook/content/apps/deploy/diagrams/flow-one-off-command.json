@@ -1,0 +1,32 @@
+{
+  "id": "flow-one-off-command",
+  "type": "flow",
+  "title": "Run a one-off CLI command as a trust zone",
+  "caption": "deploy/scripts/run-as.sh (velexis-run). The command gets the zone unit's user, env files, working directory and sandbox; never the migrator DSN.",
+  "steps": [
+    {
+      "title": "Pick the zone",
+      "actor": "Operator",
+      "body": "`platform` (copies velexis-platform-worker), `ota` (velexis-ota-worker), `portal`, `platform-admin`, `ota-admin`.",
+      "expect": "Backend zones get both env files of their worker."
+    },
+    {
+      "title": "Grant the first platform admin",
+      "actor": "Operator",
+      "body": "`sudo velexis-run platform node dist/cli.js admin:grant <email>` (the account must be verified and have MFA on).",
+      "expect": "Exit code is the command's; `125` means velexis-run refused (bad zone, unit not installed, no release folder). An unknown e-mail prints `No account has the e-mail address <email>; nothing changed.`"
+    },
+    {
+      "title": "Create the production demo OTA",
+      "actor": "Operator",
+      "body": "`sudo velexis-run platform node dist/cli.js tenants:create-demo <email> --country <code> --currency <code> --time-zone <zone>` (owner with MFA; key `demo`, out of billing).",
+      "expect": "`demo.<STOREFRONT_BASE_DOMAIN>` gets a certificate; the health check's payment pages and the uptime monitor can use it."
+    },
+    {
+      "title": "Run a tenant backfill",
+      "actor": "Operator",
+      "body": "`sudo velexis-run ota node dist/cli.js tenants:scrub-card-copies --all`",
+      "expect": "One line per schema, `… <n> scrubbed of <m> read (<k> changed meanwhile, left for another run)`, then `<x> of <y> tenant schema(s) scrubbed.`; a second run scrubs 0."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "flow-suspend-resume",
+  "type": "flow",
+  "title": "Find an OTA, suspend and resume it",
+  "caption": "Needs an active OTA (OTA worker running). Mirrors admin-tenant-lifecycle.e2e.ts and admin-suspension-storefront.e2e.ts.",
+  "steps": [
+    {
+      "title": "Find the OTA",
+      "actor": "Platform admin",
+      "screen": "/tenants",
+      "url": "http://localhost:3001/tenants?q=owner@example.com",
+      "body": "Type part of the key, the name or an owner's **whole** e-mail in **Search** and press Search.",
+      "expect": "The URL keeps `q`; one row with status Active; click the OTA name."
+    },
+    {
+      "title": "Suspend",
+      "screen": "/tenants/[tenantId]",
+      "body": "**Suspend** → choose **Kind of suspension** (abuse, request, admin; 'Velexis decision' preselected) → **Reason** (5-500) → **Suspend OTA**.",
+      "expect": "Status 'The OTA is suspended.' with a Suspension job link; only **Resume** is offered now."
+    },
+    {
+      "title": "Check the effects",
+      "body": "Open the job link; open Mailpit; open the storefront and the owner's portal page.",
+      "expect": "Job 'Done' after the OTA worker answers; e-mail '<name> has been suspended'; the storefront says 'temporarily unavailable' within 60 s; the portal shows 'This OTA is suspended'."
+    },
+    {
+      "title": "Resume",
+      "body": "**Resume** → **Reason** → **Resume OTA**.",
+      "expect": "'The OTA is active again.' with a Resumption job; e-mail '<name> is active again'; storefront works again within 60 s."
+    },
+    {
+      "title": "Audit",
+      "body": "Tab **Audit** (`?tab=audit`).",
+      "expect": "Rows `tenant.suspended` and `tenant.resumed`, actor 'Platform admin' with your e-mail and both reasons."
+    }
+  ]
+}

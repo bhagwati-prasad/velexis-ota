@@ -1,0 +1,81 @@
+{
+  "id": "refund-states",
+  "type": "state",
+  "title": "Refund status (refunds.status)",
+  "caption": "Rows written by bookings.cancel, console.bookings.cancel and console.payments.refund; sent by refund.submit on ota-payments (refunds.sweep re-queues lost ones after 5 min); the final state comes from Stripe's webhooks (src/payments/refunds.repository.ts, payment-state.ts REFUND_TRANSITIONS, stripe-events.processor.ts).",
+  "states": [
+    {
+      "id": "pending",
+      "label": "pending",
+      "kind": "initial",
+      "detail": "Requested; `refund.submit` queued after commit (job id `refund-submit-<rfd_id>`). The customer sees `refund.requested`."
+    },
+    {
+      "id": "processing",
+      "label": "processing",
+      "kind": "normal",
+      "detail": "Claimed and sent to Stripe (Stripe `pending`/`requires_action`)."
+    },
+    {
+      "id": "succeeded",
+      "label": "succeeded",
+      "kind": "final",
+      "detail": "Stripe confirmed (`charge.refunded` / `charge.refund.updated`); payment partially_refunded or refunded. Can still turn failed later."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Stripe refused or reported failure (`failure_reason`); staff alert."
+    },
+    {
+      "id": "canceled",
+      "label": "canceled",
+      "kind": "final",
+      "detail": "Stripe reported the refund `canceled` (charge.refund.updated); written only from Stripe's word, never by Velexis code itself."
+    },
+    {
+      "id": "release",
+      "label": "release recorded",
+      "kind": "initial",
+      "detail": "Cancellation of an only-authorised Stripe payment: the kept amount is captured and Stripe releases the rest; `recordRelease` inserts the refund row `succeeded` at once (no Stripe refund, `provider_refund_id` empty)."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "pending",
+      "to": "processing",
+      "label": "refund.submit claims and calls Stripe"
+    },
+    {
+      "from": "processing",
+      "to": "succeeded",
+      "label": "webhook / re-read"
+    },
+    {
+      "from": "processing",
+      "to": "failed",
+      "label": "Stripe failure"
+    },
+    {
+      "from": "succeeded",
+      "to": "failed",
+      "label": "charge.refund.updated failed"
+    },
+    {
+      "from": "processing",
+      "to": "canceled",
+      "label": "Stripe reports canceled"
+    },
+    {
+      "from": "pending",
+      "to": "canceled",
+      "label": "Stripe reports canceled (claim released after a lost answer)"
+    },
+    {
+      "from": "release",
+      "to": "succeeded",
+      "label": "inserted succeeded (no Stripe call)"
+    }
+  ]
+}

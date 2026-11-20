@@ -1,0 +1,354 @@
+{
+  "id": "neighbours",
+  "type": "component",
+  "title": "Who uses which shared package and tool",
+  "caption": "Runtime packages ship inside the backends' releases; @velexis/testing, the Amadeus stub and tools/e2e are dev-only. Edges are imports (counted with grep over each app's src/ and test/ at a68a8cd8) or commands.",
+  "groups": [
+    {
+      "id": "apps",
+      "label": "Apps (consumers)"
+    },
+    {
+      "id": "runtime",
+      "label": "Runtime packages (packages/*)"
+    },
+    {
+      "id": "devonly",
+      "label": "Test support (dev only)"
+    },
+    {
+      "id": "tools",
+      "label": "Tools (tools/*)"
+    },
+    {
+      "id": "vm",
+      "label": "The VM"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "platformApi",
+      "label": "Platform API + worker",
+      "group": "apps",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "Imports config, logger, crypto, db, errors, api-types at run time; @velexis/testing in its tests."
+    },
+    {
+      "id": "otaApi",
+      "label": "OTA API + worker",
+      "group": "apps",
+      "kind": "api",
+      "app": "ota-api",
+      "detail": "The heaviest user: `tenantTx` (178 files import @velexis/db), envelope encryption of tenant columns, provisioning through `migrateTenantSchema`."
+    },
+    {
+      "id": "portal",
+      "label": "Portal",
+      "group": "apps",
+      "kind": "ui",
+      "app": "portal",
+      "detail": "config, logger, errors (code → message), api-types (platform types)."
+    },
+    {
+      "id": "padmin",
+      "label": "Platform admin",
+      "group": "apps",
+      "kind": "ui",
+      "app": "platform-admin",
+      "detail": "Same as the portal."
+    },
+    {
+      "id": "oadmin",
+      "label": "OTA admin",
+      "group": "apps",
+      "kind": "ui",
+      "app": "ota-admin",
+      "detail": "config, logger, errors; talks to the OTA API through the SDK."
+    },
+    {
+      "id": "storefront",
+      "label": "Storefront",
+      "group": "apps",
+      "kind": "ui",
+      "app": "storefront",
+      "detail": "Types only (through the SDK)."
+    },
+    {
+      "id": "sdk",
+      "label": "JS SDK",
+      "group": "apps",
+      "kind": "lib",
+      "app": "sdk",
+      "detail": "JSDoc types from @velexis/api-types only; no runtime import."
+    },
+    {
+      "id": "config",
+      "label": "@velexis/config",
+      "group": "runtime",
+      "kind": "lib",
+      "term": "define-config",
+      "detail": "`defineConfig`, `env.*`, `readKeyFile`, `loadDevEnvFiles`. The only code that reads `process.env`."
+    },
+    {
+      "id": "logger",
+      "label": "@velexis/logger",
+      "group": "runtime",
+      "kind": "lib",
+      "term": "redact-paths",
+      "detail": "pino, `REDACT_PATHS`, `pinoHttpOptions`, `redactPayload`, `maskPan`."
+    },
+    {
+      "id": "crypto",
+      "label": "@velexis/crypto",
+      "group": "runtime",
+      "kind": "lib",
+      "term": "envelope-encryption",
+      "detail": "Envelope encryption, KEK files, `rewrapBatch`, tokens, API-key HMAC, signed URLs, `newId`."
+    },
+    {
+      "id": "db",
+      "label": "@velexis/db",
+      "group": "runtime",
+      "kind": "lib",
+      "term": "tenant-tx",
+      "detail": "Pools, `platformDb`, `tenantTx`, migration runner + `migrate.js`, storage adapter, generated table types."
+    },
+    {
+      "id": "errors",
+      "label": "@velexis/errors",
+      "group": "runtime",
+      "kind": "lib",
+      "term": "error-catalogue",
+      "detail": "Generated error catalogue (74 OTA + 29 platform-only codes), `AppError`, `toErrorEnvelope`."
+    },
+    {
+      "id": "apiTypes",
+      "label": "@velexis/api-types",
+      "group": "runtime",
+      "kind": "lib",
+      "term": "operations-index",
+      "detail": "OpenAPI types (OTA 136 operations, platform 144), operations index, job envelope, queue names, validators, fixtures."
+    },
+    {
+      "id": "testing",
+      "label": "@velexis/testing",
+      "group": "devonly",
+      "kind": "lib",
+      "term": "test-template-database",
+      "detail": "Template test databases, `useRedis`, `FakeClock`, builders, `expectResponseToMatch`, Mailpit, Amadeus and Stripe helpers."
+    },
+    {
+      "id": "stub",
+      "label": "@velexis/amadeus-stub (port 4900)",
+      "group": "devonly",
+      "kind": "external",
+      "term": "amadeus-stub",
+      "detail": "Amadeus OAuth + 12 operations, validated against `docs/amadeus-api/`, scenarios by header."
+    },
+    {
+      "id": "refdata",
+      "label": "@velexis/reference-data",
+      "group": "tools",
+      "kind": "lib",
+      "term": "reference-loader",
+      "detail": "Vendored CSV snapshot + loader `dist/cli/load.js` (also shipped to the VM)."
+    },
+    {
+      "id": "e2e",
+      "label": "@velexis/e2e (Playwright)",
+      "group": "tools",
+      "kind": "worker",
+      "term": "e2e-stack",
+      "detail": "Starts the built stack on a fresh database and drives every UI."
+    },
+    {
+      "id": "ci",
+      "label": "tools/ci, tools/plan-lint",
+      "group": "tools",
+      "kind": "lib",
+      "term": "check-package-json",
+      "detail": "Plain-Node checks run by `ci.yml`."
+    },
+    {
+      "id": "perf",
+      "label": "tools/perf, tools/dev",
+      "group": "tools",
+      "kind": "lib",
+      "term": "platform-smoke",
+      "detail": "Platform performance smoke test, GC observer, unit heap flags; `dev:keys` and `stripe-listen.sh`."
+    },
+    {
+      "id": "deploy",
+      "label": "velexis-deploy",
+      "group": "vm",
+      "kind": "edge",
+      "app": "deploy",
+      "detail": "Runs `migrate.js` (platform, reference, tenants) and the reference loader before switching releases."
+    }
+  ],
+  "edges": [
+    {
+      "from": "platformApi",
+      "to": "config",
+      "label": "typed env",
+      "kind": "sync"
+    },
+    {
+      "from": "platformApi",
+      "to": "db",
+      "label": "platformDb, migrations",
+      "kind": "sync"
+    },
+    {
+      "from": "platformApi",
+      "to": "crypto",
+      "label": "encrypts credentials, MFA",
+      "kind": "sync"
+    },
+    {
+      "from": "platformApi",
+      "to": "errors",
+      "label": "error filter",
+      "kind": "sync"
+    },
+    {
+      "from": "platformApi",
+      "to": "apiTypes",
+      "label": "types, jobs",
+      "kind": "sync"
+    },
+    {
+      "from": "otaApi",
+      "to": "db",
+      "label": "tenantTx, migrateTenantSchema",
+      "kind": "sync"
+    },
+    {
+      "from": "otaApi",
+      "to": "crypto",
+      "label": "decrypts credentials, tenant columns",
+      "kind": "sync"
+    },
+    {
+      "from": "otaApi",
+      "to": "logger",
+      "label": "redaction",
+      "kind": "sync"
+    },
+    {
+      "from": "otaApi",
+      "to": "errors",
+      "label": "error filter",
+      "kind": "sync"
+    },
+    {
+      "from": "otaApi",
+      "to": "apiTypes",
+      "label": "types, job validation",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "errors",
+      "label": "code → message",
+      "kind": "sync"
+    },
+    {
+      "from": "portal",
+      "to": "apiTypes",
+      "label": "platform types",
+      "kind": "sync"
+    },
+    {
+      "from": "padmin",
+      "to": "apiTypes",
+      "label": "platform types",
+      "kind": "sync"
+    },
+    {
+      "from": "oadmin",
+      "to": "errors",
+      "label": "codes",
+      "kind": "sync"
+    },
+    {
+      "from": "sdk",
+      "to": "apiTypes",
+      "label": "JSDoc types only",
+      "kind": "data"
+    },
+    {
+      "from": "storefront",
+      "to": "sdk",
+      "label": "client",
+      "kind": "sync"
+    },
+    {
+      "from": "db",
+      "to": "config",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "db",
+      "to": "logger",
+      "label": "",
+      "kind": "sync"
+    },
+    {
+      "from": "errors",
+      "to": "apiTypes",
+      "label": "envelope types",
+      "kind": "data"
+    },
+    {
+      "from": "testing",
+      "to": "db",
+      "label": "runner, tenantTx",
+      "kind": "sync"
+    },
+    {
+      "from": "testing",
+      "to": "stub",
+      "label": "startAmadeusStub",
+      "kind": "sync"
+    },
+    {
+      "from": "e2e",
+      "to": "testing",
+      "label": "Mailpit, roles, dropDatabase",
+      "kind": "sync"
+    },
+    {
+      "from": "e2e",
+      "to": "stub",
+      "label": "starts dist/cli.js",
+      "kind": "async"
+    },
+    {
+      "from": "e2e",
+      "to": "refdata",
+      "label": "pnpm db:seed:reference",
+      "kind": "async"
+    },
+    {
+      "from": "deploy",
+      "to": "db",
+      "label": "node dist/cli/migrate.js",
+      "kind": "async"
+    },
+    {
+      "from": "deploy",
+      "to": "refdata",
+      "label": "node dist/cli/load.js",
+      "kind": "async"
+    },
+    {
+      "from": "ci",
+      "to": "apiTypes",
+      "label": "generated files up to date",
+      "kind": "data"
+    }
+  ]
+}

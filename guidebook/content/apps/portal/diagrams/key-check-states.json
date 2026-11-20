@@ -1,0 +1,79 @@
+{
+  "id": "key-check-states",
+  "type": "state",
+  "title": "The wizard's OTA key field",
+  "caption": "KeyAvailabilityField: only the answer for the key still in the field counts; createTenant checks again.",
+  "states": [
+    {
+      "id": "empty",
+      "label": "Following the name",
+      "kind": "initial",
+      "detail": "Lower case letters and digits, accents dropped, ≤30."
+    },
+    {
+      "id": "invalid",
+      "label": "Breaks the pattern",
+      "kind": "error",
+      "detail": "`^[a-z][a-z0-9]{2,29}$`; no API call."
+    },
+    {
+      "id": "checking",
+      "label": "Checking (400 ms pause)",
+      "kind": "normal"
+    },
+    {
+      "id": "available",
+      "label": "This key is available.",
+      "kind": "final"
+    },
+    {
+      "id": "taken",
+      "label": "Taken or reserved",
+      "kind": "error",
+      "detail": "Continue stays on step 1."
+    },
+    {
+      "id": "unchecked",
+      "label": "Could not be checked",
+      "kind": "normal",
+      "detail": "Rate limit or API down; createTenant checks it."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "empty",
+      "to": "invalid",
+      "label": "typed key fails the pattern"
+    },
+    {
+      "from": "empty",
+      "to": "checking",
+      "label": "valid key, typing paused"
+    },
+    {
+      "from": "invalid",
+      "to": "checking",
+      "label": "fixed"
+    },
+    {
+      "from": "checking",
+      "to": "available",
+      "label": "available"
+    },
+    {
+      "from": "checking",
+      "to": "taken",
+      "label": "taken / reserved"
+    },
+    {
+      "from": "checking",
+      "to": "unchecked",
+      "label": "429 / 503"
+    },
+    {
+      "from": "available",
+      "to": "taken",
+      "label": "TENANT_KEY_UNAVAILABLE on submit"
+    }
+  ]
+}

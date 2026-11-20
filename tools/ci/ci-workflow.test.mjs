@@ -399,6 +399,29 @@ describe("workflow shape", () => {
     assert.ok(perfTests.includes("platform-smoke.test.mjs"), "tools/perf/platform-smoke.test.mjs exists");
   });
 
+  it("[FIX-W66-GUIDEBOOK AC3] build-test lints and tests the guidebook in the step of the CI checks", () => {
+    // Lead decision (35e) of 2026-11-20, approved by the owner: a stale bundle or a broken reference turns CI red.
+    const at = stepIndex("build-test", (s) => /node --test tools\/ci\/\*\.test\.mjs/.test(s.run ?? ""));
+    assert.ok(at >= 0, "build-test has the step of the CI checks");
+    const step = JOBS.get("build-test").steps[at];
+    assert.equal(step.name, "Lint and test the CI checks, tools/perf and the guidebook");
+    const lines = step.run.split("\n");
+    for (const line of ["pnpm exec eslint guidebook", "node --test guidebook/tools/guidebook.test.mjs"]) {
+      assert.ok(lines.includes(line), `the step runs: ${line}`);
+    }
+    assert.equal(step.if, undefined, "it always runs");
+    assert.equal(step["continue-on-error"], undefined, "a failing guidebook test fails the job");
+    assert.ok(
+      at > stepIndex("build-test", (s) => s.run === "pnpm install --frozen-lockfile"),
+      "after the install",
+    );
+    assert.ok(at < stepIndex("build-test", (s) => s.run === "pnpm test"), "before the tests");
+    assert.ok(
+      existsSync(join(ROOT, "guidebook/tools/guidebook.test.mjs")),
+      "guidebook/tools/guidebook.test.mjs exists",
+    );
+  });
+
   it("[FIX-W47-SHARED AC7] a job of its own runs check-vm.test.sh as root on ubuntu-24.04 with a real sshd", () => {
     // Lead decision (13l) of 2026-11-10, approved by the owner.
     const job = JOBS.get("check-vm");

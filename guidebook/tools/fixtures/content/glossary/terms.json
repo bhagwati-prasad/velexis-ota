@@ -1,0 +1,272 @@
+[
+  {
+    "id": "ota",
+    "term": "OTA",
+    "aliases": ["online travel agency"],
+    "category": "product",
+    "definition": "An online travel agency: a business that sells travel. In Velexis each OTA is a [[tenant]].",
+    "apps": ["portal"],
+    "related": ["tenant", "booking"],
+    "see": ["overview"],
+    "classOf": "Tenant"
+  },
+  {
+    "id": "tenant",
+    "term": "Tenant",
+    "aliases": ["OTA record", "platform.tenants"],
+    "category": "tenancy",
+    "definition": "One customer of the platform; a row in `platform.tenants` that owns one [[tenant-schema]].",
+    "apps": ["portal", "platform-api"],
+    "related": ["tenant-schema", "ota", "membership"],
+    "see": ["platform/backend/src/tenants/tenants.service.ts"],
+    "classOf": "Tenant"
+  },
+  {
+    "id": "tenant-schema",
+    "term": "Tenant schema",
+    "aliases": ["tenant_<key>"],
+    "category": "tenancy",
+    "definition": "The PostgreSQL schema `tenant_<key>` that holds all data of one OTA.",
+    "apps": ["platform-api"],
+    "related": ["schema-per-tenant", "tenant-tx"],
+    "see": ["docs/mvp/adr/0004-postgresql-schema-per-tenant.md"],
+    "classOf": "Schema"
+  },
+  {
+    "id": "schema-per-tenant",
+    "term": "Schema per tenant",
+    "aliases": [],
+    "category": "tenancy",
+    "definition": "The tenancy model: one schema per OTA in one database (ADR-0004).",
+    "apps": ["platform-api"],
+    "related": ["tenant-schema"],
+    "see": ["docs/mvp/adr/0004-postgresql-schema-per-tenant.md"]
+  },
+  {
+    "id": "tenant-tx",
+    "term": "tenantTx",
+    "aliases": ["tenant transaction"],
+    "category": "data",
+    "definition": "The helper that opens a transaction with `search_path` set to one tenant schema; the only way to touch tenant data.",
+    "apps": ["platform-api"],
+    "related": ["tenant-schema"],
+    "see": ["packages/db/src/index.ts"]
+  },
+  {
+    "id": "platform-schema",
+    "term": "Platform schema",
+    "aliases": ["platform.*"],
+    "category": "tenancy",
+    "definition": "The `platform` schema: accounts, tenants, billing and provisioning tables.",
+    "apps": ["platform-api"],
+    "related": ["tenant-schema"],
+    "see": []
+  },
+  {
+    "id": "account",
+    "term": "Account",
+    "aliases": ["portal account", "platform.accounts"],
+    "category": "identity",
+    "definition": "A person who signs in to the portal. Status starts at `pending_verification`.",
+    "apps": ["portal", "platform-api"],
+    "related": ["membership", "session-cookie", "mfa"],
+    "see": [],
+    "classOf": "Account"
+  },
+  {
+    "id": "membership",
+    "term": "Membership",
+    "aliases": ["tenant membership", "staff"],
+    "category": "identity",
+    "definition": "Links an [[account]] to a [[tenant]] with a [[role]].",
+    "apps": ["portal"],
+    "related": ["account", "role"],
+    "see": [],
+    "classOf": "Membership"
+  },
+  {
+    "id": "role",
+    "term": "Role",
+    "aliases": ["owner", "admin", "viewer"],
+    "category": "identity",
+    "definition": "What a member may do in an OTA: owner, admin, agent, finance or viewer.",
+    "apps": ["portal"],
+    "related": ["membership"],
+    "see": ["platform/frontend/src/lib/roles.ts"],
+    "classOf": "Role"
+  },
+  {
+    "id": "session-cookie",
+    "term": "Session cookie",
+    "aliases": ["HttpOnly cookie"],
+    "category": "security",
+    "definition": "The portal keeps tokens in `HttpOnly` cookies so browser JavaScript can never read them.",
+    "apps": ["portal"],
+    "related": ["account", "csrf"],
+    "see": ["platform/frontend/src/lib/session.ts"]
+  },
+  {
+    "id": "csrf",
+    "term": "CSRF",
+    "aliases": ["cross-site request forgery"],
+    "category": "security",
+    "definition": "An attack that makes a signed-in browser send an unwanted request; server actions check the origin.",
+    "apps": ["portal"],
+    "related": ["session-cookie"],
+    "see": []
+  },
+  {
+    "id": "mfa",
+    "term": "MFA",
+    "aliases": ["TOTP", "two-factor"],
+    "category": "identity",
+    "definition": "Multi-factor authentication with a TOTP app and recovery codes.",
+    "apps": ["portal", "platform-api"],
+    "related": ["account"],
+    "see": []
+  },
+  {
+    "id": "bff",
+    "term": "BFF",
+    "aliases": ["backend for frontend"],
+    "category": "engineering",
+    "definition": "A frontend whose server calls the API on the browser's behalf, so tokens stay on the server.",
+    "apps": ["portal"],
+    "related": ["session-cookie"],
+    "see": ["docs/mvp/adr/0014-frontend-stack-nextjs-tailwind.md"]
+  },
+  {
+    "id": "api-key",
+    "term": "API key",
+    "aliases": ["platform.api_keys"],
+    "category": "api",
+    "definition": "A secret an OTA uses to call the booking API from its own servers.",
+    "apps": ["portal", "platform-api"],
+    "related": ["tenant"],
+    "see": []
+  },
+  {
+    "id": "subscription",
+    "term": "Subscription",
+    "aliases": ["plan"],
+    "category": "payments",
+    "definition": "The OTA's paid plan, billed monthly through [[stripe]].",
+    "apps": ["portal", "platform-api"],
+    "related": ["stripe"],
+    "see": [],
+    "classOf": "Subscription"
+  },
+  {
+    "id": "stripe",
+    "term": "Stripe",
+    "aliases": ["Stripe Billing"],
+    "category": "payments",
+    "definition": "The payment provider for subscriptions and card payments.",
+    "apps": ["platform-api"],
+    "related": ["subscription"],
+    "see": ["docs/mvp/adr/0013-subscription-billing-stripe-billing.md"],
+    "classOf": "ExternalService"
+  },
+  {
+    "id": "bullmq",
+    "term": "BullMQ",
+    "aliases": ["queue", "jobs"],
+    "category": "engineering",
+    "definition": "Redis-backed job queues used by the workers (ADR-0009).",
+    "apps": ["platform-api"],
+    "related": ["provisioning"],
+    "see": ["docs/mvp/adr/0009-background-jobs-bullmq.md"]
+  },
+  {
+    "id": "provisioning",
+    "term": "Provisioning",
+    "aliases": ["tenant provisioning"],
+    "category": "operations",
+    "definition": "The worker job that creates a [[tenant-schema]] and runs its migrations.",
+    "apps": ["platform-api"],
+    "related": ["bullmq", "tenant-schema"],
+    "see": ["platform/backend/src/provisioning"]
+  },
+  {
+    "id": "reference-data",
+    "term": "Reference data",
+    "aliases": ["reference.*"],
+    "category": "data",
+    "definition": "Shared lookup tables (currencies, countries, airports) in the `reference` schema.",
+    "apps": ["platform-api"],
+    "related": [],
+    "see": []
+  },
+  {
+    "id": "pnr",
+    "term": "PNR",
+    "aliases": ["passenger name record", "order"],
+    "category": "travel",
+    "definition": "The airline reservation record created when a flight is booked.",
+    "apps": [],
+    "related": ["booking", "amadeus"],
+    "see": []
+  },
+  {
+    "id": "offer",
+    "term": "Offer",
+    "aliases": ["flight offer"],
+    "category": "travel",
+    "definition": "A priced itinerary returned by a flight search.",
+    "apps": [],
+    "related": ["booking"],
+    "see": []
+  },
+  {
+    "id": "booking",
+    "term": "Booking",
+    "aliases": [],
+    "category": "travel",
+    "definition": "A customer's purchase of an [[offer]], stored in the tenant schema.",
+    "apps": [],
+    "related": ["offer", "pnr"],
+    "see": [],
+    "classOf": "Booking"
+  },
+  {
+    "id": "amadeus",
+    "term": "Amadeus",
+    "aliases": ["Amadeus Enterprise"],
+    "category": "travel",
+    "definition": "The flight supplier (GDS) behind search and booking.",
+    "apps": [],
+    "related": ["pnr"],
+    "see": ["docs/mvp/adr/0012-amadeus-account-model.md"],
+    "classOf": "ExternalService"
+  },
+  {
+    "id": "mailpit",
+    "term": "Mailpit",
+    "aliases": ["local SMTP"],
+    "category": "operations",
+    "definition": "Local SMTP server and web inbox on port 8025 that catches development e-mails.",
+    "apps": ["portal", "platform-api"],
+    "related": [],
+    "see": []
+  },
+  {
+    "id": "openapi-contract",
+    "term": "OpenAPI contract",
+    "aliases": ["contract first"],
+    "category": "api",
+    "definition": "The OpenAPI document is changed first and the types are generated from it (ADR-0006).",
+    "apps": ["platform-api"],
+    "related": [],
+    "see": ["docs/mvp/adr/0006-contract-first-openapi.md"]
+  },
+  {
+    "id": "definition-of-done",
+    "term": "Definition of done",
+    "aliases": ["done means proven"],
+    "category": "process",
+    "definition": "A task is done when its Verify command, lint, typecheck and tests pass and the docs are updated.",
+    "apps": [],
+    "related": [],
+    "see": ["getting-started"]
+  }
+]

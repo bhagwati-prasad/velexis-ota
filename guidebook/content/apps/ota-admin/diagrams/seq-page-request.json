@@ -1,0 +1,73 @@
+{
+  "id": "seq-page-request",
+  "type": "sequence",
+  "title": "A page request with a refresh just before expiry",
+  "caption": "OADR-0018 point 3. The middleware refreshes once per refresh token in the process (lib/refresh-dedup.ts) and rewrites both the response cookies and the request's own Cookie header, so the page already uses the new token. Server components never refresh.",
+  "actors": [
+    { "id": "b", "label": "Staff browser", "kind": "user" },
+    { "id": "mw", "label": "middleware.ts", "kind": "edge" },
+    { "id": "dd", "label": "refresh-dedup", "kind": "lib" },
+    { "id": "page", "label": "Shell + page (RSC)", "kind": "ui" },
+    { "id": "api", "label": "OTA API", "kind": "api" },
+    { "id": "redis", "label": "Redis", "kind": "cache" }
+  ],
+  "steps": [
+    { "from": "b", "to": "mw", "label": "GET /bookings?status=pending (cookies)", "kind": "call" },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "access token missing or expiring within 60 s, refresh cookie present?",
+      "kind": "self"
+    },
+    { "from": "mw", "to": "dd", "label": "refresh(sha256(refresh token))", "kind": "call" },
+    {
+      "from": "dd",
+      "to": "api",
+      "label": "console.auth.refresh (service key, X-Velexis-Environment: test)",
+      "kind": "call",
+      "note": "A parallel request with the same token waits for this promise instead of calling again"
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "rotate staffsess:<familyId>; check staffdeny:*",
+      "kind": "call"
+    },
+    { "from": "api", "to": "dd", "label": "new access + refresh token, environments", "kind": "return" },
+    { "from": "dd", "to": "mw", "label": "shared result (kept 30 s)", "kind": "return" },
+    {
+      "from": "mw",
+      "to": "mw",
+      "label": "Set-Cookie on the response, new tokens in the request Cookie header, CSP nonce, x-velexis-page-path",
+      "kind": "self",
+      "note": "Refused (REFRESH_TOKEN_REUSED, STAFF_MEMBERSHIP_INACTIVE…): cookies cleared, 303 to the portal. 429/503: cookies kept."
+    },
+    { "from": "mw", "to": "page", "label": "request continues", "kind": "call" },
+    {
+      "from": "page",
+      "to": "api",
+      "label": "console.auth.me (once per request, React cache; env from __Host-vx_env)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "page",
+      "label": "profile: role, permissions, environments, tenant (name, billingNotice, storefrontUrl)",
+      "kind": "return",
+      "note": "403 ENVIRONMENT_NOT_ALLOWED for live → asks again in test, banner + resetEnvironment"
+    },
+    {
+      "from": "page",
+      "to": "api",
+      "label": "console.bookings.list({status: [\"pending\"], limit: 25})",
+      "kind": "call"
+    },
+    { "from": "api", "to": "page", "label": "page of bookings, totalCount, nextCursor", "kind": "return" },
+    {
+      "from": "page",
+      "to": "b",
+      "label": "HTML (scripts carry the nonce); TOKEN_EXPIRED → 303 /auth/refresh?next=…",
+      "kind": "return"
+    }
+  ]
+}

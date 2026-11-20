@@ -1,0 +1,40 @@
+{
+  "id": "tenant-states",
+  "type": "state",
+  "title": "OTA status as the console drives it",
+  "caption": "platform.tenants.status. The tenant page offers Suspend only on active and Resume only on suspended; neither in provisioning or failed. Migrate never changes the status. See also platform-api/tenant-states.",
+  "states": [
+    { "id": "new", "label": "new", "kind": "initial" },
+    {
+      "id": "provisioning",
+      "label": "provisioning (Setting up)",
+      "kind": "normal",
+      "detail": "Waiting for the `provision` job. No lifecycle button."
+    },
+    { "id": "active", "label": "active", "kind": "normal", "detail": "Buttons: **Suspend**, **Migrate**." },
+    {
+      "id": "suspended",
+      "label": "suspended",
+      "kind": "normal",
+      "detail": "`suspension_reason` abuse / request / admin (console) or billing (billing sync). Buttons: **Resume**, **Migrate**."
+    },
+    {
+      "id": "failed",
+      "label": "failed",
+      "kind": "error",
+      "detail": "Set-up gave up. Retry the failed `provision` job on its job page."
+    }
+  ],
+  "transitions": [
+    { "from": "new", "to": "provisioning", "label": "owner creates the OTA (portal)" },
+    { "from": "provisioning", "to": "active", "label": "provision job succeeded" },
+    { "from": "provisioning", "to": "failed", "label": "provision job failed" },
+    { "from": "failed", "to": "provisioning", "label": "Retry on /provisioning-jobs/<id>" },
+    { "from": "active", "to": "suspended", "label": "Suspend (reason) / billing sync" },
+    {
+      "from": "suspended",
+      "to": "active",
+      "label": "Resume (reason; billing needs trialing|active subscription)"
+    }
+  ]
+}

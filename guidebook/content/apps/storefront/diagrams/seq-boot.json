@@ -1,0 +1,155 @@
+{
+  "id": "seq-boot",
+  "type": "sequence",
+  "title": "Every page: boot, host → tenant, configuration and session",
+  "caption": "`src/boot.js` with `lib/config.js`, `lib/primary-host.js`, `lib/session.js`; the API side is `tenancy/tenant-resolver.ts` and `storefront/storefront.service.ts`. The airline-card page skips boot and asks `storefront.get` fresh (`cache: \"no-store\"`).",
+  "actors": [
+    {
+      "id": "t",
+      "label": "Traveller",
+      "kind": "user"
+    },
+    {
+      "id": "b",
+      "label": "Page module + SDK",
+      "kind": "ui"
+    },
+    {
+      "id": "ss",
+      "label": "sessionStorage",
+      "kind": "cache"
+    },
+    {
+      "id": "edge",
+      "label": "Caddy / Vite proxy",
+      "kind": "edge"
+    },
+    {
+      "id": "api",
+      "label": "OTA API",
+      "kind": "api"
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "kind": "cache"
+    },
+    {
+      "id": "pdb",
+      "label": "platform (read only)",
+      "kind": "db"
+    },
+    {
+      "id": "db",
+      "label": "tenant_<key>",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "t",
+      "to": "edge",
+      "label": "GET /search.html?… on demo.ota.example.com",
+      "kind": "call",
+      "note": "Static HTML with header, footer, search form and the test banner partial; meaningful without JavaScript."
+    },
+    {
+      "from": "b",
+      "to": "ss",
+      "label": "read vx.storefront.config (younger than 5 min?)",
+      "kind": "call"
+    },
+    {
+      "from": "ss",
+      "to": "b",
+      "label": "hit: cached config → skip the API",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "edge",
+      "label": "miss: GET /api/v1/storefront",
+      "kind": "call"
+    },
+    {
+      "from": "edge",
+      "to": "api",
+      "label": "GET /v1/storefront + X-Velexis-Edge + X-Velexis-Host",
+      "kind": "call",
+      "note": "The edge secret proves the call comes through Caddy (or the dev proxy); a browser copy of these headers is removed."
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "tenantkey:<key> or host:<hostname>, then tenant:<id>",
+      "kind": "call"
+    },
+    {
+      "from": "redis",
+      "to": "pdb",
+      "label": "miss: platform.tenants / platform.tenant_domains",
+      "kind": "call",
+      "note": "Unknown host → 403 HOST_NOT_ALLOWED; tenant not active → 403 TENANT_SUSPENDED."
+    },
+    {
+      "from": "api",
+      "to": "redis",
+      "label": "t:<tenantId>:<env>:sf:<locale>",
+      "kind": "call"
+    },
+    {
+      "from": "redis",
+      "to": "db",
+      "label": "miss: storefront_settings, storefront_assets",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "200 config + Set-Cookie __Host-vx_csrf (JS-readable)",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "ss",
+      "label": "store {storedAt, config}",
+      "kind": "call"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "sign-in/up on the sub-domain with a custom primary? → location.replace(primary host)",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "applyTheme, header, footer, test banner + noindex unless environment = live",
+      "kind": "self"
+    },
+    {
+      "from": "b",
+      "to": "edge",
+      "label": "GET /api/v1/storefront/pages (footer; cached as vx.storefront.pages)",
+      "kind": "async"
+    },
+    {
+      "from": "b",
+      "to": "edge",
+      "label": "GET /api/v1/auth/session (only with customer accounts)",
+      "kind": "call"
+    },
+    {
+      "from": "api",
+      "to": "b",
+      "label": "200 session → \"Hi, <first name>\" | 401 → \"Sign in\"",
+      "kind": "return"
+    },
+    {
+      "from": "b",
+      "to": "b",
+      "label": "page module start({ config, session, client })",
+      "kind": "self"
+    }
+  ]
+}

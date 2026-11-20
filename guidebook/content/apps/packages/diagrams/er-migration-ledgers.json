@@ -1,0 +1,184 @@
+{
+  "id": "er-migration-ledgers",
+  "type": "er",
+  "title": "Migration ledgers and the tables the runner reads",
+  "caption": "Each set keeps its own `schema_migrations` ledger. The fan-out reads `platform.tenants`; it does NOT write `platform.tenant_schema_migrations` — the OTA backend publishes the report on platform-tenant-events and the platform worker writes that table.",
+  "entities": [
+    {
+      "id": "plat",
+      "label": "platform.schema_migrations",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text (NNNN_name | R__name)",
+          "key": "pk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "checksum",
+          "type": "text sha256"
+        },
+        {
+          "name": "phase",
+          "type": "expand|migrate|contract|repeatable"
+        },
+        {
+          "name": "status",
+          "type": "running|applied|failed"
+        },
+        {
+          "name": "execution_ms",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "ref",
+      "label": "reference.schema_migrations",
+      "schema": "reference",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "phase",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "ten",
+      "label": "tenant_<key>.schema_migrations",
+      "schema": "tenant",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ^[0-9]{4,14}(_[a-z0-9_]+)?$",
+          "key": "pk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "phase",
+          "type": "expand|migrate|contract"
+        },
+        {
+          "name": "status",
+          "type": "running|applied|failed"
+        },
+        {
+          "name": "execution_ms",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz"
+        }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "id",
+          "type": "text ten_…",
+          "key": "pk"
+        },
+        {
+          "name": "key",
+          "type": "text ^[a-z][a-z0-9_]{1,39}$",
+          "key": "uk"
+        },
+        {
+          "name": "schema_name",
+          "type": "text = 'tenant_' || key",
+          "key": "uk"
+        },
+        {
+          "name": "status",
+          "type": "provisioning|active|suspended|deprovisioning|deleted|failed"
+        }
+      ]
+    },
+    {
+      "id": "tsm",
+      "label": "platform.tenant_schema_migrations",
+      "schema": "platform",
+      "fields": [
+        {
+          "name": "tenant_id",
+          "type": "text",
+          "key": "fk"
+        },
+        {
+          "name": "version",
+          "type": "text"
+        },
+        {
+          "name": "schema_name",
+          "type": "text"
+        },
+        {
+          "name": "checksum",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "pending|running|applied|failed|rolled_back"
+        },
+        {
+          "name": "duration_ms",
+          "type": "integer"
+        }
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "from": "tenants",
+      "to": "ten",
+      "label": "schema_name names the schema (fan-out targets provisioning, active, suspended)",
+      "cardinality": "1-1"
+    },
+    {
+      "from": "tenants",
+      "to": "tsm",
+      "label": "mirrored by the platform from tenant.migrated / tenant.provisioned",
+      "cardinality": "1-n"
+    }
+  ]
+}

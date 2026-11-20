@@ -1,0 +1,80 @@
+{
+  "id": "seq-provision-schema",
+  "type": "sequence",
+  "title": "Provisioning a tenant schema with migrateTenantSchema({ create: true })",
+  "caption": "The OTA worker's create_schema + run_migrations + seed_defaults in ONE transaction (packages/db/src/migrate/tenant-schema.ts, ota/backend/src/provisioning/provisioning.service.ts). A schema is complete or absent.",
+  "actors": [
+    {
+      "id": "ow",
+      "label": "OTA worker (provisioning)",
+      "kind": "worker"
+    },
+    {
+      "id": "run",
+      "label": "migrateTenantSchema",
+      "kind": "lib"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL (DATABASE_PROVISIONER_URL)",
+      "kind": "db"
+    }
+  ],
+  "steps": [
+    {
+      "from": "ow",
+      "to": "run",
+      "label": "{ schema: 'tenant_acme', dir, url, create: true, beforeCommit }",
+      "kind": "call"
+    },
+    {
+      "from": "run",
+      "to": "run",
+      "label": "assertTenantSchema + read the folder (before any connection)",
+      "kind": "self"
+    },
+    {
+      "from": "run",
+      "to": "pg",
+      "label": "BEGIN; SET LOCAL ROLE velexis_provisioner; lock_timeout 5s; statement_timeout 10min; pg_advisory_xact_lock(hashtext(schema))",
+      "kind": "call"
+    },
+    {
+      "from": "run",
+      "to": "pg",
+      "label": "schema checks: foreign_owner / foreign_content refused even with create",
+      "kind": "call"
+    },
+    {
+      "from": "run",
+      "to": "pg",
+      "label": "CREATE SCHEMA … AUTHORIZATION velexis_provisioner; GRANT USAGE; ALTER DEFAULT PRIVILEGES (DML + sequences) TO velexis_ota_app",
+      "kind": "call"
+    },
+    {
+      "from": "run",
+      "to": "pg",
+      "label": "set_config('search_path', schema || ', reference', true); every file + ledger row",
+      "kind": "call"
+    },
+    {
+      "from": "run",
+      "to": "ow",
+      "label": "beforeCommit({ schema, created, db }): seeds through the runner's connection",
+      "kind": "return",
+      "note": "BEGIN/COMMIT/ROLLBACK through db are refused with a TypeError; savepoints are fine."
+    },
+    {
+      "from": "run",
+      "to": "pg",
+      "label": "COMMIT (any throw → ROLLBACK, the new schema included)",
+      "kind": "call"
+    },
+    {
+      "from": "run",
+      "to": "ow",
+      "label": "{ created, applied[], upToDate } (events emitted after COMMIT)",
+      "kind": "return"
+    }
+  ]
+}

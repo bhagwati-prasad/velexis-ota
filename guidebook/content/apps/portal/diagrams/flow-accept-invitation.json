@@ -1,0 +1,33 @@
+{
+  "id": "flow-accept-invitation",
+  "type": "flow",
+  "title": "Accept an invitation",
+  "caption": "PF-20 AC3. Do it in a second browser (or a private window) as the invited person.",
+  "steps": [
+    {
+      "title": "Open the link",
+      "actor": "Invited person",
+      "url": "http://localhost:8025",
+      "body": "Click the invitation link `/invitations/accept?token=…`.",
+      "expect": "Clean URL `/invitations/accept`, \"Join <OTA>\" with inviter, role, address and expiry."
+    },
+    {
+      "title": "No account yet",
+      "actor": "Invited person",
+      "body": "**Create an account** (address prefilled), verify through Mailpit, sign in, open the link again.",
+      "expect": "After verification the browser lands on `/sign-in?verified=1` (sign-up and `/verify-email` drop `next`): sign in, then open the invitation link from the e-mail again (the invitation cookie lasts 15 minutes, the link 7 days)."
+    },
+    {
+      "title": "Wrong account",
+      "actor": "Tester",
+      "body": "Open the link while signed in with another address.",
+      "expect": "\"This invitation is for another address\" and \"Sign out and sign in with the invited address\"; no Accept button."
+    },
+    {
+      "title": "Accept",
+      "actor": "Invited person",
+      "body": "**Accept the invitation**.",
+      "expect": "Redirect to `/otas/<tenantId>`; `tenant_memberships` row active with the invited role; invitation `accepted`, `accepted_account_id` set."
+    }
+  ]
+}

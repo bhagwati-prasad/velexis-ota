@@ -1,0 +1,74 @@
+{
+  "id": "settlement-states",
+  "type": "state",
+  "title": "Settlement statement",
+  "caption": "`platform.settlements.status`. CHECKs keep net = gross − refunds − disputes − Stripe fees − Velexis fees + adjustments.",
+  "states": [
+    {
+      "id": "start",
+      "label": "",
+      "kind": "initial"
+    },
+    {
+      "id": "draft",
+      "label": "draft",
+      "kind": "normal",
+      "detail": "Generated monthly (day 3, 05:00 UTC) or by adminGenerateSettlements; adjustments allowed."
+    },
+    {
+      "id": "approved",
+      "label": "approved",
+      "kind": "normal"
+    },
+    {
+      "id": "paid",
+      "label": "paid",
+      "kind": "final",
+      "detail": "paid_at + payout_reference; settlement.paid e-mail to owners and finance."
+    },
+    {
+      "id": "carried_forward",
+      "label": "carried_forward",
+      "kind": "final",
+      "detail": "Net ≤ 0; absorbed once by the next draft (carried_to_id)."
+    },
+    {
+      "id": "void",
+      "label": "void",
+      "kind": "final",
+      "detail": "void_reason."
+    }
+  ],
+  "transitions": [
+    {
+      "from": "start",
+      "to": "draft",
+      "label": "settlement.generate"
+    },
+    {
+      "from": "draft",
+      "to": "approved",
+      "label": "adminApproveSettlement (net > 0, verified payout account, step-up)"
+    },
+    {
+      "from": "draft",
+      "to": "carried_forward",
+      "label": "adminApproveSettlement (net ≤ 0)"
+    },
+    {
+      "from": "draft",
+      "to": "void",
+      "label": "adminVoidSettlement"
+    },
+    {
+      "from": "approved",
+      "to": "paid",
+      "label": "adminMarkSettlementPaid (step-up)"
+    },
+    {
+      "from": "draft",
+      "to": "draft",
+      "label": "adminAddSettlementAdjustment / regenerate"
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "id": "page-map",
+  "type": "tree",
+  "title": "Every page of the storefront",
+  "caption": "The 20 HTML pages of `ota/frontend` (plus `/p/<slug>`, served by `p.html`). URLs are the file paths; ids travel in the query string. Click a page for its purpose and module.",
+  "root": {
+    "name": "Storefront (<key>.ota.example.com)",
+    "term": "storefront",
+    "detail": "One static build for every OTA; the tenant is the host.",
+    "children": [
+      {
+        "name": "Shopping",
+        "children": [
+          {
+            "name": "/ Home",
+            "detail": "`index.html`, `src/pages/index.js`: the search form (one-way, return, multi-city)."
+          },
+          {
+            "name": "/search.html Results",
+            "detail": "`src/pages/search.js`: runs `flights.search` once, keeps `search=srch_…` in the address, filters, sort, load more."
+          },
+          {
+            "name": "/offer.html Offer",
+            "detail": "`src/pages/offer.js`: one offer, fare families (upsell), prices the chosen fare."
+          },
+          {
+            "name": "/price.html Price",
+            "detail": "`src/pages/price.js`: confirmed price, breakdown, extras available, fare rules, countdown, Continue to checkout.",
+            "term": "price-hold"
+          }
+        ]
+      },
+      {
+        "name": "Checkout",
+        "children": [
+          {
+            "name": "/checkout.html Checkout data",
+            "detail": "`src/pages/checkout.js`: travellers → contacts → extras → payment method and terms.",
+            "term": "checkout-step"
+          },
+          {
+            "name": "/checkout/pay-card.html Pay by card",
+            "detail": "`src/pages/checkout-pay-card.js`: Stripe Payment Element, Review total, Pay. The only page with Stripe.js.",
+            "term": "payment-element"
+          },
+          {
+            "name": "/checkout/pay-airline.html Airline card",
+            "detail": "`src/pages/checkout-pay-airline.js`: the page's own card form, built on its own, no boot(), no third-party script.",
+            "term": "airline-card"
+          },
+          {
+            "name": "/checkout/complete.html Complete",
+            "detail": "`src/pages/checkout-complete.js`: Stripe's return URL; waits for the payment, calls `checkout.complete`."
+          },
+          {
+            "name": "/confirmation.html Confirmation",
+            "detail": "`src/pages/confirmation.js`: booking reference, tickets, polling of the ticketing status.",
+            "term": "pending-confirmation"
+          }
+        ]
+      },
+      {
+        "name": "Bookings",
+        "children": [
+          {
+            "name": "/bookings.html My bookings",
+            "detail": "`src/pages/bookings.js`: tabs upcoming / past / cancelled, signed-in customers only."
+          },
+          {
+            "name": "/booking.html Booking detail",
+            "detail": "`src/pages/booking.js`: trip, tickets, documents, contact change, cancellation, history, fare rules.",
+            "term": "allowed-actions"
+          },
+          {
+            "name": "/lookup.html Guest lookup",
+            "detail": "`src/pages/lookup.js`: reference + last name, sets the guest cookie.",
+            "term": "guest-lookup"
+          }
+        ]
+      },
+      {
+        "name": "Account",
+        "children": [
+          {
+            "name": "/account/sign-in.html",
+            "detail": "`src/pages/account-sign-in.js`"
+          },
+          {
+            "name": "/account/sign-up.html",
+            "detail": "`src/pages/account-sign-up.js`"
+          },
+          {
+            "name": "/account/verify.html",
+            "detail": "`src/pages/account-verify.js`: the e-mailed `vt_…` token."
+          },
+          {
+            "name": "/account/forgot-password.html",
+            "detail": "`src/pages/account-forgot-password.js`"
+          },
+          {
+            "name": "/account/reset-password.html",
+            "detail": "`src/pages/account-reset-password.js`: the e-mailed `pr_…` token."
+          },
+          {
+            "name": "/account/ My account",
+            "detail": "`src/pages/account-index.js`: profile, e-mail, password, sign out everywhere, delete."
+          }
+        ]
+      },
+      {
+        "name": "Content and errors",
+        "children": [
+          {
+            "name": "/p/<slug> Content page",
+            "detail": "`p.html`, `src/pages/p.js`, `src/lib/blocks.js`: the OTA's pages (terms, privacy, FAQ…).",
+            "term": "content-page"
+          },
+          {
+            "name": "/404.html Not found",
+            "detail": "`src/pages/404.js`: Caddy's `handle_errors 404`."
+          }
+        ]
+      }
+    ]
+  }
+}

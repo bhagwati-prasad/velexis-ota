@@ -1,0 +1,51 @@
+{
+  "id": "flow-local-setup",
+  "type": "flow",
+  "title": "Set up the shared foundation on a development machine",
+  "caption": "docs/mvp/local-development.md §2. Every password here is a committed development value (development only).",
+  "steps": [
+    {
+      "title": "Install and copy the env file",
+      "actor": "Developer",
+      "body": "Node 24 (`.nvmrc`), pnpm, PostgreSQL 16, Redis 7, Mailpit. Then `pnpm install` and `cp .env.example .env.local`.",
+      "expect": "`node_modules/` everywhere; `.env.local` holds `TEST_DATABASE_ADMIN_URL`, `DATABASE_MIGRATOR_URL`, `REDIS_URL=redis://:dev_redis@127.0.0.1:6379/0` …"
+    },
+    {
+      "title": "Roles and database",
+      "actor": "Developer",
+      "body": "`bash deploy/scripts/dev-setup.sh` (uses sudo on Linux).",
+      "expect": "Roles `velexis_migrator`/`dev_migrator`, `velexis_provisioner`/`dev_provisioner`, `velexis_platform_app`/`dev_platform`, `velexis_ota_app`/`dev_ota`, `velexis_test_admin`/`dev_test_admin`; database `velexis`; Redis password `dev_redis` (development only)."
+    },
+    {
+      "title": "Key files",
+      "actor": "Developer",
+      "body": "`pnpm dev:keys` (`tools/dev/dev-keys.mjs`).",
+      "expect": "`.local/keys/` (0700) with `master-v1.key`, `api-key-pepper`, `document-url.key`, `platform-jwt-ed25519.pem`, `ota-jwt-ed25519.pem` (each 0600) and `.local/storage/`. A second run prints `kept` for every file."
+    },
+    {
+      "title": "Build the packages",
+      "actor": "Developer",
+      "body": "`pnpm build` (Turborepo builds packages before apps; `generate` runs first).",
+      "expect": "`packages/*/dist/` and `tools/*/dist/` exist."
+    },
+    {
+      "title": "Migrate",
+      "actor": "Developer",
+      "body": "`pnpm db:migrate` then (after a demo OTA exists) `pnpm db:migrate:tenants`.",
+      "expect": "One JSON line per applied file on the first run, nothing on the second. `platform.schema_migrations` lists 0001–0004 and `R__ota_read_access`."
+    },
+    {
+      "title": "Reference data",
+      "actor": "Developer",
+      "body": "`pnpm db:seed:reference`.",
+      "expect": "One `reference.loaded` JSON line; a second run reports zeros everywhere."
+    },
+    {
+      "title": "Stub and Mailpit",
+      "actor": "Developer",
+      "body": "`mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &` and `pnpm stub:amadeus &`.",
+      "url": "http://127.0.0.1:8025",
+      "expect": "`amadeus-stub: listening on http://127.0.0.1:4900 (ready in … ms; …`; Mailpit UI reachable."
+    }
+  ]
+}

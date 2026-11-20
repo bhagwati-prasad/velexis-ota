@@ -1,0 +1,171 @@
+{
+  "id": "topology",
+  "type": "component",
+  "title": "The single VM: hosts, ports and trust zones",
+  "caption": "deploy/caddy/Caddyfile, deploy/systemd/*.service, docs/mvp/deployment-single-vm.md §4. Every app binds 127.0.0.1; only Caddy (80/443) and SSH (22) are reachable from outside.",
+  "groups": [
+    { "id": "outside", "label": "Internet and providers" },
+    { "id": "edge", "label": "Edge (user caddy)" },
+    { "id": "apps", "label": "App units (127.0.0.1, one user per trust zone)" },
+    { "id": "data", "label": "Data (loopback only)" },
+    { "id": "ops", "label": "Root-owned timers and scripts" }
+  ],
+  "nodes": [
+    {
+      "id": "browser",
+      "label": "Browsers, SDK clients",
+      "group": "outside",
+      "kind": "user",
+      "detail": "Reach only ports 80 and 443 (ufw: 22 rate-limited, 80, 443/tcp, 443/udp)."
+    },
+    {
+      "id": "github",
+      "label": "GitHub Actions deploy job",
+      "group": "outside",
+      "kind": "external",
+      "detail": "SSH as `deploy` with the pinned host key; rsync + `sudo velexis-deploy <sha>`."
+    },
+    {
+      "id": "acme",
+      "label": "Let's Encrypt / ZeroSSL",
+      "group": "outside",
+      "kind": "external",
+      "detail": "Certificates for the five named hosts at start-up, on demand for storefront hosts."
+    },
+    {
+      "id": "amadeus",
+      "label": "Amadeus, Stripe, SMTP relay",
+      "group": "outside",
+      "kind": "external",
+      "detail": "Allowed outbound by `deploy/egress/allowed-hosts.conf` only."
+    },
+    {
+      "id": "bucket",
+      "label": "Off-site bucket (other provider)",
+      "group": "outside",
+      "kind": "external",
+      "detail": "`daily/`, `monthly/` backups and `logs/` security logs; key can put/list/get, never delete."
+    },
+    {
+      "id": "caddy",
+      "label": "Caddy 2.8.4 + Coraza WAF :80/:443",
+      "group": "edge",
+      "kind": "edge",
+      "term": "coraza-waf",
+      "detail": "Velexis build `/usr/local/bin/caddy-velexis` (linked as `/usr/bin/caddy`); admin API only on `/run/caddy/admin.sock`."
+    },
+    {
+      "id": "static",
+      "label": "/srv/velexis/current/storefront",
+      "group": "edge",
+      "kind": "ui",
+      "app": "storefront",
+      "detail": "Static storefront files served by Caddy for `*.ota.example.com` and verified custom domains."
+    },
+    {
+      "id": "portal",
+      "label": "velexis-portal :3000",
+      "group": "apps",
+      "kind": "ui",
+      "app": "portal",
+      "detail": "User `velexis-portal`, MemoryMax 512M, `platform-frontend.env`."
+    },
+    {
+      "id": "padmin",
+      "label": "velexis-platform-admin :3001",
+      "group": "apps",
+      "kind": "ui",
+      "app": "platform-admin",
+      "detail": "User `velexis-platform-admin`, `platform-admin.env`."
+    },
+    {
+      "id": "oadmin",
+      "label": "velexis-ota-admin :3002",
+      "group": "apps",
+      "kind": "ui",
+      "app": "ota-admin",
+      "detail": "User `velexis-ota-admin`, `ota-admin.env`."
+    },
+    {
+      "id": "papi",
+      "label": "velexis-platform-api :3100",
+      "group": "apps",
+      "kind": "api",
+      "app": "platform-api",
+      "detail": "User `velexis-platform`, MemoryMax 768M; answers `/internal/tls/ask` for Caddy."
+    },
+    {
+      "id": "pworker",
+      "label": "velexis-platform-worker :3101 (health)",
+      "group": "apps",
+      "kind": "worker",
+      "app": "platform-api",
+      "detail": "Same user and env as the platform API; restarted first on deploy."
+    },
+    {
+      "id": "oapi",
+      "label": "velexis-ota-api :4000",
+      "group": "apps",
+      "kind": "api",
+      "app": "ota-api",
+      "detail": "User `velexis-ota`, writes `/var/lib/velexis/storage`."
+    },
+    {
+      "id": "oworker",
+      "label": "velexis-ota-worker :4001 (health)",
+      "group": "apps",
+      "kind": "worker",
+      "app": "ota-api",
+      "detail": "Also reads `ota-worker.env` (provisioner DSN)."
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL 16 :5432",
+      "group": "data",
+      "kind": "db",
+      "detail": "Database `velexis`, roles of `bootstrap.sql`; `listen_addresses = localhost`."
+    },
+    {
+      "id": "redis",
+      "label": "Redis 7.4 :6379",
+      "group": "data",
+      "kind": "cache",
+      "detail": "`requirepass`, `maxmemory 512mb`, `noeviction`, AOF everysec."
+    },
+    {
+      "id": "timers",
+      "label": "velexis-* timers",
+      "group": "ops",
+      "kind": "worker",
+      "detail": "backup 02:30, healthcheck 5 min, egress-refresh 2 min, ship-logs :05, log-review :20."
+    },
+    {
+      "id": "deployer",
+      "label": "velexis-deploy (root)",
+      "group": "ops",
+      "kind": "worker",
+      "term": "velexis-deploy",
+      "detail": "Only command the `deploy` user may sudo."
+    }
+  ],
+  "edges": [
+    { "from": "browser", "to": "caddy", "label": "HTTPS 443", "kind": "sync" },
+    { "from": "caddy", "to": "portal", "label": "platform.example.com", "kind": "sync" },
+    { "from": "caddy", "to": "padmin", "label": "admin.platform.example.com", "kind": "sync" },
+    { "from": "caddy", "to": "oadmin", "label": "admin.ota.example.com", "kind": "sync" },
+    { "from": "caddy", "to": "papi", "label": "api.platform.example.com + tls ask", "kind": "sync" },
+    { "from": "caddy", "to": "oapi", "label": "api.ota.example.com, storefront /api/*", "kind": "sync" },
+    { "from": "caddy", "to": "static", "label": "storefront pages", "kind": "data" },
+    { "from": "caddy", "to": "acme", "label": "ACME", "kind": "sync" },
+    { "from": "papi", "to": "pg", "label": "velexis_platform_app", "kind": "data" },
+    { "from": "pworker", "to": "pg", "label": "velexis_platform_app", "kind": "data" },
+    { "from": "oapi", "to": "pg", "label": "velexis_ota_app", "kind": "data" },
+    { "from": "oworker", "to": "pg", "label": "velexis_ota_app + velexis_provisioner", "kind": "data" },
+    { "from": "papi", "to": "redis", "label": "cache, queues", "kind": "data" },
+    { "from": "oapi", "to": "redis", "label": "cache, queues", "kind": "data" },
+    { "from": "oworker", "to": "amadeus", "label": "allow-listed HTTPS", "kind": "sync" },
+    { "from": "github", "to": "deployer", "label": "ssh deploy@vm sudo", "kind": "sync" },
+    { "from": "deployer", "to": "pg", "label": "migrations (transient unit)", "kind": "data" },
+    { "from": "timers", "to": "bucket", "label": "rclone copy --immutable", "kind": "async" }
+  ]
+}

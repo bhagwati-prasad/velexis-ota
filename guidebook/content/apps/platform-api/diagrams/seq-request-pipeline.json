@@ -1,0 +1,141 @@
+{
+  "id": "seq-request-pipeline",
+  "type": "sequence",
+  "title": "One portal request through the API pipeline",
+  "caption": "The order of the pieces every `/v1/**` request passes (architecture §3). Each refusal is shown with the answer it gives.",
+  "actors": [
+    {
+      "id": "fe",
+      "label": "Portal server",
+      "kind": "ui"
+    },
+    {
+      "id": "ctx",
+      "label": "Request context",
+      "kind": "lib"
+    },
+    {
+      "id": "rl",
+      "label": "Throttler (Redis rl:*)",
+      "kind": "cache"
+    },
+    {
+      "id": "guards",
+      "label": "Guards",
+      "kind": "lib"
+    },
+    {
+      "id": "val",
+      "label": "OpenAPI validation + idempotency",
+      "kind": "lib"
+    },
+    {
+      "id": "svc",
+      "label": "Controller → service",
+      "kind": "api"
+    },
+    {
+      "id": "pg",
+      "label": "PostgreSQL platform",
+      "kind": "db"
+    },
+    {
+      "id": "r",
+      "label": "Redis",
+      "kind": "cache"
+    }
+  ],
+  "steps": [
+    {
+      "from": "fe",
+      "to": "ctx",
+      "label": "POST /v1/tenants/{id}/api-keys with Bearer, X-Velexis-Bff-Key, X-Velexis-End-User-IP/-Agent",
+      "kind": "call"
+    },
+    {
+      "from": "ctx",
+      "to": "ctx",
+      "label": "requestId from X-Request-Id or new; end-user IP honoured only from loopback + valid BFF key",
+      "kind": "self",
+      "note": "A valid key with a missing/malformed IP answers 400 VALIDATION_FAILED."
+    },
+    {
+      "from": "ctx",
+      "to": "rl",
+      "label": "count ip/email/domain limits (before auth)",
+      "kind": "call"
+    },
+    {
+      "from": "rl",
+      "to": "ctx",
+      "label": "429 RATE_LIMITED + Retry-After when over",
+      "kind": "return"
+    },
+    {
+      "from": "ctx",
+      "to": "guards",
+      "label": "PortalAuthGuard: verify EdDSA JWT (aud portal), re-read accounts.status",
+      "kind": "call"
+    },
+    {
+      "from": "guards",
+      "to": "guards",
+      "label": "account limits (300/min), MfaEnrolmentGuard (owner/admin of live OTA without MFA → 403 MFA_REQUIRED enrolment_required)",
+      "kind": "self"
+    },
+    {
+      "from": "guards",
+      "to": "pg",
+      "label": "TenantRoleGuard: active membership of tenantId",
+      "kind": "call"
+    },
+    {
+      "from": "pg",
+      "to": "guards",
+      "label": "non-member → 404 NOT_FOUND; wrong role → 403 FORBIDDEN",
+      "kind": "return"
+    },
+    {
+      "from": "guards",
+      "to": "guards",
+      "label": "FeatureGuard (403 FEATURE_DISABLED) then RecentMfaGuard (401 REAUTH_REQUIRED / 403 MFA_REQUIRED)",
+      "kind": "self"
+    },
+    {
+      "from": "guards",
+      "to": "val",
+      "label": "Ajv: path, query, headers, body (unknown body fields fail)",
+      "kind": "call"
+    },
+    {
+      "from": "val",
+      "to": "r",
+      "label": "x-idempotent ops: SET vx:idem:<acc>:<key>:lock; replay stored answer for 24 h",
+      "kind": "call"
+    },
+    {
+      "from": "val",
+      "to": "svc",
+      "label": "handler",
+      "kind": "call"
+    },
+    {
+      "from": "svc",
+      "to": "pg",
+      "label": "one transaction: change + platform_audit_log row (+ email_outbox row)",
+      "kind": "call"
+    },
+    {
+      "from": "svc",
+      "to": "r",
+      "label": "after commit: vx:invalidate, enqueue jobs",
+      "kind": "async"
+    },
+    {
+      "from": "svc",
+      "to": "fe",
+      "label": "2xx, or error envelope {error:{code,message,status,requestId,details?,fieldErrors?}}",
+      "kind": "return"
+    }
+  ]
+}

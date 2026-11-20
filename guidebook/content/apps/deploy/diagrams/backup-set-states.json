@@ -1,0 +1,43 @@
+{
+  "id": "backup-set-states",
+  "type": "state",
+  "title": "A backup set from the VM to expiry",
+  "caption": "deploy/scripts/backup.sh and the bucket's lifecycle rules (deployment §10). The VM key cannot delete; retention is the bucket's.",
+  "states": [
+    { "id": "staging", "label": "Local set /var/backups/velexis/<UTC stamp>/", "kind": "initial" },
+    {
+      "id": "uploaded",
+      "label": "Uploaded daily/<date>/ (immutable)",
+      "kind": "normal",
+      "detail": "A second run the same day goes to daily/<UTC stamp>/ beside it."
+    },
+    {
+      "id": "verified",
+      "label": "Verified (rclone check) + marker",
+      "kind": "normal",
+      "detail": "`/var/lib/velexis/backup-last-success` written."
+    },
+    {
+      "id": "monthly",
+      "label": "monthly/<yyyy-mm>/ copy",
+      "kind": "normal",
+      "detail": "Made once on the 1st; kept 186 days."
+    },
+    {
+      "id": "failed",
+      "label": "Run failed",
+      "kind": "error",
+      "detail": "Unit failed → velexis-alert@ e-mail; after 26 h the health check's backup-age fails too."
+    },
+    { "id": "localgone", "label": "Local copy pruned (2 days)", "kind": "normal" },
+    { "id": "expired", "label": "Expired by bucket lifecycle (14 days daily)", "kind": "final" }
+  ],
+  "transitions": [
+    { "from": "staging", "to": "uploaded", "label": "rclone copy --immutable" },
+    { "from": "staging", "to": "failed", "label": "key check, dump, encryption or upload fails" },
+    { "from": "uploaded", "to": "verified", "label": "rclone check OK" },
+    { "from": "verified", "to": "monthly", "label": "1st of the month" },
+    { "from": "verified", "to": "localgone", "label": "RETENTION_LOCAL_DAYS=2" },
+    { "from": "localgone", "to": "expired", "label": "after 14 days" }
+  ]
+}

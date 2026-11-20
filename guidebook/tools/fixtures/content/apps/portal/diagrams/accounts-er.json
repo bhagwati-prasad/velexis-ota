@@ -1,0 +1,81 @@
+{
+  "id": "accounts-er",
+  "type": "er",
+  "title": "Accounts, tenants and memberships",
+  "caption": "Platform tables behind sign-up and OTA creation (`platform` schema).",
+  "entities": [
+    {
+      "id": "accounts",
+      "label": "platform.accounts",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "email", "type": "text", "key": "uk" },
+        { "name": "status", "type": "text" },
+        { "name": "mfa_enabled", "type": "boolean" },
+        { "name": "created_at", "type": "timestamptz" }
+      ]
+    },
+    {
+      "id": "tenants",
+      "label": "platform.tenants",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "key", "type": "text", "key": "uk" },
+        { "name": "schema_name", "type": "text", "key": "uk" },
+        { "name": "status", "type": "text" },
+        { "name": "created_by_account_id", "type": "text", "key": "fk" }
+      ]
+    },
+    {
+      "id": "memberships",
+      "label": "platform.tenant_memberships",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "tenant_id", "type": "text", "key": "fk" },
+        { "name": "account_id", "type": "text", "key": "fk" },
+        { "name": "role", "type": "text" }
+      ]
+    },
+    {
+      "id": "sessions",
+      "label": "platform.account_sessions",
+      "schema": "platform",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "account_id", "type": "text", "key": "fk" }
+      ]
+    },
+    {
+      "id": "bookings",
+      "label": "tenant_<key>.bookings",
+      "schema": "tenant",
+      "fields": [
+        { "name": "id", "type": "text", "key": "pk" },
+        { "name": "status", "type": "text" }
+      ]
+    },
+    {
+      "id": "currencies",
+      "label": "reference.currencies",
+      "schema": "reference",
+      "fields": [{ "name": "code", "type": "char(3)", "key": "pk" }]
+    },
+    {
+      "id": "ratelimit",
+      "label": "rl:<ip>",
+      "schema": "redis",
+      "fields": [{ "name": "count", "type": "int" }]
+    }
+  ],
+  "relations": [
+    { "from": "accounts", "to": "memberships", "label": "account_id", "cardinality": "1-n" },
+    { "from": "tenants", "to": "memberships", "label": "tenant_id", "cardinality": "1-n" },
+    { "from": "accounts", "to": "tenants", "label": "created_by_account_id", "cardinality": "1-n" },
+    { "from": "accounts", "to": "sessions", "label": "account_id", "cardinality": "1-n" },
+    { "from": "tenants", "to": "bookings", "label": "owns schema", "cardinality": "1-1" },
+    { "from": "bookings", "to": "currencies", "label": "by value", "cardinality": "n-n" }
+  ]
+}

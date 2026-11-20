@@ -1,0 +1,45 @@
+{
+  "id": "flow-deploy-and-verify",
+  "type": "flow",
+  "title": "Routine deploy and what to verify after it",
+  "caption": ".github/workflows/deploy.yml, deploy/scripts/deploy.sh, docs/mvp/deployment-single-vm.md §8–§9.",
+  "steps": [
+    {
+      "title": "Add new env variables first",
+      "actor": "Developer",
+      "body": "If the release's `deploy/env/*.env.example` gained a name, add it to `/etc/velexis/<app>.env` (empty is fine). `sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh --only envfiles --templates <new release>/deploy/env` lists gaps.",
+      "expect": "No `env files lack variables` refusal later."
+    },
+    {
+      "title": "Run the workflow",
+      "actor": "Developer",
+      "screen": "Actions > Deploy",
+      "body": "Run from `main` (or a `v*` tag), wait for build + e2e, approve.",
+      "expect": "Run green; the deploy log ends with `deploy <sha> done`."
+    },
+    {
+      "title": "Read the deploy log",
+      "actor": "Developer",
+      "body": "`sudo tail -n 80 /var/log/velexis/deploy.log`",
+      "expect": "Lines for migrate platform/reference/tenants, report, restarts in order platform-worker, ota-worker, platform-api, ota-api, portal, platform-admin, ota-admin, then `Caddyfile reloaded` or `Caddy restarted` only if those changed."
+    },
+    {
+      "title": "Check the migration report",
+      "actor": "Developer",
+      "body": "`sudo jq '{total, applied: (.applied|length), failed}' /var/log/velexis/migrate-<sha>.json` and `sudo -u postgres psql -d velexis -Atc \"SELECT key, status, schema_version FROM platform.tenants ORDER BY schema_version\"`.",
+      "expect": "`failed` is `[]`; every active tenant at the newest version. A non-empty `failed` with a green run means 10 % or fewer schemas failed (the deploy does not stop for that)."
+    },
+    {
+      "title": "Health",
+      "actor": "Developer",
+      "body": "`sudo velexis-healthcheck --payment-pages` then `sudo velexis-healthcheck --status`.",
+      "expect": "Every check `ok`; payment pages match the new release's inventory."
+    },
+    {
+      "title": "Public smoke",
+      "actor": "Developer",
+      "body": "`curl -fsS https://api.platform.example.com/health/live && curl -fsS https://api.ota.example.com/health/live` (your real hosts).",
+      "expect": "`{\"status\":\"ok\"}{\"status\":\"ok\"}`."
+    }
+  ]
+}
