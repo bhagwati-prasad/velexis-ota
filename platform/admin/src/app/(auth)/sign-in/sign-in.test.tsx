@@ -48,6 +48,14 @@ const RECOVERY_CODE = "W4KD-9PMX-2TQR-H7ZB";
 const FORWARDED_FOR = "6.6.6.6, 203.0.113.7";
 const END_USER_IP = "203.0.113.7";
 const USER_AGENT = "Mozilla/5.0 (PAD-002 test)";
+/**
+ * How long a test waits for the focus that the error summary takes after a server action answered. React commits the
+ * answer, which is what `findByRole` and `waitFor` see, and runs the summary's focus effect (`FormErrorSummary`'s
+ * `useEffect`) in a later task of its scheduler (`setImmediate` here); Testing Library ends its wait after one
+ * `setTimeout(0)`, which a busy event loop runs first. Testing Library's 1 s default is enough on an idle machine, not
+ * on a loaded CI runner; each test's own 5 s budget is unchanged (the portal's sign-in test waits the same way).
+ */
+const UI_WAIT = { timeout: 3_000 } as const;
 
 const IDLE_SIGN_IN: SignInState = { status: "idle", fieldErrors: {}, values: { email: "" } };
 const IDLE_MFA: MfaState = { status: "idle", method: "totp" };
@@ -372,7 +380,8 @@ describe("/sign-in: SignInForm and the signIn action", () => {
     const link = within(summary).getByRole("link", { name: SIGN_IN_STRINGS.enableMfa });
     expect(link.getAttribute("href")).toBe("https://platform.example.com/account/security");
     expect(summary.textContent).not.toContain("The API's own text");
-    expect(document.activeElement).toBe(summary);
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(summary), UI_WAIT);
     expect(store.set).not.toHaveBeenCalled();
     expect(navigation.redirect).not.toHaveBeenCalled();
   });
@@ -659,7 +668,8 @@ describe("/sign-in/mfa: MfaForm and the verifyMfa action", () => {
     await waitFor(() =>
       expect(descriptionsOf(input(MFA_STRINGS.codeLabel))).toContain(ERROR_MESSAGES.MFA_CODE_INVALID),
     );
-    expect(document.activeElement).toBe(screen.getByRole("alert"));
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("alert")), UI_WAIT);
 
     fetchMock.mockClear();
     type(MFA_STRINGS.codeLabel, "12345");
