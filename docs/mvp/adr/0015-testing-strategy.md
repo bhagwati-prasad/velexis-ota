@@ -33,7 +33,7 @@ There are also two contracts that must not drift: the OpenAPI documents and the 
 |---|---|---|---|
 | Vitest | **4.1.12** (the unit row's "Vitest 3" reads Vitest 4) | Every package and the root | PBE-070 (3.x carried Tinypool 1.1.1, security review F-5) |
 | happy-dom | **21.0.4** | The DOM tests of the storefront and the SDK, and the component tests of the portal and both admins (`// @vitest-environment happy-dom`) | PBE-070 |
-| Redocly CLI | **2.78.0** (2.76.0 until Dependabot PR #43, merged 2026-11-19) | `pnpm contracts:lint` in `@velexis/api-types` (the OpenAPI documents of the contract-test row) | PBE-070 |
+| Redocly CLI | **2.79.0** (2.78.0 until Dependabot PR #53, merged 2026-11-20; 2.76.0 until Dependabot PR #43, merged 2026-11-19) | `pnpm contracts:lint` in `@velexis/api-types` (the OpenAPI documents of the contract-test row) | PBE-070 |
 
 Vitest 4 reads no workspace file, so the root file that lists every package's Vitest config as a project for editors and ad-hoc runs is `vitest.config.ts` (`test.projects`, run with `--config vitest.config.ts --project <name>`; [ADR-0002](0002-monorepo-pnpm-turborepo.md) item 6). CI still runs the tests per package through Turborepo.
 
