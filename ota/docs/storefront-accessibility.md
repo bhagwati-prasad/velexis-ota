@@ -83,6 +83,8 @@ pnpm --filter @velexis/ota-frontend build && E2E_WITH_OTA=1 pnpm test:e2e -- --p
 
 ### 3.1 How it was measured
 
+*Note (2026-11-19, lead decision (31i), approved by the owner, FIX-W62-DOCS):* the script measures with Lighthouse 13.6.0 since Dependabot PR #47; the figures since then, and how its FCP and the home page's LCP differ from 13.5.0's on the same build, are in §3.9.
+
 Lighthouse 13.5.0 (its user-flow API, the default mobile configuration: Moto G Power emulation, simulated slow 4G and 4× CPU slowdown) with puppeteer-core 25.16.0 and the machine's Chromium 141.0.7390.37 headless, installed in a scratch folder (no project dependency), against `vite preview` of the production build on `http://127.0.0.1:4173` with the e2e harness's stack (the built OTA API on the Amadeus stub, demo OTA, test environment). Each page three times; per run a navigation (FCP, LCP, CLS, TBT) and then a timespan with what a traveller does first (INP):
 
 - home `/`: type "Madrid" into From, pick the first suggestion with the arrow and Enter keys, switch One way and Return;
