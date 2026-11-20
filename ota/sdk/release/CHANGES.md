@@ -20,6 +20,8 @@ their paths.
 
 Sections 1 to 5 are wave 61's record and "Wave 62" is wave 62's, as written then: "the revised draft" of sections 1
 to 5 is the wave 61 draft, and "not committed" was true until wave 63. "Wave 63" records the move to this folder.
+"Wave 64" records the test that keeps the draft's action pins in step with the live workflows, the corrected pin
+comment and the rule for the move; its SHA-256 is the current draft's until a later section names another.
 
 ## 1. What was read, and when (2026-11-19)
 
@@ -313,3 +315,114 @@ permissions and every action pin.
   `check-package-json.mjs` reads only `.github/workflows/` and `.github/actions/` (18 package.json files, 3 workflow
   files, 0 problems) and `check-no-hardcoded-hosts.mjs` only the `src` folders (0 problems), so neither reads the
   draft; `ci.yml`'s repository guards pass; `eslint tools/ci` and `node --test tools/ci/*.test.mjs` (86 tests) pass.
+
+## Wave 64 (FIX-W64-SDK, lead decisions (33b) and (33c) of 2026-11-20)
+
+### The decisions
+
+- **(33b) The pins.** A test in `tools/ci` fails when an action pin (`uses: owner/repo@<40-hex SHA> # <tag>`) of this
+  folder's draft differs, in SHA or tag, from the same action's pin in `.github/workflows/*.yml`, names an action no
+  live workflow uses, or is not a full SHA. Until the owner approves the draft, an agent copies the live workflows'
+  pins into it whenever they change and records each change here with the draft's new SHA-256. Dependabot updates
+  only `.github/workflows/`, so a github-actions Dependabot pull request turns the test red until then: one small agent
+  commit on that pull request or in the next wave; the owner never edits the draft. The owner approves the final file
+  by its SHA-256. Once the file is `.github/workflows/sdk-publish.yml`, `tools/ci/check-package-json.mjs`'s rule 4
+  covers its pins and the test only checks that the move happened.
+- **(33c) The move.** On approval, the move to `.github/workflows/sdk-publish.yml` deletes exactly the draft's two
+  `DRAFT` header lines (lines 1-2) and nothing else, shown to the owner as a diff; that counts as moving it
+  "unchanged" under (32j). The draft's comment at lines 25-26 said the pins were "the same pins as ci.yml", although
+  upload-artifact is pinned as in `deploy.yml` and `e2e.yml` and download-artifact as in `deploy.yml` (`ci.yml` uses
+  neither); this wave corrects that one comment. The owner may start the line-by-line review now.
+
+### The one change: the comment at lines 25-26
+
+```diff
+--- wave 62's and wave 63's draft (322 lines, SHA-256 6fe2f78f983e6141b6c5ab49a9b5ec16adbfab6c5255acb98fb7411755dbedbb)
++++ ota/sdk/release/sdk-publish.draft.yml (322 lines, SHA-256 ee3408f83f26753cc893dd3a08d6055c8c8e43f1772319a6a72f892881cbc235)
+@@ -22,8 +22,8 @@
+ # publisher's token and the provenance statement); `release` creates the release with the IIFE's SRI hash (contents:
+ # write). The tarball goes from `check` to the others as an artifact, so the IIFE whose hash the release names is the
+ # file npm serves.
+-# Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, the same pins as
+-# ci.yml (tools/ci/check-package-json.mjs, ADR-0023).
++# Pins (ADR-0023) as in the live workflows: checkout, setup-node and pnpm's as ci.yml, deploy.yml, e2e.yml; artifact
++# actions as deploy.yml, e2e.yml. Checked by tools/ci/sdk-draft-pins.test.mjs; once moved, by check-package-json.mjs.
+ name: SDK publish
+ 
+ on:
+```
+
+`diff` against wave 62's file shows these two lines and nothing else. The draft still has 322 lines; its SHA-256 is
+now `ee3408f83f26753cc893dd3a08d6055c8c8e43f1772319a6a72f892881cbc235`, the file the owner approves unless a later
+section of this record names a newer one. The comment stays two lines: the new wording names, for each action, the
+live workflows its pin comes from (`pnpm's` is pnpm/action-setup), the test that checks the pins while the file is
+here and `check-package-json.mjs` once it has moved, and ADR-0023. It no longer says in words that a pin is a full
+commit SHA with the tag as the last thing in the comment; every `uses:` line shows that form, and both checks
+require it.
+
+### What the move will show the owner
+
+Today's draft, moved with only its two `DRAFT` lines deleted (a scratch copy, not committed; 320 lines, SHA-256
+`6d978470324eee4bb85227ea801ab3575f2612dab1b30a68255b361792fdbbe8` for this draft):
+
+```diff
+--- a/ota/sdk/release/sdk-publish.draft.yml
++++ b/.github/workflows/sdk-publish.yml
+@@ -1,5 +1,3 @@
+-# DRAFT (SDK-015, wave 60; revised by FIX-W61-SDK in wave 61 for the lead's decision (30h) and by FIX-W62-SDK in
+-# wave 62 for (31g)) for the owner's line-by-line approval; not in .github/workflows/ until approved.
+ # SDK publish: publishes @velexis/ota-sdk to npm with provenance and creates its GitHub release (SDK-015, OADR-0016
+ # point 8, ota/sdk/README.md §9, the OTA launch checklist's item A6).
+ # Run it by hand on a tag sdk-vX.Y.Z: Actions, "SDK publish", "Run workflow", with the tag chosen under "Use workflow
+```
+
+### The test: `tools/ci/sdk-draft-pins.test.mjs`
+
+- **What it checks.** Every `uses:` of a YAML file in `ota/sdk/release/` must be
+  `owner/repo[/path]@<40 hex characters>` with the tag as the whole comment (`# v4.4.0`), name an action
+  (`owner/repo[/path]`, so `actions/cache/restore` is not `actions/cache`) that at least one workflow in
+  `.github/workflows/` uses, and carry the same SHA and tag as every live use of that action (local `./` and
+  `docker://` references of the live workflows are skipped). Each failure names the file, the line, the action and
+  both pins, and the first live use with the other pin (with the count of the others). When this folder holds no YAML
+  file, it passes only if `.github/workflows/sdk-publish.yml` exists (the approved move) and fails otherwise. It
+  reads `uses:` lines as rule 4 does (quoted keys and values, a flow mapping fails), with no YAML package, and a
+  draft in which it finds no `uses:` fails, so it never passes by checking nothing.
+- **How it is tested.** The comparison is one pure function, `comparePins`, run on this repository and on inline
+  fixtures: matching pins pass; a drifted SHA, a drifted tag, live workflows that disagree among themselves, an
+  action no live workflow uses, a tag-only `@v4`, a missing or longer tag comment, a local or `docker://` reference,
+  a flow mapping and a draft with no `uses:` fail; the moved case passes and the missing case fails. 13 tests.
+- **Mutation proof** (2026-11-20, in FIX-W64-SDK's worktree, the draft restored after each change and its SHA-256
+  checked again: `ee3408f8…c235`): setup-node's SHA changed on line 141, upload-artifact's tag changed to `v4.6.1`
+  on line 178, download-artifact's tag changed to `v4.3.1` on line 207, `pnpm/action-setup@v5` with no comment on
+  line 140, `actions/checkout@v4` on line 83 and an action no live workflow uses (`actions/upload-artifact-x`) on
+  line 178 each turn the test of this repository red with the expected message, for example
+  `ota/sdk/release/sdk-publish.draft.yml:141: actions/setup-node is pinned to 49933ea5288caeca8642d1e84afbd3f7d6820021 # v4.4.0 in the draft but to 49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 in .github/workflows/ci.yml:52 (and 9 more live use(s) with that pin): copy the live pin into the draft and record its new SHA-256 in ota/sdk/release/CHANGES.md (lead decision (33b))`;
+  the draft moved out of the folder (no `sdk-publish.yml`) fails with "ota/sdk/release/ holds no .yml file and
+  .github/workflows/sdk-publish.yml does not exist".
+- **Where it runs.** `ci.yml`'s existing step "Lint and test the CI checks and tools/perf"
+  (`node --test tools/ci/*.test.mjs`), so no workflow changes; `tools/ci/README.md` lists it.
+
+### Checks (2026-11-20, Node v24.22.3, npm 11.19.1)
+
+- **actionlint** 1.7.12 on the draft with shellcheck 0.11.0 and with shellcheck 0.9.0 (`/usr/bin/shellcheck`): no
+  findings (exit 0). A scratch copy at the same relative path with
+  `echo ::error::The commit of $GITHUB_REF_NAME is not on main` planted in line 98 is reported by both (SC2086), so
+  shellcheck ran.
+- **Prettier** with the repository's configuration: no change (its output is identical to the draft).
+- **The pins**: the test above passes; each of the 5 actions carries the same commit and tag as every live use
+  (checkout, setup-node and pnpm/action-setup as in `ci.yml`, `deploy.yml` and `e2e.yml`; upload-artifact as in
+  `deploy.yml` and `e2e.yml`; download-artifact as in `deploy.yml`, its only live use).
+- **`npm pack --dry-run`** in `ota/sdk`: 80 files, under `CHANGELOG.md`, `README.md`, `dist/`, `package.json` and
+  `src/`; none under `release/`.
+- **The repository checks**: `eslint tools/ci` passes; `node --test tools/ci/*.test.mjs` passes 99 tests on
+  FIX-W64-SDK's branch (86 before it, plus the 13 above; the wave's other tasks add their own);
+  `check-package-json.mjs` still reads only `.github/workflows/` and `.github/actions/` (0 problems).
+
+### For the owner
+
+- **The review.** The draft can be reviewed line by line now. Approve the final file by its SHA-256: the one in the
+  latest section of this record (today `ee3408f8…c235`, above). If a github-actions Dependabot pull request moves a
+  pin before the approval, an agent copies the new pin into the draft and adds a section here with the new SHA-256;
+  only those pin lines change.
+- **The move.** On approval the agent task that moves the draft shows the diff above (only the two `DRAFT` lines
+  deleted) and nothing else changes; from then on Dependabot updates the workflow's pins with the others.
