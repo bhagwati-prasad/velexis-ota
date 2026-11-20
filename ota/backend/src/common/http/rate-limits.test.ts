@@ -169,6 +169,25 @@ describe("trackers", () => {
     expect(trackerValue("ip", sources({ ip: "::ffff:203.0.113.7" }))).toBe("203.0.113.7");
   });
 
+  it("count an IPv4-mapped or NAT64 well-known-prefix address as its IPv4, other IPv6 for its /64 [FIX-W63-OTA]", () => {
+    // @nestjs/throttler 6.8.0's normalizeIp, which the tracker calls (lead decision (32f) of 2026-11-20). 6.7.1 counted
+    // every NAT64 address for 64:ff9b::/64, one bucket for all the IPv4 hosts behind NAT64.
+    const ipOf = (ip: string) => trackerValue("ip", sources({ ip }));
+
+    for (const ip of [
+      "64:ff9b::c000:0201",
+      "64:ff9b::c000:201",
+      "64:ff9b::192.0.2.1",
+      "::ffff:192.0.2.1",
+      "::ffff:c000:201",
+    ]) {
+      expect(ipOf(ip), ip).toBe("192.0.2.1");
+    }
+    // The local-use prefix 64:ff9b:1::/48 (RFC 8215) is not the well-known one: the address counts for its /64.
+    expect(ipOf("64:ff9b:1::c000:201")).toBe("64:ff9b:1::/64");
+    expect(ipOf("2001:db8:0:7::1")).toBe("2001:db8:0:7::/64");
+  });
+
   it("read the e-mail trimmed and in lower case, and the booking reference of the tenant", () => {
     expect(trackerValue("email", sources({ body: { email: "  Anna.Berg@Example.com " } }))).toBe(
       "anna.berg@example.com",

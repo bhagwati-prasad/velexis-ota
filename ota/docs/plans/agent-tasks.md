@@ -357,6 +357,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - The 31st search in a minute from one IP answers 429 with `Retry-After`.
   - Ten requests with one key within a minute write `apikey:used:<keyId>` once.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int common`
+- **Note (2026-11-20, lead decision (32f) of 2026-11-20, approved by the owner with "yes to all"; FIX-W63-OTA):** the `ip` tracker's comment in `rate-limits.ts` now says how `@nestjs/throttler`'s `normalizeIp` counts an address (an IPv4-mapped one and, since 6.8.0, a NAT64 well-known-prefix `64:ff9b::a.b.c.d` one as its embedded IPv4 address; any other IPv6 address for its /64), and a unit test of `rate-limits.test.ts` pins that mapping through the tracker; no behaviour changed ([security-review §3.2](../security-review.md#32-rate-limits)); the Status is unchanged.
 
 ### OBE-014 · Add the idempotency interceptor ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)

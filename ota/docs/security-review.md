@@ -155,6 +155,17 @@ operations (600 per minute per staff session or key; a `429` writes no `staff_ac
 per minute per IP across images and signed files). Every throttler key in Redis is `rl:<throttler>:<SHA-256>`, and no
 address, e-mail address or booking reference the limits counted appears in clear in a Redis key or a log line.
 
+*Note (2026-11-20, lead decision (32f), approved by the owner; FIX-W63-OTA):* every end-user address counts as
+`@nestjs/throttler`'s `normalizeIp` (the library's own default tracker, which the `ip` tracker of
+[`rate-limits.ts`](../backend/src/common/http/rate-limits.ts) calls with `DEFAULT_IPV6_SUBNET_PREFIX`) has it: an
+IPv4-mapped (`::ffff:a.b.c.d`) address and, since 6.8.0 (Dependabot PR #51), a NAT64 well-known-prefix
+(`64:ff9b::a.b.c.d`) address as its embedded IPv4 address; any other IPv6 address, the local-use NAT64 prefix
+`64:ff9b:1::/48` included, for its /64: one IPv6 user holds a whole /64. With 6.7.1 every NAT64 address shared the one
+bucket `64:ff9b::/64`. No behaviour changed (only the tracker's comment): a unit test of
+[`rate-limits.test.ts`](../backend/src/common/http/rate-limits.test.ts) pins the mapping through the tracker the guard
+and the `bookings.lookup` failure counters use, and fails both when the tracker skips the library's normalisation and
+when it maps NAT64 addresses as 6.7.1 did.
+
 ### 3.3 Response headers
 
 Every JSON answer carries `Content-Security-Policy: default-src 'none';frame-ancestors 'none'`, HSTS,
