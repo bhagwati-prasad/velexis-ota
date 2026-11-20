@@ -103,8 +103,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       lucide-react:
-        specifier: 1.72.0
-        version: 1.72.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.73.0
+        version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
       next:
         specifier: 15.5.29
         version: 15.5.29(@opentelemetry/api@1.9.1)(@playwright/test@1.65.1)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -173,8 +173,8 @@ importers:
         specifier: 11.2.10
         version: 11.2.10(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)
       '@nestjs/throttler':
-        specifier: 6.7.1
-        version: 6.7.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)(reflect-metadata@0.2.2)
+        specifier: 6.8.0
+        version: 6.8.0(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)(reflect-metadata@0.2.2)
       '@velexis/api-types':
         specifier: workspace:*
         version: link:../../packages/api-types
@@ -233,8 +233,8 @@ importers:
         specifier: 4.6.1
         version: 4.6.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@10.5.0)(pino@9.14.0)(rxjs@7.8.2)
       nodemailer:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.6.0
+        version: 10.6.0
       pdfmake:
         specifier: 0.2.23
         version: 0.2.23
@@ -368,8 +368,8 @@ importers:
         version: 3.0.1(ajv@8.20.0)
     devDependencies:
       '@redocly/cli':
-        specifier: 2.78.0
-        version: 2.78.0
+        specifier: 2.79.0
+        version: 2.79.0
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -529,8 +529,8 @@ importers:
         specifier: workspace:*
         version: link:../../tools/amadeus-stub
       nodemailer:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.6.0
+        version: 10.6.0
       stripe:
         specifier: 18.5.0
         version: 18.5.0(@types/node@24.19.2)
@@ -577,8 +577,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       lucide-react:
-        specifier: 1.72.0
-        version: 1.72.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.73.0
+        version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
       next:
         specifier: 15.5.29
         version: 15.5.29(@opentelemetry/api@1.9.1)(@playwright/test@1.65.1)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -650,8 +650,8 @@ importers:
         specifier: 11.2.10
         version: 11.2.10(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)
       '@nestjs/throttler':
-        specifier: 6.7.1
-        version: 6.7.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)(reflect-metadata@0.2.2)
+        specifier: 6.8.0
+        version: 6.8.0(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)(reflect-metadata@0.2.2)
       '@velexis/api-types':
         specifier: workspace:*
         version: link:../../packages/api-types
@@ -710,8 +710,8 @@ importers:
         specifier: 4.6.1
         version: 4.6.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@10.5.0)(pino@9.14.0)(rxjs@7.8.2)
       nodemailer:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.6.0
+        version: 10.6.0
       otplib:
         specifier: 12.0.1
         version: 12.0.1
@@ -804,8 +804,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       lucide-react:
-        specifier: 1.72.0
-        version: 1.72.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.73.0
+        version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
       next:
         specifier: 15.5.29
         version: 15.5.29(@opentelemetry/api@1.9.1)(@playwright/test@1.65.1)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1538,8 +1538,8 @@ packages:
       '@nestjs/platform-express':
         optional: true
 
-  '@nestjs/throttler@6.7.1':
-    resolution: {integrity: sha512-gAyY1AkU+cSK5DCjFOB43xax9oakameH4xZa9kAgqBqSBQZgmv3DZylLV8KyZNzOGhceL3kDVtby+CF8VAdmEA==}
+  '@nestjs/throttler@6.8.0':
+    resolution: {integrity: sha512-kApHI/Ycxu3cxz7mcEhth7eeR9+L2GGb2CKpaBU+uAWz6DF4XRK68VWXFDKDA1aVwCdOf7HjYiafvQVG+eD2Gw==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0}
     peerDependencies:
       '@nestjs/common': ^7.0.0 || ^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0 || ^12.0.0
@@ -2175,8 +2175,8 @@ packages:
   '@redocly/ajv@8.11.2':
     resolution: {integrity: sha512-io1JpnwtIcvojV7QKDUSIuMN/ikdOUd1ReEnUnMKGfDVridQZ31J0MmIuqwuRjWDZfmvr+Q0MqCcfHM2gTivOg==}
 
-  '@redocly/cli@2.78.0':
-    resolution: {integrity: sha512-ozrbcxLabQUxQr62nt0R8HE2T7kmlmIu1hTa/hyN1h5iht9v3Bh4fA2FXLj4wEhtN4xmdqoySHfba8+vFbONJA==}
+  '@redocly/cli@2.79.0':
+    resolution: {integrity: sha512-MbaH+fA0KqUoGPm82vc/MBhY9D097QK8vSQbZJGzHUcYl3evwnVL9c9hAe5J9C0BenlKTSDPe70YCRGZ/DLHlg==}
     engines: {node: '>=22.12.0 || >=20.19.0 <21.0.0', npm: '>=10'}
     hasBin: true
 
@@ -3820,8 +3820,8 @@ packages:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
     engines: {node: 20 || >=22}
 
-  lucide-react@1.72.0:
-    resolution: {integrity: sha512-fbF5i1GU8GODETa3Q7rXqrJrcx3iPYrQtxthom103zGx+Z0BGwKYAW9s+9435ohYJ7hQm0av0PoZcqI1CRwNrg==}
+  lucide-react@1.73.0:
+    resolution: {integrity: sha512-fVOzGviL9mTfHenG1PbCfIceavyGlnpYNSYr+aGZHLRymAJ7DTP6KHuqt0uBkCKAoenr1UVkwSbDIYt2xIesEQ==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -4017,8 +4017,8 @@ packages:
   node-readfiles@0.2.0:
     resolution: {integrity: sha512-SU00ZarexNlE4Rjdm83vglt5Y9yiQ+XI1XpflWlb7q7UTN1JUItm69xMeiQCTxtTfnzt+83T8Cx+vI2ED++VDA==}
 
-  nodemailer@10.5.0:
-    resolution: {integrity: sha512-L/w/HH5MqpzMDuZD7fQdt/+KqymuvrpaApaIjAH2XA3ILePwlcvXCVVvP75xVrXCEt2ggK2marrrHHFB5Qu0kA==}
+  nodemailer@10.6.0:
+    resolution: {integrity: sha512-jWanL7D9GD3jvUDYKmoC5rWTiG8MnBgnN2yV68bgMKip1zUJhiSTyz7Eg+18y8sk5OvdVDzws5nZK5arSI4f5Q==}
     engines: {node: '>=20.0.0'}
 
   oas-kit-common@1.0.8:
@@ -5522,7 +5522,7 @@ snapshots:
     optionalDependencies:
       '@nestjs/platform-express': 11.2.10(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)
 
-  '@nestjs/throttler@6.7.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)(reflect-metadata@0.2.2)':
+  '@nestjs/throttler@6.8.0(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.2.10)(reflect-metadata@0.2.2)':
     dependencies:
       '@nestjs/common': 11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 11.2.10(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/platform-express@11.2.10)(reflect-metadata@0.2.2)(rxjs@7.8.2)
@@ -6079,7 +6079,7 @@ snapshots:
       require-from-string: 2.0.2
       uri-js-replace: 1.0.1
 
-  '@redocly/cli@2.78.0': {}
+  '@redocly/cli@2.79.0': {}
 
   '@redocly/config@0.22.0': {}
 
@@ -7743,7 +7743,7 @@ snapshots:
 
   lru-cache@11.5.3: {}
 
-  lucide-react@1.72.0(@types/react@19.3.0)(react@19.3.1):
+  lucide-react@1.73.0(@types/react@19.3.0)(react@19.3.1):
     dependencies:
       react: 19.3.1
     optionalDependencies:
@@ -7908,7 +7908,7 @@ snapshots:
     dependencies:
       es6-promise: 3.3.1
 
-  nodemailer@10.5.0: {}
+  nodemailer@10.6.0: {}
 
   oas-kit-common@1.0.8:
     dependencies:
