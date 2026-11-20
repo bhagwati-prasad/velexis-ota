@@ -22,6 +22,8 @@ Sections 1 to 5 are wave 61's record and "Wave 62" is wave 62's, as written then
 to 5 is the wave 61 draft, and "not committed" was true until wave 63. "Wave 63" records the move to this folder.
 "Wave 64" records the test that keeps the draft's action pins in step with the live workflows, the corrected pin
 comment and the rule for the move; its SHA-256 is the current draft's until a later section names another.
+"Wave 65" corrects that comment's second line and "Wave 64"'s description of it; its SHA-256 is the current draft's
+until a later section names another.
 
 ## 1. What was read, and when (2026-11-19)
 
@@ -426,3 +428,82 @@ Today's draft, moved with only its two `DRAFT` lines deleted (a scratch copy, no
   only those pin lines change.
 - **The move.** On approval the agent task that moves the draft shows the diff above (only the two `DRAFT` lines
   deleted) and nothing else changes; from then on Dependabot updates the workflow's pins with the others.
+
+## Wave 65 (FIX-W65-SDK, lead decisions (34a) and (34e) of 2026-11-20)
+
+### The decisions
+
+- **(34a) The comment at line 26.** Wave 64's line 26 said the artifact actions are pinned "as deploy.yml, e2e.yml",
+  but `actions/download-artifact` is used only in `deploy.yml` (`actions/upload-artifact` is used in `deploy.yml` and
+  `e2e.yml`, with the same pin). Line 26 now names `deploy.yml` alone, which is true for both artifact actions, and
+  nothing else in the draft changes. "Wave 64" above says that the new wording "names, for each action, the live
+  workflows its pin comes from"; that overstated it, since the wave 64 comment named `e2e.yml` for download-artifact
+  too. This section corrects that sentence; "Wave 64" stays as written. The owner starts the line-by-line review
+  after this wave, on the SHA-256 below.
+- **(34e) SDK-015's Files.** The SDK-015 block's Files list in `ota/docs/plans/agent-tasks.md` gains
+  `tools/ci/sdk-draft-pins.test.mjs`, the test FIX-W64-SDK added; the test does not change.
+
+### The one change: the comment at line 26
+
+```diff
+--- wave 64's draft (322 lines, SHA-256 ee3408f83f26753cc893dd3a08d6055c8c8e43f1772319a6a72f892881cbc235)
++++ ota/sdk/release/sdk-publish.draft.yml (322 lines, SHA-256 9ee7ae72e45a61355fbc125bfcac8ad8d2738e30eddcaf831c1a035bf1482098)
+@@ -23,7 +23,7 @@
+ # write). The tarball goes from `check` to the others as an artifact, so the IIFE whose hash the release names is the
+ # file npm serves.
+ # Pins (ADR-0023) as in the live workflows: checkout, setup-node and pnpm's as ci.yml, deploy.yml, e2e.yml; artifact
+-# actions as deploy.yml, e2e.yml. Checked by tools/ci/sdk-draft-pins.test.mjs; once moved, by check-package-json.mjs.
++# actions as deploy.yml. Checked by tools/ci/sdk-draft-pins.test.mjs; once moved, by check-package-json.mjs.
+ name: SDK publish
+ 
+ on:
+```
+
+`diff` against wave 64's file shows line 26 and nothing else; line 25 is unchanged. The draft still has 322 lines;
+its SHA-256 is now `9ee7ae72e45a61355fbc125bfcac8ad8d2738e30eddcaf831c1a035bf1482098` (`9ee7ae72…2098`), the file
+the owner approves unless a later section of this record names a newer one. The comment's two lines are now true for
+every action: line 25 names, for checkout, setup-node and pnpm/action-setup, every live workflow that uses them
+(`ci.yml`, `deploy.yml`, `e2e.yml`); line 26 names, for upload-artifact and download-artifact, `deploy.yml`, the one
+live workflow that uses both. Line 26 does not list every live use: `e2e.yml`'s upload-artifact (line 242), with the
+same pin, goes unnamed, and the test still compares the draft's pin with it, as with every live use.
+
+### What the move will show the owner
+
+Today's draft moved with only its two `DRAFT` lines deleted (`sed '1,2d'`, a scratch copy, not committed) has 320
+lines and the SHA-256 `017e96a41d5a563eab98536f54074983aea49df198e297c68a816305d1f2521b` (`017e96a4…521b`), which
+replaces wave 64's `6d978470…bbe8`. Lines 1 to 5 did not change in this wave, so the move's `diff -u` is byte for
+byte the one "Wave 64" shows under the same heading.
+
+### The pins, checked again
+
+For every `uses:` of the draft, the live uses in `.github/workflows/` of the same action with the same SHA and tag;
+no live use of these actions carries another pin:
+
+| Draft lines | Action and pin | Live uses with the same SHA and tag |
+|---|---|---|
+| 83, 199, 285 | `actions/checkout@11d5960a…7262 # v4.4.0` | `ci.yml` (9 uses), `deploy.yml` (1), `e2e.yml` (1) |
+| 140 | `pnpm/action-setup@fc06bc12…5320 # v5.0.0` | `ci.yml` (4 uses), `deploy.yml` (1), `e2e.yml` (1) |
+| 141, 202 | `actions/setup-node@49933ea5…0020 # v4.4.0` | `ci.yml` (8 uses), `deploy.yml` (1), `e2e.yml` (1) |
+| 178 | `actions/upload-artifact@ea165f8d…fa02 # v4.6.2` | `deploy.yml` line 93, `e2e.yml` line 242 |
+| 207, 288 | `actions/download-artifact@d3f86a10…8093 # v4.3.0` | `deploy.yml` line 135 |
+
+### Checks (2026-11-20, Node v24.22.3, npm 11.19.1)
+
+- **actionlint** 1.7.12 on the draft with shellcheck 0.11.0 and with shellcheck 0.9.0 (`/usr/bin/shellcheck`): no
+  findings (exit 0). A scratch copy at the same relative path with
+  `echo ::error::The commit of $GITHUB_REF_NAME is not on main` planted in line 98 is reported by both (SC2086), so
+  shellcheck ran.
+- **Prettier** with the repository's configuration: no change (`prettier --check` on the draft; `pnpm format:check`
+  passes).
+- **The pins**: `node --test tools/ci/sdk-draft-pins.test.mjs` passes its 13 tests.
+- **`npm pack --dry-run --ignore-scripts`** in `ota/sdk`: 80 files, under `CHANGELOG.md`, `README.md`, `dist/`,
+  `package.json` and `src/`; none under `release/`.
+- **The repository checks**: `node --test tools/ci/*.test.mjs` passes 114 tests; `check-package-json.mjs` finds 0
+  problems; plan-lint prints 354 tasks and 1618 h with ERRORS: 0.
+
+### For the owner
+
+- **The review.** Approve the final file by the SHA-256 that the latest section of this record names: today
+  `9ee7ae72…2098` (above), which replaces wave 64's `ee3408f8…c235`. Line 26 is the only line that differs from the
+  file wave 64 recorded. Wave 64's rule for a later pin change stands: an agent copies the new pin into the draft and
+  adds a section here with the new SHA-256.

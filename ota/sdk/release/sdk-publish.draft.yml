@@ -23,7 +23,7 @@
 # write). The tarball goes from `check` to the others as an artifact, so the IIFE whose hash the release names is the
 # file npm serves.
 # Pins (ADR-0023) as in the live workflows: checkout, setup-node and pnpm's as ci.yml, deploy.yml, e2e.yml; artifact
-# actions as deploy.yml, e2e.yml. Checked by tools/ci/sdk-draft-pins.test.mjs; once moved, by check-package-json.mjs.
+# actions as deploy.yml. Checked by tools/ci/sdk-draft-pins.test.mjs; once moved, by check-package-json.mjs.
 name: SDK publish
 
 on:
