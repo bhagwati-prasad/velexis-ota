@@ -16,6 +16,8 @@ ota/sdk/dist/
 
 # Release folders assembled by deploy/scripts/pack-release.sh
 release/
+# ... except the SDK's draft publish workflow and its record (SDK-015, lead decision (32j)), which are sources.
+!/ota/sdk/release/
 *.tar.zst
 *.tar.gz
 

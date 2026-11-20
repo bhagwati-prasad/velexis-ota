@@ -1,0 +1,322 @@
+# DRAFT (SDK-015, wave 60; revised by FIX-W61-SDK in wave 61 for the lead's decision (30h) and by FIX-W62-SDK in
+# wave 62 for (31g)) for the owner's line-by-line approval; not in .github/workflows/ until approved.
+# SDK publish: publishes @velexis/ota-sdk to npm with provenance and creates its GitHub release (SDK-015, OADR-0016
+# point 8, ota/sdk/README.md §9, the OTA launch checklist's item A6).
+# Run it by hand on a tag sdk-vX.Y.Z: Actions, "SDK publish", "Run workflow", with the tag chosen under "Use workflow
+# from" (or `gh workflow run sdk-publish.yml --ref sdk-vX.Y.Z`). It refuses any other ref, a tag whose commit is not
+# on main, a package that is not ready for that version (package.json's version, "private", licence and repository,
+# which must be the repository this workflow runs in, and a dated CHANGELOG section) and the credential npm-token for
+# any version but 1.0.0. `dry_run` (on by default) runs every step up to `npm publish --dry-run`, which uploads
+# nothing and makes no provenance statement, and creates no release; with trusted publishing it also checks that npm
+# got the trusted publisher's token.
+# No cache is restored or saved (a release builds from the tag alone).
+# The npm credential, chosen by the input `credential` (lead decision (30h) of 2026-11-19): `trusted-publishing`
+# (the default) lets npm exchange the job's OIDC token for a short-lived publish token of the trusted publisher that
+# npmjs.com holds for this repository, sdk-publish.yml and the environment `npm`, with no npm token in the job;
+# `npm-token` publishes with the secret NPM_TOKEN of the environment `npm`, a short-lived granular token for 1.0.0
+# only, because npm configures a trusted publisher only for a package that already exists; the check job refuses it
+# for any other version (lead decision (31g)). npm ends direct publishing with granular tokens in January 2027, so
+# 1.0.0 is published before then (lead decision (31f)).
+# Three jobs, each with only the permissions it needs: `check` tests, builds and packs (contents: read); `publish`
+# publishes that tarball with `npm publish --provenance --access public` (id-token: write, for the trusted
+# publisher's token and the provenance statement); `release` creates the release with the IIFE's SRI hash (contents:
+# write). The tarball goes from `check` to the others as an artifact, so the IIFE whose hash the release names is the
+# file npm serves.
+# Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, the same pins as
+# ci.yml (tools/ci/check-package-json.mjs, ADR-0023).
+name: SDK publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: npm publish --dry-run and no GitHub release"
+        type: boolean
+        default: true
+      credential:
+        description: "npm credential: trusted-publishing, or npm-token (the environment npm's NPM_TOKEN, 1.0.0 only)"
+        type: choice
+        options:
+          - trusted-publishing
+          - npm-token
+        default: trusted-publishing
+
+permissions: {}
+
+concurrency:
+  group: sdk-publish
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing command in a pipe fails the step.
+    shell: bash
+
+env:
+  CI: "true"
+  TURBO_TELEMETRY_DISABLED: "1"
+
+jobs:
+  check:
+    name: Check the tag, test, build and pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      tarball: ${{ steps.pack.outputs.tarball }}
+      integrity: ${{ steps.pack.outputs.integrity }}
+      sri: ${{ steps.pack.outputs.sri }}
+    steps:
+      - name: Refuse anything but a tag sdk-vX.Y.Z
+        id: tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" != "tag" ] || ! [[ "$REF_NAME" =~ ^sdk-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Run this workflow on a tag sdk-vX.Y.Z, not on the ${REF_TYPE} ${REF_NAME}"
+            exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The whole history with origin/main, to check that the tag's commit is on main.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check that the tag's commit is on main and that the package and the credential are ready for this version
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          CREDENTIAL: ${{ inputs.credential }}
+          # The repository this run belongs to (owner/name), which the provenance statement and the trusted
+          # publisher's token name.
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::The commit of ${GITHUB_REF_NAME} is not on main"
+            exit 1
+          fi
+          node --input-type=module - <<'EOF'
+          import { readFileSync } from "node:fs";
+          const { VERSION: version, REPOSITORY: repository, SERVER_URL: serverUrl, CREDENTIAL: credential } = process.env;
+          const pkg = JSON.parse(readFileSync("ota/sdk/package.json", "utf8"));
+          const problems = [];
+          // The npm token is the fallback for the package's first version only (lead decisions (30h) and (31g)):
+          // every later version is published with the trusted publisher that npm allows once the package exists.
+          if (credential === "npm-token" && version !== "1.0.0") {
+            problems.push(`The credential npm-token publishes 1.0.0 only (lead decisions (30h) and (31g)), not ${version}: run this workflow with the credential trusted-publishing, through the trusted publisher that ota/sdk/README.md §9 step 5 adds after 1.0.0`);
+          }
+          if (pkg.version !== version) {
+            problems.push(`ota/sdk/package.json's version is ${pkg.version}, the tag's is ${version}`);
+          }
+          if (pkg.private === true) {
+            problems.push('ota/sdk/package.json still says "private": true (the release commit removes it, README §9)');
+          }
+          if (typeof pkg.license !== "string" || pkg.license === "" || pkg.license === "UNLICENSED") {
+            problems.push(`ota/sdk/package.json's license is ${JSON.stringify(pkg.license)}: the release commit sets the licence the owner chose (H-14)`);
+          }
+          // npm refuses a publish whose repository.url is not exactly the repository the run belongs to (letter case
+          // included), so the field must name this run's repository in the form of lead decision (30h).
+          const url = `git+${serverUrl}/${repository}.git`;
+          const field = pkg.repository;
+          const isObject = typeof field === "object" && field !== null;
+          if (!isObject || field.url !== url) {
+            const [name, found] = isObject ? ["repository.url", field.url] : ["repository", field];
+            problems.push(`ota/sdk/package.json's ${name} is ${JSON.stringify(found)}, but this run belongs to ${repository}: repository.url must be ${JSON.stringify(url)}`);
+          }
+          if (field?.type !== "git" || field?.directory !== "ota/sdk") {
+            problems.push('ota/sdk/package.json\'s repository needs "type": "git" and "directory": "ota/sdk" (the release commit adds them, README §9)');
+          }
+          const heading = readFileSync("ota/sdk/CHANGELOG.md", "utf8").split("\n").find((line) => line.startsWith(`## ${version} (`));
+          if (!heading || !/^## \S+ \(\d{4}-\d{2}-\d{2}\)$/.test(heading)) {
+            problems.push(`ota/sdk/CHANGELOG.md has no dated section "## ${version} (YYYY-MM-DD)"`);
+          }
+          for (const problem of problems) console.log(`::error::${problem}`);
+          process.exitCode = problems.length > 0 ? 1 : 0;
+          EOF
+      # The pnpm version comes from package.json "packageManager".
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: The SDK's unit, contract and package tests (VERSION equals package.json; npm pack compiles alone)
+        run: pnpm exec turbo run test --filter=@velexis/ota-sdk
+      - name: Build (bundles, declarations with the OTA API types)
+        run: pnpm exec turbo run build --filter=@velexis/ota-sdk
+      - name: Size check (the ESM bundle within 25 KB min+gzip)
+        working-directory: ota/sdk
+        run: node scripts/check-size.mjs
+      - name: Pack once, with the IIFE's SRI hash read from the tarball
+        id: pack
+        working-directory: ota/sdk
+        run: |
+          out="$RUNNER_TEMP/sdk"
+          mkdir -p "$out/unpacked"
+          npm pack --json --ignore-scripts --pack-destination "$out" > "$out/pack.json"
+          tarball=$(node -p 'require(process.argv[1])[0].filename' "$out/pack.json")
+          integrity=$(node -p 'require(process.argv[1])[0].integrity' "$out/pack.json")
+          tar -xzf "$out/$tarball" -C "$out/unpacked"
+          # The declarations are self-contained (OADR-0016 point 7): the copy of the OTA API types is there, and no
+          # declaration names @velexis/api-types any more (a dist/types/ that test:contract's tsc rewrote would).
+          test -f "$out/unpacked/package/dist/types/api-types.d.ts"
+          if grep -rlE "[\"']@velexis/api-types[\"'/]" "$out/unpacked/package/dist/types"; then
+            echo "::error::The declarations above still import @velexis/api-types; run the SDK's build again"
+            exit 1
+          fi
+          sri="sha384-$(openssl dgst -sha384 -binary "$out/unpacked/package/dist/velexis-sdk.iife.js" | openssl base64 -A)"
+          {
+            echo "tarball=$tarball"
+            echo "integrity=$integrity"
+            echo "sri=$sri"
+          } >> "$GITHUB_OUTPUT"
+          echo "Packed $tarball ($integrity); IIFE $sri"
+          tar -tzf "$out/$tarball"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sdk-tarball
+          path: ${{ runner.temp }}/sdk/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: npm publish --provenance
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The environment npm (Settings, Environments): tags sdk-v* as its only deployment refs. The trusted publisher on
+    # npmjs.com names it, and its secret NPM_TOKEN (the 1.0.0 fallback) is readable by this job only.
+    environment: npm
+    permissions:
+      contents: read
+      # The job's OIDC token: npm exchanges it for the trusted publisher's publish token, and the provenance
+      # statement is signed with it (Sigstore).
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          # Writes an .npmrc that sends NODE_AUTH_TOKEN to this registry only; the publish step sets that variable.
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sdk-tarball
+          path: ${{ runner.temp }}/sdk
+      - name: Check that the tarball is the one the check job packed
+        env:
+          TARBALL: ${{ needs.check.outputs.tarball }}
+          INTEGRITY: ${{ needs.check.outputs.integrity }}
+        run: |
+          actual="sha512-$(openssl dgst -sha512 -binary "$RUNNER_TEMP/sdk/$TARBALL" | openssl base64 -A)"
+          if [ "$actual" != "$INTEGRITY" ]; then
+            echo "::error::$TARBALL is $actual, the check job packed $INTEGRITY"
+            exit 1
+          fi
+      - name: Check that npm can use a trusted publisher (npm 11.5.1 or later)
+        run: |
+          version=$(npm --version)
+          IFS=. read -r major minor patch <<< "${version%%-*}"
+          if (( major < 11 || (major == 11 && (minor < 5 || (minor == 5 && patch < 1))) )); then
+            echo "::error::npm ${version} cannot use a trusted publisher: it needs npm 11.5.1 or later"
+            exit 1
+          fi
+          echo "npm ${version}"
+      - name: npm publish --provenance --access public
+        env:
+          CREDENTIAL: ${{ inputs.credential }}
+          # The secret is read only when the run asks for it.
+          NPM_TOKEN_FALLBACK: ${{ inputs.credential == 'npm-token' && secrets.NPM_TOKEN || '' }}
+          TARBALL: ${{ needs.check.outputs.tarball }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # npm tries the trusted publisher first and, if that fails for any reason, says so only in its verbose log
+          # and publishes with whatever token its configuration holds. So this step decides the token, from the
+          # input: setup-node's .npmrc reads NODE_AUTH_TOKEN, and setup-node exported a placeholder into it.
+          case "$CREDENTIAL" in
+            trusted-publishing)
+              # Empty, not unset: npm would send an unset ${NODE_AUTH_TOKEN} as the token itself. With no token, a
+              # failed exchange stops the publish (ENEEDAUTH) instead of falling back to another credential.
+              export NODE_AUTH_TOKEN=""
+              loglevel=verbose
+              ;;
+            npm-token)
+              # 1.0.0 only: the check job refused this credential for any other version (lead decision (31g)).
+              if [ -z "$NPM_TOKEN_FALLBACK" ]; then
+                echo "::error::The environment npm has no secret NPM_TOKEN (the 1.0.0 fallback, lead decision (30h))"
+                exit 1
+              fi
+              export NODE_AUTH_TOKEN="$NPM_TOKEN_FALLBACK"
+              loglevel=notice
+              ;;
+            *)
+              echo "::error::Unknown credential ${CREDENTIAL}"
+              exit 1
+              ;;
+          esac
+          args=("$RUNNER_TEMP/sdk/$TARBALL" --provenance --access public --loglevel "$loglevel")
+          if [ "$DRY_RUN" != "true" ]; then
+            npm publish "${args[@]}"
+            exit 0
+          fi
+          npm publish "${args[@]}" --dry-run 2>&1 | tee "$RUNNER_TEMP/npm-publish.log"
+          # A dry run needs no credential and only warns when the exchange fails, so check that it worked: without
+          # the trusted publisher's token the real run stops with ENEEDAUTH.
+          if [ "$CREDENTIAL" = trusted-publishing ] &&
+            ! grep -q "verbose oidc Successfully retrieved and set token" "$RUNNER_TEMP/npm-publish.log"; then
+            echo "::error::npm got no token from the trusted publisher (its oidc lines above say why); check the trusted publisher of @velexis/ota-sdk on npmjs.com (repository, sdk-publish.yml, environment npm, npm publish allowed)"
+            exit 1
+          fi
+
+  release:
+    name: GitHub release with the IIFE's SRI hash
+    needs: [check, publish]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sdk-tarball
+          path: ${{ runner.temp }}/sdk
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+          INTEGRITY: ${{ needs.check.outputs.integrity }}
+          SRI: ${{ needs.check.outputs.sri }}
+        run: |
+          iife="https://cdn.jsdelivr.net/npm/@velexis/ota-sdk@${VERSION}/dist/velexis-sdk.iife.js"
+          {
+            echo "@velexis/ota-sdk ${VERSION} on npm, with provenance: https://www.npmjs.com/package/@velexis/ota-sdk/v/${VERSION}"
+            echo "(tarball integrity \`${INTEGRITY}\`)."
+            echo
+            echo "The IIFE (\`window.Velexis\`) from a CDN that mirrors npm, with its Subresource Integrity hash"
+            echo "(\`dist/velexis-sdk.iife.js\`, SHA-384: \`${SRI}\`); self-hosting the file is recommended"
+            echo "(ota/frontend/docs/build-your-own-frontend.md §4):"
+            echo
+            echo '```html'
+            echo "<script src=\"${iife}\" integrity=\"${SRI}\" crossorigin=\"anonymous\"></script>"
+            echo '```'
+            echo
+            # The CHANGELOG's section of this version, without its heading.
+            awk -v heading="## ${VERSION} (" 'index($0, heading) == 1 { found = 1; next } found && /^## / { exit } found' \
+              ota/sdk/CHANGELOG.md
+          } > "$RUNNER_TEMP/notes.md"
+      - name: Create the release sdk-vX.Y.Z with the tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          TARBALL: ${{ needs.check.outputs.tarball }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "@velexis/ota-sdk ${VERSION}" \
+            --notes-file "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP/sdk/$TARBALL"
