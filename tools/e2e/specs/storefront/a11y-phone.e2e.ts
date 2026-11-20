@@ -1279,14 +1279,17 @@ test.describe("the account menu by keyboard and by pointer, on a phone (OFE-031)
       await expect(page).toHaveURL(/\/account\/$/);
       await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
 
-      // Sign out: the home page, with "Sign in" in the button's place.
+      // Sign out: the home page, with "Sign in" in the button's place. The wait is for the home page itself: /account/
+      // ends in "/" too, and the storefront shows the visitor's header before it leaves for "/", so a looser check
+      // could pass on /account/ and run axe on a page that is being replaced (FIX-W62-TESTS).
+      const home = new URL("/", page.url()).href;
       await tabTo(page, parts.menu);
       await page.keyboard.press("Enter");
       await page.keyboard.press("Tab");
       await page.keyboard.press("Tab");
       await expect(parts.signOut).toBeFocused();
       await page.keyboard.press("Enter");
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).toHaveURL(home);
       await expect(parts.signIn).toBeVisible();
       await expect(parts.menu).toHaveCount(0);
       await guards.checkA11y(page);
@@ -1316,9 +1319,13 @@ test.describe("the account menu by keyboard and by pointer, on a phone (OFE-031)
       await expect(page).toHaveURL(/\/account\/$/);
       await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
 
+      // Sign out: the wait is for the home page itself, not any address ending in "/" (/account/ is one, and it shows
+      // the visitor's header before the storefront leaves for "/"), so the goto below cannot meet that navigation
+      // (FIX-W62-TESTS).
+      const home = new URL("/", page.url()).href;
       await parts.menu.click();
       await parts.signOut.click();
-      await expect(page).toHaveURL(/\/$/);
+      await expect(page).toHaveURL(home);
       await expect(parts.signIn).toBeVisible();
       // The session has ended: a new page shows a visitor's header.
       await page.goto("/lookup.html");
