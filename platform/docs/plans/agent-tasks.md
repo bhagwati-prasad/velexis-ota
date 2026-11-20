@@ -290,6 +290,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Two clients sending the valid BFF key with different `X-Velexis-End-User-IP` values get separate buckets: after one of them is throttled, the other still passes [PADR-0019].
   - The registry registers no scheduler for a disabled feature.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int common`
+- **Note (2026-11-20, lead decision (32f) of 2026-11-20, approved by the owner with "yes to all"; FIX-W63-PLATFORM):** the `ip` tracker's comment and `trackerValue`'s JSDoc in `throttler.config.ts`, and the rate-limit line of [the backend's README](../../backend/README.md), now say how `@nestjs/throttler`'s `normalizeIp` counts an address (an IPv4-mapped one and, since 6.8.0, a NAT64 well-known-prefix `64:ff9b::a.b.c.d` one as its embedded IPv4 address; any other IPv6 address for its /64), and the new unit test `throttler.config.test.ts` pins that mapping through `trackerValue` (with `64:ff9b::1:c000:201`, inside `64:ff9b::/64` but outside the well-known `/96`, counted for `64:ff9b::/64`), also after `resolveEndUser`; no behaviour changed ([security-review.md](../security-review.md) F-3, the note of 2026-11-19); the Status is unchanged.
 
 ### PBE-010 · Add the audit module and the platform redaction paths ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
