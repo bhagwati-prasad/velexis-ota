@@ -5,7 +5,7 @@
 //
 // A family is the client `createVelexisClient` made (its root) and every client derived from it with `withOptions`, at
 // any depth (`Family`, `createSession`'s third argument). What the clients of a family share is below; two families
-// share nothing.
+// share nothing but, in cookie mode, the origin's refresh lock (`COOKIE_REFRESH_LOCK`, below).
 //
 // - Cookie mode (`session: "cookie"`, the hosted storefront): no key and no token ever reaches JavaScript. The mode
 //   needs `document` and refuses every key, every token and `X-Api-Key` / `Authorization` headers, at construction
@@ -22,7 +22,15 @@
 //   SDK-017), whichever client's call started them, so their outcome never depends on which call came first. A
 //   refused refresh calls the `onSessionExpired` of the client whose call started it, once, and rejects every call
 //   waiting for it. Everything else (`maxRetries`, `timeoutMs`, `currency`, headers, hooks) stays each client's own
-//   for its own calls.
+//   for its own calls. The families of the origin's other tabs (and any other family of the page) send the same
+//   cookies too, so where the page has Web Locks (`navigator.locks`) each refresh runs under the origin's lock
+//   `COOKIE_REFRESH_LOCK`, held from before `POST /v1/auth/refresh` until its answer is in (the browser has stored the
+//   new cookies by then), and no two refreshes of the origin are in flight at once (FIX-W67-KI003, lead decision (36f)
+//   of 2026-11-21; the API keeps no grace window for a rotated refresh token). A family whose refresh finds the lock
+//   held waits for it, at most the refresh's timeout (`underRefreshLock`), and then sends no refresh: the other
+//   holder's answer has left its cookies in the jar, so the calls that waited are sent once more first, and only a
+//   call refused `TOKEN_EXPIRED` again refreshes, under the lock (`sendAgainWithCookies`). Without Web Locks (an
+//   insecure context, an older browser, a test DOM without them) the refresh runs as before, without a lock.
 // - Token mode (a publishable key, or no key): `X-Api-Key`, `Authorization: Bearer` and `X-Booking-Token` from the
 //   options (token sources are called before every request); `fetch` runs with `credentials: "omit"`.
 // - Server mode (a secret or hosting key): the same headers; `fetch` keeps its default `credentials` (a server has no
@@ -146,12 +154,25 @@ import { op } from "./operations.js";
  */
 
 /**
+ * How a cookie-mode refresh of a family ended (FIX-W67-KI003): `refreshed` when the family sent `POST /v1/auth/refresh`
+ * and the API answered it (the browser has stored the new cookies); `waited` when another holder of the origin's
+ * refresh lock (another tab, or another family of the page) had it first and the family sent no refresh: that holder's
+ * refresh has finished, and the cookie jar holds what its answer left.
+ * @typedef {"refreshed" | "waited"} CookieRefresh
+ */
+
+/**
  * The refresh state of a cookie-mode session: what its calls share so that they send one refresh at a time (single
  * flight). The cookie-mode clients of a family share one (`CookieFamily`, SDK-016); token and server mode share their
  * refreshes by token value through the `Family` instead.
  * @typedef {object} RefreshState
- * @property {number} generation the number of refreshes that have finished
- * @property {Promise<boolean> | undefined} refreshing cookie mode: the refresh in flight
+ * @property {number} generation the number of refreshes that have finished: in cookie mode the family's own and the
+ *   other holders' it waited for
+ * @property {number} refreshedAt cookie mode: `generation` as of the family's last own refresh (0 before any), so that
+ *   a call whose attempt went out earlier knows whether the family itself has refreshed since
+ * @property {Promise<CookieRefresh> | undefined} refreshing cookie mode: the refresh in flight
+ * @property {boolean} force cookie mode: whether the refresh in flight refreshes even when it waited for another
+ *   holder's lock (a call sent once more after another holder's refresh was refused `TOKEN_EXPIRED` again)
  * @property {Promise<void> | undefined} fetchingCsrf cookie mode: the `GET /v1/storefront` in flight that issues the
  *   CSRF cookie
  */
@@ -270,6 +291,12 @@ export const FAMILY_TOKENS_KEPT = 512;
  * 2026-11-15, `withinWindow`).
  */
 export const ROTATION_WINDOW_MS = 10_000;
+/**
+ * The Web Lock (`navigator.locks`) every cookie-mode refresh runs under (FIX-W67-KI003, lead decision (36f) of
+ * 2026-11-21; `underRefreshLock`). Lock names belong to an origin, so the tabs and frames of one storefront host share
+ * it, and no other site sees it.
+ */
+export const COOKIE_REFRESH_LOCK = "velexis-sdk:cookie-refresh";
 /** The paths of the operations that rotate the refresh token in their body (`auth.refresh`, `console.auth.refresh`). */
 const REFRESH_PATHS = [op.auth_refresh.path, op.console_auth_refresh.path];
 
@@ -464,6 +491,85 @@ function untilSettled(promise, request) {
 }
 
 /**
+ * The page's Web Locks (`navigator.locks`), or `undefined` where it has none: an insecure context, a browser without
+ * them, a test DOM without them (happy-dom answers `null`). Read at every cookie-mode refresh.
+ * @returns {LockManager | undefined}
+ */
+function webLocks() {
+  try {
+    const locks = globalThis.navigator?.locks;
+    return typeof locks?.request === "function" ? locks : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Cookie mode: runs `refresh` under the origin's Web Lock `COOKIE_REFRESH_LOCK` (FIX-W67-KI003, lead decision (36f) of
+ * 2026-11-21), so that no two refreshes of the session cookies are in flight at once in the tabs of one origin: they
+ * all send the same `__Host-vx_rt` cookie, and the API refuses a rotated one as reused and revokes the session
+ * (OADR-0006). `refresh` holds the lock until it settles; it must wait for nothing but the refresh itself.
+ * - A lock that is free is taken at once (`ifAvailable`), and `refresh(false)` runs under it.
+ * - A lock that another holder has is waited for, at most `timeoutMs` (Web Locks have no timeout of their own), and
+ *   then `refresh(true)` runs under it: the other holder's refresh has finished by then. A wait that reaches
+ *   `timeoutMs` (a stuck holder) gives up with a `ConnectionError` `TIMEOUT` without refreshing: presenting the cookie
+ *   while the holder's refresh may still rotate it could revoke the session.
+ * - Without Web Locks, or when the page's Web Locks refuse the first request (a document whose origin is opaque, such
+ *   as a sandboxed frame), `refresh(false)` runs without a lock, as before FIX-W67-KI003.
+ * @template T
+ * @param {(waited: boolean) => Promise<T>} refresh
+ * @param {number} timeoutMs the longest wait for another holder's lock
+ * @param {string} what the request, for the message of the timeout
+ * @returns {Promise<T>}
+ */
+async function underRefreshLock(refresh, timeoutMs, what) {
+  const locks = webLocks();
+  if (locks === undefined) {
+    return refresh(false);
+  }
+  /** @type {{ value: T } | undefined} */
+  let done;
+  let entered = false;
+  try {
+    await locks.request(COOKIE_REFRESH_LOCK, { ifAvailable: true }, async (lock) => {
+      entered = true;
+      if (lock !== null) {
+        done = { value: await refresh(false) };
+      }
+    });
+  } catch (error) {
+    if (!entered) {
+      return refresh(false);
+    }
+    throw error;
+  }
+  if (done !== undefined) {
+    return done.value;
+  }
+  const waiting = new AbortController();
+  let granted = false;
+  const timer = setTimeout(() => waiting.abort(), timeoutMs);
+  try {
+    return await locks.request(COOKIE_REFRESH_LOCK, { signal: waiting.signal }, () => {
+      granted = true;
+      clearTimeout(timer);
+      return refresh(true);
+    });
+  } catch (error) {
+    if (!granted && waiting.signal.aborted) {
+      throw connectionError(
+        "TIMEOUT",
+        `Timed out after ${timeoutMs} ms waiting for another tab's session refresh (${what})`,
+        error,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Calls a session hook and waits for it. What it throws or rejects with is ignored: the session keeps the new tokens
  * itself, and a storage bug never fails the call.
  * @template {unknown[]} A
@@ -627,7 +733,7 @@ export function createSession(options, transport, family) {
   const key = options.secretKey ?? options.publishableKey ?? options.hostingKey;
   const refreshOperation = options.sessionKind === "staff" ? op.console_auth_refresh : op.auth_refresh;
   /** @type {RefreshState} */
-  let state = { generation: 0, refreshing: undefined, fetchingCsrf: undefined };
+  let state = { generation: 0, refreshedAt: 0, refreshing: undefined, force: false, fetchingCsrf: undefined };
   /** The transport settings of the requests the session makes itself (refresh, CSRF cookie). */
   let ownRequests = transport;
   if (mode === "cookie") {
@@ -872,16 +978,16 @@ export function createSession(options, transport, family) {
 
   /**
    * One request the session makes itself (the refresh, the CSRF cookie): the operation's route-table entry with a JSON
-   * body when it takes one, and the API key as the only credential. It goes out with `ownRequests`: in cookie mode the
-   * family root's transport settings, whichever client's call needs it (SDK-017); in token and server mode this
-   * client's own.
+   * body when it takes one, and the API key as the only credential, with its `Idempotency-Key` fixed. It goes out with
+   * `ownRequests` (`configOf(request, null, ownRequests)`): in cookie mode the family root's transport settings,
+   * whichever client's call needs it (SDK-017); in token and server mode this client's own.
    * @param {Operation} operation
    * @param {Record<string, unknown>} body
    * @param {Readonly<RequestOptions>} requestOptions
-   * @returns {Promise<unknown>}
+   * @returns {HttpRequest}
    */
-  function sendOwn(operation, body, requestOptions) {
-    const request = withFixedIdempotencyKey({
+  function ownRequest(operation, body, requestOptions) {
+    return withFixedIdempotencyKey({
       method: operation.method,
       path: operation.path,
       query: "",
@@ -892,6 +998,17 @@ export function createSession(options, transport, family) {
       timeoutMs: operation.timeoutMs,
       options: requestOptions,
     });
+  }
+
+  /**
+   * Sends one request the session makes itself (`ownRequest`), with the CSRF handling of `sendWithCsrf`.
+   * @param {Operation} operation
+   * @param {Record<string, unknown>} body
+   * @param {Readonly<RequestOptions>} requestOptions
+   * @returns {Promise<unknown>}
+   */
+  function sendOwn(operation, body, requestOptions) {
+    const request = ownRequest(operation, body, requestOptions);
     return sendWithCsrf(configOf(request, null, ownRequests), request);
   }
 
@@ -920,18 +1037,21 @@ export function createSession(options, transport, family) {
   }
 
   /**
-   * Cookie mode: one refresh of the session cookies, the one of every client of the family. It goes out with the
-   * family root's transport settings (`sendOwn`) and calls this client's `onSessionExpired` when the API refuses it
-   * with a 401. Resolves `true` once the session has new cookies; throws the API's error.
+   * Cookie mode: one refresh of the session cookies, the one of every client of the family, under the origin's refresh
+   * lock (`refreshUnderLock`, FIX-W67-KI003). Calls this client's `onSessionExpired` when the API refuses it with a 401
+   * (after the lock is released) and throws the error. Resolves how it ended (`CookieRefresh`) once the session has new
+   * cookies, its own or another holder's; either way it counts as a finished refresh of the family (`generation`).
    * @param {HttpRequest} request the call that started the refresh
-   * @returns {Promise<boolean>}
+   * @returns {Promise<CookieRefresh>}
    */
   async function runCookieRefresh(request) {
     try {
-      // The refresh token is the __Host-vx_rt cookie; a token in the body is refused (OADR-0006 point 5).
-      await sendOwn(op.auth_refresh, {}, forwardedOptionsOf(request.options));
+      const outcome = await refreshUnderLock(request);
       state.generation += 1;
-      return true;
+      if (outcome === "refreshed") {
+        state.refreshedAt = state.generation;
+      }
+      return outcome;
     } catch (error) {
       if (error instanceof AuthenticationError) {
         await callHook(options.onSessionExpired);
@@ -941,18 +1061,79 @@ export function createSession(options, transport, family) {
   }
 
   /**
+   * Cookie mode: `POST /v1/auth/refresh` with an empty body (the refresh token is the `__Host-vx_rt` cookie; a token in
+   * the body is refused, OADR-0006 point 5), sent with the family root's transport settings under the origin's refresh
+   * lock (`underRefreshLock`), which is held from before the request until its answer is in, the retries of the root's
+   * `maxRetries` included, so the browser has stored the new cookies before another tab's refresh can start. When the
+   * lock was another holder's first, no refresh is sent (`waited`), unless the refresh in flight must refresh
+   * (`RefreshState.force`): it then goes out with the cookie the other holder left. The wait for the lock is bounded by
+   * the refresh's own timeout (the root's `timeoutMs`, as the request gets it). The CSRF cookie is never fetched under
+   * the lock: a missing one first, and after `403 CSRF_TOKEN_INVALID` (the API refused the refresh before doing
+   * anything, so nothing rotated) the lock is released, the cookie fetched again, and the refresh sent once more under
+   * the lock, as `sendWithCsrf` sends it once more; a second `403` is thrown.
+   * @param {HttpRequest} request the call that started the refresh
+   * @returns {Promise<CookieRefresh>}
+   */
+  async function refreshUnderLock(request) {
+    const refresh = ownRequest(op.auth_refresh, {}, forwardedOptionsOf(request.options));
+    const config = configOf(refresh, null, ownRequests);
+    const timeoutMs = refresh.options.timeoutMs ?? refresh.timeoutMs ?? ownRequests.timeoutMs;
+    const what = `${refresh.method} ${refresh.path}`;
+    /**
+     * One attempt under the lock: `"csrf"` when the API refused it `403 CSRF_TOKEN_INVALID` and `reportCsrf` is set.
+     * @param {boolean} reportCsrf whether a `403 CSRF_TOKEN_INVALID` is reported instead of thrown (the first attempt)
+     * @returns {Promise<CookieRefresh | "csrf">}
+     */
+    const attempt = (reportCsrf) =>
+      underRefreshLock(
+        async (waited) => {
+          if (waited && !state.force) {
+            return "waited";
+          }
+          try {
+            await sendHttp(config, refresh);
+          } catch (error) {
+            if (reportCsrf && isRefusal(error, 403, "CSRF_TOKEN_INVALID")) {
+              return "csrf";
+            }
+            throw error;
+          }
+          return "refreshed";
+        },
+        timeoutMs,
+        what,
+      );
+    if (readCsrfCookie() === undefined) {
+      await fetchCsrf(refresh);
+    }
+    let outcome = await attempt(true);
+    if (outcome === "csrf") {
+      await fetchCsrf(refresh);
+      outcome = await attempt(false);
+    }
+    // The second attempt throws a 403 instead of reporting it, so the outcome is a `CookieRefresh` here.
+    return /** @type {CookieRefresh} */ (outcome);
+  }
+
+  /**
    * Cookie mode: the refresh after a call failed with `TOKEN_EXPIRED`: joins the family's refresh in flight, skips it
-   * when one has finished since the call's attempt went out, or starts one. Resolves whether the call has a session to
-   * be sent again with.
+   * when one has finished since the call's attempt went out, or starts one. Resolves how the refresh the call waited
+   * for ended: `refreshed` when the family itself has refreshed since the call's attempt went out (the call is sent
+   * once more, and a second `TOKEN_EXPIRED` is thrown), `waited` when the only refreshes since were other holders' of
+   * the origin's refresh lock (the call is sent once more first, `sendAgainWithCookies`); throws a refused refresh's
+   * error. Without Web Locks every refresh is the family's own.
    * @param {HttpRequest} request
    * @param {Attempt} attempt
-   * @returns {Promise<boolean>}
+   * @param {boolean} [force] refresh even when the lock was another holder's first: for a call already sent once more
+   *   after another holder's refresh and refused `TOKEN_EXPIRED` again; it joins a refresh in flight and makes it refresh
+   * @returns {Promise<CookieRefresh>}
    */
-  function refreshCookies(request, attempt) {
+  function refreshCookies(request, attempt, force = false) {
     if (state.refreshing === undefined) {
       if (attempt.generation !== state.generation) {
-        return Promise.resolve(true);
+        return Promise.resolve(state.refreshedAt > attempt.generation ? "refreshed" : "waited");
       }
+      state.force = force;
       const started = runCookieRefresh(request);
       state.refreshing = started;
       const done = () => {
@@ -961,8 +1142,43 @@ export function createSession(options, transport, family) {
         }
       };
       started.then(done, done);
+    } else if (force) {
+      state.force = true;
     }
     return untilSettled(state.refreshing, request);
+  }
+
+  /**
+   * Cookie mode: what follows a call's `401 TOKEN_EXPIRED` (see the file header). After the family's own refresh the
+   * call is sent once more, and a second refusal is thrown. After another holder's refresh (another tab's, which this
+   * family waited for under the origin's refresh lock) the call is sent once more first: the other holder's answer has
+   * put its new access cookie in the jar, so this costs no refresh and never presents a rotated refresh cookie; only
+   * when the API refuses it `TOKEN_EXPIRED` again (the other holder's refresh failed without clearing the cookies) does
+   * the family refresh, under the lock, and send the call a last time. A call that may not be sent again
+   * (`mayResend`: the airline-card completion) throws the first refusal once the refresh has ended.
+   * @param {HttpConfig} config the call's transport settings
+   * @param {HttpRequest} call
+   * @param {Attempt} attempt
+   * @param {unknown} refusal the call's `TOKEN_EXPIRED` error
+   * @returns {Promise<unknown>}
+   */
+  async function sendAgainWithCookies(config, call, attempt, refusal) {
+    const outcome = await refreshCookies(call, attempt);
+    if (!mayResend(call)) {
+      throw refusal;
+    }
+    if (outcome === "refreshed") {
+      return sendWithCsrf(config, call);
+    }
+    try {
+      return await sendWithCsrf(config, call);
+    } catch (error) {
+      if (!isRefusal(error, 401, "TOKEN_EXPIRED")) {
+        throw error;
+      }
+      await refreshCookies(call, attempt, true);
+      return sendWithCsrf(config, call);
+    }
   }
 
   /**
@@ -1276,11 +1492,14 @@ export function createSession(options, transport, family) {
         if (!isRefusal(error, 401, "TOKEN_EXPIRED") || !refreshes(call)) {
           throw error;
         }
-        const refreshed = mode === "cookie" ? refreshCookies(call, attempt) : refreshTokens(call, attempt);
-        if (!(await refreshed) || !mayResend(call)) {
-          throw error;
+        if (mode === "cookie") {
+          result = await sendAgainWithCookies(config, call, attempt, error);
+        } else {
+          if (!(await refreshTokens(call, attempt)) || !mayResend(call)) {
+            throw error;
+          }
+          result = await sendWithCsrf(config, call);
         }
-        result = await sendWithCsrf(config, call);
       }
       await noteRotation(call, result);
       return result;
