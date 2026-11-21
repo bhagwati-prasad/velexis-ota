@@ -30,7 +30,9 @@
 // queuing office when the order has none, must be one of the OTA's); `409 CONFLICT` for a deleted or disabled customer
 // and `422 UNPROCESSABLE` for a missing contact e-mail, a selling total in another currency or below the net price are
 // put on their fields. A success answers the new booking (and the API's warnings, a confirmation that could not be
-// queued): the dialog opens its page, or stays to show the warnings. Nothing here logs, and no field asks for a card.
+// queued): the dialog opens its page, or stays to show the warnings. Nothing here logs, and no field asks for a card;
+// a note or a reason that holds a card number is refused at its field before the call, with the API's words
+// (lib/card-text.ts, FIX-W67-KI001), as the API refuses it (`card_data` at `/note` or `/reason`).
 //
 // No action here revalidates a path. When a server action revalidates any path, Next.js renders the page it was called
 // from again in the same answer (`pathWasRevalidated`, whatever the path): `/pnr?recordLocator=…`, whose render is
@@ -59,6 +61,7 @@ import {
   withNextActionKey,
   type ActionState,
 } from "@/lib/action-state";
+import { CARD_TEXT_MESSAGES, withoutCardNumber } from "@/lib/card-text";
 import {
   GENERIC_ERROR_MESSAGE,
   fromVelexisError,
@@ -214,13 +217,17 @@ const TagList = z
 const hiddenText = (pattern: RegExp) =>
   z.string({ error: STRINGS.staleForm }).regex(pattern, STRINGS.staleForm);
 
-/** The staff action's reason: 3 to 500 characters after trimming, counted as the API counts (code points). */
+/**
+ * The staff action's reason: 3 to 500 characters after trimming, counted as the API counts (code points), and never a
+ * card number (lib/card-text.ts, FIX-W67-KI001).
+ */
 const Reason = z
   .string({ error: STRINGS.reasonRequired })
   .trim()
   .refine((value) => [...value].length > 0, STRINGS.reasonRequired)
   .refine((value) => [...value].length >= REASON_MIN_LENGTH, STRINGS.reasonTooShort)
-  .refine((value) => [...value].length <= REASON_MAX_LENGTH, STRINGS.reasonTooLong);
+  .refine((value) => [...value].length <= REASON_MAX_LENGTH, STRINGS.reasonTooLong)
+  .refine(withoutCardNumber, CARD_TEXT_MESSAGES.reason);
 
 const ImportForm = z
   .object({
@@ -269,7 +276,8 @@ const ImportForm = z
       z
         .string()
         .trim()
-        .refine((value) => [...value].length <= NOTE_MAX_LENGTH, STRINGS.noteTooLong),
+        .refine((value) => [...value].length <= NOTE_MAX_LENGTH, STRINGS.noteTooLong)
+        .refine(withoutCardNumber, CARD_TEXT_MESSAGES.note),
     ),
   })
   .superRefine((form, context) => {

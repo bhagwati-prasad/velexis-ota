@@ -9,10 +9,12 @@
 // during the Amadeus call (OADR-0003 point 1), and Flight Create Orders is never sent (OADR-0003 point 2).
 //
 //   1. The request (`refuseClosureRequest`, before anything is read): `order_found` needs `recordLocator`, `not_booked`
-//      needs a `note` and takes no record locator, and a note never holds a card number (`holdsCardNumber`: 12 to 19
-//      digits, grouped or not and wherever they stand among other digits, that pass the Luhn check): `400
-//      VALIDATION_FAILED` at `/recordLocator` or `/note`, plain pointers into the body as the document's own validation
-//      answers them (lead decision (20l) of 2026-11-13).
+//      needs a `note` and takes no record locator, and a note never holds a card number (`holdsCardNumber` of
+//      @velexis/logger, the detector every console free-text field shares since FIX-W67-KI001: 12 to 19 digits, grouped
+//      or not and wherever they stand among other digits, that pass the Luhn check): `400 VALIDATION_FAILED` at
+//      `/recordLocator` or `/note`, plain pointers into the body as the document's own validation answers them (lead
+//      decision (20l) of 2026-11-13). The note stays this check's alone (common/http/card-free-text.ts leaves it out),
+//      so a refused closure still names every problem of its request in one answer.
 //   2. T1 (`check`): the booking of the request's environment, its `If-Match` (`412 PRECONDITION_FAILED`), the review
 //      (`pending` with `reconcile_outcome = manual_review`, else `409 CONFLICT`, `details.reason = not_in_review`), and
 //      for `order_found` a booking of the environment that already holds the record locator (`409
@@ -59,7 +61,7 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
 import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velexis/errors";
-import { redactPayload } from "@velexis/logger";
+import { holdsCardNumber, redactPayload } from "@velexis/logger";
 import type { Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient } from "../amadeus/amadeus.client";
@@ -89,7 +91,6 @@ import { IdGenerator } from "../common/ids";
 import { OTA_QUEUE } from "../common/queues/queue-names";
 import type { SharedConfig } from "../config";
 import { OutboxService } from "../notifications/outbox.service";
-import { luhnValid } from "../payments/airline-card/card-validation";
 import { addSafetyNet, PAYMENT_JOB, paymentJob, safetyNetJob } from "../payments/payments.processor";
 import { PaymentsRepository } from "../payments/payments.repository";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
@@ -162,44 +163,6 @@ const SUPPLIER_CODES: ReadonlySet<string> = new Set<OtaErrorCode>([
 ]);
 
 // ---- The rules, without I/O -----------------------------------------------------------------------------------------
-
-/** A run of digit groups joined by single spaces or dashes (`4111 1111 1111 1111 123`), or one group alone. */
-const DIGIT_RUN = /\d+(?:[ -]\d+)*/g;
-
-/** The lengths of a payment card number (ISO/IEC 7812). */
-const CARD_DIGITS = { min: 12, max: 19 } as const;
-
-/** The first digit of a payment card's issuer number (ISO/IEC 7812: 2 to 6 for the card brands the OTAs take). */
-const CARD_FIRST_DIGIT = /^[2-6]/;
-
-/**
- * Whether `text` holds a card number: 12 to 19 digits, grouped by single spaces or dashes or not, that start as a card
- * brand's number does and pass the Luhn check. Every span of whole consecutive groups of a run is tried, so a number
- * next to other digits (a security code or an expiry after it, a reference before it: `4111 1111 1111 1111 123`) is
- * found too. A note never keeps one (ADR-0011, OADR-0004). Phones, amounts, dates and the ticket numbers of the
- * airline codes that start with 0, 1 or 7 to 9 (`057-…`) are never taken for one; a ticket number of an airline code
- * from 2 to 6 is refused like a card number when its 13 digits pass the Luhn check (one in ten of them).
- */
-export function holdsCardNumber(text: string): boolean {
-  for (const match of text.matchAll(DIGIT_RUN)) {
-    const groups = match[0].split(/[ -]/);
-    for (let start = 0; start < groups.length; start += 1) {
-      let digits = "";
-      for (let end = start; end < groups.length && digits.length < CARD_DIGITS.max; end += 1) {
-        digits += groups[end] ?? "";
-        if (
-          digits.length >= CARD_DIGITS.min &&
-          digits.length <= CARD_DIGITS.max &&
-          CARD_FIRST_DIGIT.test(digits) &&
-          luhnValid(digits)
-        ) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
 
 /**
  * The refusals of a closure request that need nothing else (`400 VALIDATION_FAILED`, see the file header): the

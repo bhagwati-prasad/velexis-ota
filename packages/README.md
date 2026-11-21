@@ -36,7 +36,7 @@ flowchart BT
 | Package | Folder | Purpose | Main consumers | Tasks |
 |---|---|---|---|---|
 | `@velexis/config` | `packages/config` | Load, validate and type environment variables and key files; fail fast | All Node apps, Next.js server code | X-002 |
-| `@velexis/logger` | `packages/logger` | pino setup, standard fields, central redaction list, payload redactor | All Node apps | X-003 |
+| `@velexis/logger` | `packages/logger` | pino setup, standard fields, central redaction list, payload redactor, card-number detector of free text | All Node apps | X-003, FIX-W67-KI001 |
 | `@velexis/crypto` | `packages/crypto` | Envelope encryption, key providers, HMAC, token and API-key hashing, ids | Both backends | X-004, X-005 |
 | `@velexis/api-types` | `packages/api-types` | Types generated from the OTA and platform OpenAPI documents; queue message contracts | Everything, incl. the SDK (types only) | X-006 to X-008 |
 | `@velexis/errors` | `packages/errors` | Error catalogue generated from `x-error-catalogue`, `AppError`, HTTP mapping | Both backends, Next.js apps | X-009 |
@@ -78,18 +78,20 @@ export type AppConfig = typeof config;                  // fully inferred, froze
 One logging setup for every process ([ADR-0016](../docs/mvp/adr/0016-observability.md)).
 
 ```ts
-import { createLogger, pinoHttpOptions, REDACT_PATHS, redactPayload, maskPan } from "@velexis/logger";
+import { createLogger, pinoHttpOptions, REDACT_PATHS, redactPayload, maskPan, holdsCardNumber } from "@velexis/logger";
 
 const logger = createLogger({ app: "ota-api", env: config.APP_ENV, level: config.LOG_LEVEL });
 LoggerModule.forRoot({ pinoHttp: pinoHttpOptions({ app: "ota-api", logger }) }); // nestjs-pino
 redactPayload(supplierRequestBody);   // deep copy for persisted payloads: PAN -> last 4, CVC dropped, tokens removed
 maskPan("4111111111111111");          // "411111******1111" (BIN + last 4 only, PCI truncation)
+holdsCardNumber("card 4111 1111 1111 1111"); // true: a free text that holds a card number, refused before storage
 ```
 
 - Standard fields: `app`, `env`, `requestId`, `tenantId`, `tenantKey`, `environment`, `actorType`, `actorId`, `route`, `operationId`, `status`, `durationMs`, `err`.
 - `REDACT_PATHS` is the single redaction list (passwords, tokens, secrets, card fields, `authorization`, `cookie`, edge and service headers). pino paths are not recursive: the whole `card`, `creditCard` and `formOfPayments` objects are censored at every depth the apps log, and the `err` serializer never carries request or response bodies (X-003). Adding a sensitive field means adding it here **and** to the redaction test.
 - `pinoHttpOptions` takes `X-Request-Id` (or generates one), never logs bodies, skips `/health/*`, and logs one line per request.
 - `redactPayload` is the shared redactor of [db README §8](../docs/velexis-sdk/db/README.md) used before writing `supplier_requests`, `order_snapshot`, `staff_actions`, `idempotency_keys`, `payment_events`, `notifications`.
+- `holdsCardNumber(text)` says whether a free text holds a card number (12 to 19 digits, grouped by single spaces or dashes or not, wherever they stand among other digits, starting with 2 to 6 and passing the Luhn check). The redactor masks by key name and never looks into free text, so the OTA API refuses a console note, reason or remark that holds one (`card_data`, FIX-W67-KI001), and the OTA admin's server actions refuse it first; both use this one detector.
 
 ## `@velexis/crypto`
 

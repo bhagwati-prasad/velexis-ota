@@ -28,7 +28,8 @@
 // (OADR-0018 point 7, "Alternatives considered").
 //
 // A server action is a public endpoint, so each one checks what it gets as the API would before any call: the search
-// forms' values (airports and cities as IATA codes, real days, travellers, carriers, a booking class, the reason) with
+// forms' values (airports and cities as IATA codes, real days, travellers, carriers, a booking class, the reason, which
+// never holds a card number: lib/card-text.ts, FIX-W67-KI001, as the API refuses one with `card_data` at `/reason`) with
 // Zod, the field errors keyed by the form's own names; an offer for the upsell or the quote must be an Amadeus flight
 // offer (`type`, `id`) of a sane size, which the client got from a search or an upsell answer of this page and posts
 // back as Amadeus gave it. The API's answers become the action's state, never `error.tsx` (README §7, routes.md §1): the
@@ -53,6 +54,7 @@ import { z } from "zod";
 
 import { isCalendarDay } from "@/app/(console)/bookings/views";
 import { fromZod, type ActionState, type FieldErrors } from "@/lib/action-state";
+import { CARD_TEXT_MESSAGES, withoutCardNumber } from "@/lib/card-text";
 import {
   GENERIC_ERROR_MESSAGE,
   fromVelexisError,
@@ -266,10 +268,15 @@ const Carriers = z.preprocess(
     .transform((value) => [...new Set(value.split(/[\s,]+/).filter((code) => code !== ""))])
     .superRefine(checkedBy(CarrierList)),
 );
-/** The staff action's reason: at most 500 characters after trimming, counted as the API counts (code points). */
+/**
+ * The staff action's reason: at most 500 characters after trimming, counted as the API counts (code points), and never
+ * a card number (lib/card-text.ts, FIX-W67-KI001).
+ */
 const Reason = z.preprocess(
   (value) => (value === undefined ? "" : trimmed(value)),
-  text(STRINGS.reason).refine((value) => [...value].length <= REASON_MAX, STRINGS.reason),
+  text(STRINGS.reason)
+    .refine((value) => [...value].length <= REASON_MAX, STRINGS.reason)
+    .refine(withoutCardNumber, CARD_TEXT_MESSAGES.reason),
 );
 
 const OfferSearchSchema = z
@@ -625,6 +632,17 @@ function staleOffer(): ShoppingFailure {
 }
 
 /**
+ * The state of an offer request that failed its schema: a reason that holds a card number says so (the search form
+ * refuses one first, so only a forged POST gets here with one), anything else is a stale offer.
+ */
+function refusedOffer(error: z.ZodError): ShoppingFailure {
+  const card = error.issues.some(
+    (issue) => issue.path[0] === "reason" && issue.message === CARD_TEXT_MESSAGES.reason,
+  );
+  return card ? { ...fromZod(error), ok: false, message: CARD_TEXT_MESSAGES.reason } : staleOffer();
+}
+
+/**
  * The staff context of an action, or the state of its refusal (a missing permission, a refused session); `options`
  * builds its console client (every shopping call: `maxRetries: 0`).
  */
@@ -699,7 +717,7 @@ export async function upsellOffer(request: OfferRequest): Promise<UpsellState> {
   }
   const parsed = OfferRequestSchema.safeParse(request);
   if (!parsed.success) {
-    return staleOffer();
+    return refusedOffer(parsed.error);
   }
   // The schema checked the offer's `type` and `id`; the API checks the rest against the Amadeus schema.
   const offer = parsed.data.offer as unknown as Schemas["AmadeusFlightOffer"];
@@ -729,7 +747,7 @@ export async function quoteOffer(request: QuoteRequest): Promise<QuoteState> {
   }
   const parsed = QuoteRequestSchema.safeParse(request);
   if (!parsed.success) {
-    return staleOffer();
+    return refusedOffer(parsed.error);
   }
   // As for the upsell: the API checks the offer against the Amadeus schema.
   const offer = parsed.data.offer as unknown as ConsoleAmadeusFlightOffer;

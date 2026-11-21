@@ -1670,3 +1670,125 @@ describe("console.bookings.addNote", () => {
     expect((await eventsOf(live)).filter((event) => event.type === "staff.note")).toEqual([]);
   });
 });
+
+// ---- A free text that holds a card number (FIX-W67-KI001) -----------------------------------------------------------
+
+describe("a console free text that holds a card number (FIX-W67-KI001)", () => {
+  // Visa's documented test PAN, as a staff member would paste it.
+  const CARD = "4111 1111 1111 1111";
+  const DIGITS = CARD.replaceAll(" ", "");
+
+  /** The idempotency record of `key`, if the API claimed one. */
+  const idempotencyRecordOf = (key: string) =>
+    inTenant((trx) =>
+      trx.selectFrom("idempotency_keys").select(["scope", "key"]).where("key", "=", key).executeTakeFirst(),
+    );
+
+  /** Every text and jsonb value of the booking's events, the staff actions and the idempotency records, as one text. */
+  const storedText = () =>
+    inTenant(async (trx) => {
+      const rows = await Promise.all([
+        trx.selectFrom("booking_events").selectAll().execute(),
+        trx.selectFrom("staff_actions").selectAll().execute(),
+        trx.selectFrom("idempotency_keys").selectAll().execute(),
+        trx.selectFrom("booking_remarks").selectAll().execute(),
+        trx.selectFrom("bookings").select(["order_snapshot", "cancel_reason", "metadata"]).execute(),
+      ]);
+      return JSON.stringify(rows);
+    });
+
+  it("[FIX-W67-KI001 AC5] console.bookings.addNote refuses one at /text before the idempotency key, the note and its audit row", async () => {
+    const agent = await staffSession("agent");
+    const bookingId = await seedBooking(await newStubOrder());
+    const key = randomUUID();
+    const path = `/v1/console/bookings/${bookingId}/notes`;
+    const eventsBefore = await eventsOf(bookingId);
+
+    const refused = await agent.post(
+      path,
+      { text: `Traveller read out ${CARD} on the phone.` },
+      { "Idempotency-Key": key },
+    );
+
+    expect(answer(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleAddBookingNote", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      { path: "/text", code: "card_data", message: "A note never holds a card number: remove it." },
+    ]);
+    expect(refused.text).not.toContain("4111");
+    // Nothing written: no note, no idempotency record, and no row of the use case; the audit interceptor's own row of
+    // the refused call holds its action, target and outcome only (OADR-0011 point 8), never the text.
+    expect(await eventsOf(bookingId)).toEqual(eventsBefore);
+    expect(await idempotencyRecordOf(key)).toBeUndefined();
+    expect(await staffActionsOf(bookingId)).toEqual([
+      expect.objectContaining({
+        action: "bookings.addNote",
+        outcome: "failed",
+        target_id: bookingId,
+        reason: null,
+        before: null,
+        after: null,
+      }),
+    ]);
+    expect(await storedText()).not.toContain(DIGITS.slice(-12));
+    expect(await storedText()).not.toContain("4111 1111");
+
+    // The key was never claimed: the same key with a text without a card number adds the note.
+    const added = await agent.post(
+      path,
+      { text: "Traveller will call back about the seats." },
+      { "Idempotency-Key": key },
+    );
+    expect(answer(added)).toEqual([201, undefined]);
+    expect((await eventsOf(bookingId)).filter((event) => event.type === "staff.note")).toHaveLength(1);
+  });
+
+  it("[FIX-W67-KI001 AC5] console.bookings.patch refuses a remark text and a reason with one, every field at once, before Amadeus", async () => {
+    const agent = await staffSession("agent");
+    const bookingId = await seedBooking(await newStubOrder());
+    const etag = await etagOf(agent, bookingId);
+    const before = await bookingRow(bookingId);
+    const remarksBefore = await remarksOf(bookingId);
+    const eventsBefore = await eventsOf(bookingId);
+    // The order was made through the stub's own API above: only what the patch sends counts from here.
+    stub.clearRequests();
+
+    const refused = await agent.patch(bookingId, etag, {
+      remarks: {
+        general: [
+          { subType: "GENERAL_MISCELLANEOUS", text: "WINDOW SEAT" },
+          { subType: "GENERAL_MISCELLANEOUS", text: `CC ${DIGITS}` },
+        ],
+      },
+      reason: `Caller gave card ${CARD.replaceAll(" ", "-")}`,
+    });
+
+    expect(answer(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consolePatchBooking", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      {
+        path: "/remarks/general/1/text",
+        code: "card_data",
+        message: "A remark never holds a card number: remove it.",
+      },
+      { path: "/reason", code: "card_data", message: "A reason never holds a card number: remove it." },
+    ]);
+    expect(refused.text).not.toContain("4111");
+    expect(stub.requests()).toEqual([]);
+    expect(await bookingRow(bookingId)).toEqual(before);
+    expect(await remarksOf(bookingId)).toEqual(remarksBefore);
+    expect(await eventsOf(bookingId)).toEqual(eventsBefore);
+    expect(
+      (await staffActionsOf(bookingId)).map((action) => [action.action, action.outcome, action.reason]),
+    ).toEqual([["bookings.patch", "failed", null]]);
+    expect(await storedText()).not.toContain(DIGITS.slice(-12));
+
+    // Without the card number the same patch reaches Amadeus and the booking.
+    const patched = await agent.patch(bookingId, etag, {
+      remarks: { general: [{ subType: "GENERAL_MISCELLANEOUS", text: "WINDOW SEAT" }] },
+      reason: "Caller asked for a window seat",
+    });
+    expect(answer(patched)).toEqual([200, undefined]);
+    expect(amadeusCalls("patchFlightOrder")).toEqual([expect.objectContaining({ status: 200 })]);
+  });
+});

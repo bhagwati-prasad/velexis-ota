@@ -1096,6 +1096,66 @@ describe("console.bookings.import", () => {
     expect(await bookingsOf("tenant_alpha", order.recordLocator)).toEqual([]);
   });
 
+  it("[FIX-W67-KI001 AC5] refuses a card number in the note and the reason before the key, Amadeus and any row", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });
+    // The order was made through the stub's own API above: only what the import sends counts from here.
+    stub.clearRequests();
+    const key = randomUUID();
+    const body = {
+      reference: order.recordLocator,
+      pricing: { mode: "net" },
+      note: "Traveller paid at the desk with 4111 1111 1111 1111.",
+      reason: "Card 4111-1111-1111-1111 per the traveller",
+    };
+
+    const refused = await agent.import(body, key);
+
+    expect(answer(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleImportBooking", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      { path: "/note", code: "card_data", message: "A note never holds a card number: remove it." },
+      { path: "/reason", code: "card_data", message: "A reason never holds a card number: remove it." },
+    ]);
+    expect(refused.text).not.toContain("4111");
+    // No Amadeus call, no booking, no idempotency record, and no row that holds the text: the audit interceptor's own
+    // row of the refused call names its action and outcome only.
+    expect(stub.requests()).toEqual([]);
+    expect(await bookingsOf("tenant_alpha", order.recordLocator)).toEqual([]);
+    const stored = await inTenant("tenant_alpha", async (trx) => ({
+      keys: await trx.selectFrom("idempotency_keys").select("key").where("key", "=", key).execute(),
+      actions: await trx
+        .selectFrom("staff_actions")
+        .select(["action", "outcome", "reason", "before", "after"])
+        .where("action", "=", "bookings.import")
+        .execute(),
+      text: JSON.stringify([
+        await trx.selectFrom("staff_actions").selectAll().execute(),
+        await trx.selectFrom("booking_events").selectAll().execute(),
+        await trx.selectFrom("idempotency_keys").selectAll().execute(),
+        await trx.selectFrom("supplier_requests").selectAll().execute(),
+      ]),
+    }));
+    expect(stored.keys).toEqual([]);
+    expect(stored.actions).toContainEqual({
+      action: "bookings.import",
+      outcome: "failed",
+      reason: null,
+      before: null,
+      after: null,
+    });
+    expect(stored.text).not.toContain("1111 1111");
+    expect(stored.text).not.toContain("111111111111");
+
+    // The key was never claimed: the same key without the card number imports the order.
+    const imported = await agent.import(
+      { ...body, note: "Traveller paid at the desk.", reason: "Attach terminal booking" },
+      key,
+    );
+    expect(answer(imported)).toEqual([201, undefined]);
+    expect(await bookingsOf("tenant_alpha", order.recordLocator)).toHaveLength(1);
+  });
+
   it("refuses the import to a viewer, whose role lacks bookings:write", async () => {
     const viewer = await staffSession(alphaId, "viewer");
     const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });

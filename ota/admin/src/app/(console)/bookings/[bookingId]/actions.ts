@@ -38,7 +38,9 @@
 // render brings new idempotency keys.
 //
 // No card data: no action reads a card field, and the only form of payment an action builds is an `other` one of the
-// OTA's settlement with the airline (OADR-0018 point 8). Nothing here logs.
+// OTA's settlement with the airline (OADR-0018 point 8). A free text that holds a card number (a reason, the note, a
+// remark, the review's note) is refused at its field before any call, with the API's words (lib/card-text.ts,
+// FIX-W67-KI001); the API refuses it too (`card_data`), and its field error lands on the same field. Nothing here logs.
 "use server";
 
 import type {
@@ -105,6 +107,7 @@ import {
   withNextActionKey,
   type ActionState,
 } from "@/lib/action-state";
+import { CARD_TEXT_MESSAGES, withoutCardNumber } from "@/lib/card-text";
 import { fromVelexisError, isSupplierNotFound, isVelexisErrorLike } from "@/lib/errors";
 import { requireStaff, type StaffContext } from "@/lib/session";
 
@@ -349,7 +352,10 @@ const Version = z
  * is what Zod 3's `.uuid()` accepted; Zod 4's `z.uuid()` also checks the RFC 9562 version and variant).
  */
 const ActionKey = z.string({ error: STRINGS.staleForm }).check(z.guid({ error: STRINGS.staleForm }));
-/** The staff action's reason: 3 to 500 characters after trimming, counted as the API counts (code points). */
+/**
+ * The staff action's reason: 3 to 500 characters after trimming, counted as the API counts (code points), and never a
+ * card number (lib/card-text.ts).
+ */
 const Reason = z
   .string({ error: "Enter a reason." })
   .trim()
@@ -358,7 +364,8 @@ const Reason = z
     (value) => [...value].length >= REASON_MIN_LENGTH,
     `Enter at least ${REASON_MIN_LENGTH} characters.`,
   )
-  .refine((value) => [...value].length <= REASON_MAX_LENGTH, `Use at most ${REASON_MAX_LENGTH} characters.`);
+  .refine((value) => [...value].length <= REASON_MAX_LENGTH, `Use at most ${REASON_MAX_LENGTH} characters.`)
+  .refine(withoutCardNumber, CARD_TEXT_MESSAGES.reason);
 /** An amount staff typed: digits with at most two decimals, above zero. */
 const TypedAmount = z
   .string({ error: "Enter an amount." })
@@ -542,7 +549,8 @@ const PatchForm = z.discriminatedUnion("element", [
         .string({ error: "Required" })
         .trim()
         .min(1, "Enter the remark.")
-        .refine(units(200), "Use at most 200 characters."),
+        .refine(units(200), "Use at most 200 characters.")
+        .refine(withoutCardNumber, CARD_TEXT_MESSAGES.remark),
     })
     .strict(),
   z
@@ -1127,7 +1135,8 @@ const NoteForm = z.object({
     .string({ error: "Enter the note." })
     .trim()
     .min(1, "Enter the note.")
-    .refine((value) => [...value].length <= 2000, "Use at most 2,000 characters."),
+    .refine((value) => [...value].length <= 2000, "Use at most 2,000 characters.")
+    .refine(withoutCardNumber, CARD_TEXT_MESSAGES.note),
   visibleToCustomer: z.boolean(),
 });
 
@@ -1303,14 +1312,15 @@ export async function refundPayment(_previous: ActionState, form: FormData): Pro
 
 // ---- closeBookingReview ---------------------------------------------------------------------------------------------
 
-/** The note of a closure: trimmed, at most 2,000 characters as the API counts them (code points). */
+/** The note of a closure: trimmed, at most 2,000 characters as the API counts them (code points), never a card number. */
 const ReviewNote = z
   .string()
   .trim()
   .refine(
     (value) => [...value].length <= REVIEW_NOTE_MAX_LENGTH,
     `Use at most ${REVIEW_NOTE_MAX_LENGTH.toLocaleString("en")} characters.`,
-  );
+  )
+  .refine(withoutCardNumber, CARD_TEXT_MESSAGES.note);
 
 /** A record locator as staff typed it (in any case, with spaces around it), as the API takes it. */
 const RecordLocator = z

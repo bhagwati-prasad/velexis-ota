@@ -540,6 +540,47 @@ describe("importBooking", () => {
     api.on(IMPORT, () => rateLimited());
     expect((await run(importForm(key))).nextActionKey).toBeUndefined();
   });
+
+  it("[FIX-W67-KI001 AC3] refuses a card number in the note or the reason at its field, with the API's words, before any call", async () => {
+    signedIn("agent");
+    const state = await run(
+      importForm(randomUUID(), {
+        note: "The traveller read out 4111 1111 1111 1111",
+        reason: "Card 5555-5555-5555-4444 on the phone",
+      }),
+    );
+    expect(state).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: {
+        note: "A note never holds a card number: remove it.",
+        reason: "A reason never holds a card number: remove it.",
+      },
+    });
+    expect(JSON.stringify(state)).not.toMatch(/4111|5555/);
+    expect(state.nextActionKey).toBeUndefined();
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[FIX-W67-KI001 AC3] shows the API's card_data refusal of the note and the reason at the dialog's fields", async () => {
+    signedIn("agent");
+    api.on(IMPORT, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [
+          { path: "/note", code: "card_data", message: "A note never holds a card number: remove it." },
+          { path: "/reason", code: "card_data", message: "A reason never holds a card number: remove it." },
+        ],
+      }),
+    );
+    expect(await run(importForm(randomUUID(), { note: "Booked by phone." }))).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: {
+        note: "A note never holds a card number: remove it.",
+        reason: "A reason never holds a card number: remove it.",
+      },
+    });
+  });
 });
 
 // ---- searchCustomers ------------------------------------------------------------------------------------------------

@@ -1616,6 +1616,90 @@ describe("console.bookings.cancel", () => {
 // Lead decision (2c) of 2026-10-30, third batch: the staff cancellation takes the step of the quote's rule, the one
 // console.bookings.get's `cancellationMode` shows (before, it sent the DELETE in every mode, as `void` when a ticket
 // held a seat). The tenant's zone is the file's midday zone (`middayTimeZone`).
+describe("a cancel or issue reason that holds a card number (FIX-W67-KI001)", () => {
+  it("[FIX-W67-KI001 AC5] console.bookings.cancel and issue refuse it at /reason before the key, Amadeus, Stripe and any row", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("cancel.card");
+    const payment = await seedPayment(booking.id, "captured");
+    const etag = await etagOf(owner, booking.id);
+    const before = await bookingRow(booking.id);
+    const eventsBefore = await eventsOf(booking.id);
+    stripe.reset();
+    stub.clearRequests();
+    const cancelKey = randomUUID();
+    const issueKey = randomUUID();
+
+    const cancel = await owner.cancel(
+      booking.id,
+      etag,
+      {
+        reasonCode: "customer_request",
+        reason: "Refund to card 4111 1111 1111 1111 as the traveller asked",
+        refund: { mode: "full" },
+      },
+      cancelKey,
+    );
+    const issue = await owner.issue(booking.id, etag, { reason: "Paid with 4111111111111111" }, issueKey);
+
+    expect(answer(cancel)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleCancelBooking", cancel);
+    expect(answer(issue)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleIssueBooking", issue);
+    for (const res of [cancel, issue]) {
+      expect(res.body.error.fieldErrors).toEqual([
+        { path: "/reason", code: "card_data", message: "A reason never holds a card number: remove it." },
+      ]);
+      expect(res.text).not.toContain("4111");
+    }
+    // Nothing sent, cancelled, refunded, issued or written: the booking, its events, refunds and payment as they were,
+    // no idempotency record, and the audit interceptor's rows of the refused calls without a reason.
+    expect(stub.requests()).toEqual([]);
+    expect(stripeRequestsAbout(payment.intentId)).toEqual([]);
+    expect(await bookingRow(booking.id)).toEqual(before);
+    expect(await eventsOf(booking.id)).toEqual(eventsBefore);
+    expect(await refundsOf(booking.id)).toEqual([]);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured" });
+    const stored = await inTenant(async (trx) => ({
+      keys: await trx
+        .selectFrom("idempotency_keys")
+        .select("key")
+        .where("key", "in", [cancelKey, issueKey])
+        .execute(),
+      text: JSON.stringify([
+        await trx.selectFrom("staff_actions").selectAll().execute(),
+        await trx.selectFrom("booking_events").selectAll().execute(),
+        await trx.selectFrom("idempotency_keys").selectAll().execute(),
+        await trx.selectFrom("bookings").select(["cancel_reason"]).execute(),
+        await trx.selectFrom("refunds").select(["reason_note"]).execute(),
+      ]),
+    }));
+    expect(stored.keys).toEqual([]);
+    expect(stored.text).not.toContain("1111 1111");
+    expect(stored.text).not.toContain("111111111111");
+    expect(
+      (await staffActionsOf(booking.id))
+        .filter((action) => action.action === "bookings.cancel" || action.action === "bookings.issue")
+        .map((action) => [action.action, action.outcome, action.reason, action.before, action.after]),
+    ).toEqual([
+      ["bookings.cancel", "failed", null, null, null],
+      ["bookings.issue", "failed", null, null, null],
+    ]);
+
+    // The keys were never claimed: the same cancellation key without the card number cancels the booking.
+    const cancelled = await owner.cancel(
+      booking.id,
+      etag,
+      { reasonCode: "customer_request", reason: "Refund as the traveller asked", refund: { mode: "none" } },
+      cancelKey,
+    );
+    expect(answer(cancelled)).toEqual([200, undefined]);
+    expect(await bookingRow(booking.id)).toMatchObject({
+      status: "cancelled",
+      cancel_reason: "customer_request: Refund as the traveller asked",
+    });
+  });
+});
+
 describe("console.bookings.cancel by the cancellation-mode rule (FIX-W36-OTA)", () => {
   /** console.bookings.get's `cancellationMode.mode` of the booking, and its ETag. */
   async function shownMode(session: AdminSession, bookingId: string): Promise<[unknown, string]> {

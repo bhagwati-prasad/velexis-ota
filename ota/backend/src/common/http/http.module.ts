@@ -13,7 +13,9 @@
 // - cookie-parser: `req.cookies`, unsigned (the storefront session cookies are opaque, OADR-0006).
 // - body parsers (body-parsers.ts): raw on `/webhooks/*`, multipart on the routes of main.ts (the asset upload), JSON
 //   with 256 KB elsewhere, the per-route limits of main.ts.
-// - the OpenAPI validation interceptor and the error filter are global (`APP_INTERCEPTOR`, `APP_FILTER`).
+// - the OpenAPI validation interceptor and the error filter are global (`APP_INTERCEPTOR`, `APP_FILTER`); after the
+//   document's validation the interceptor refuses a console free text that holds a card number (card-free-text.ts,
+//   FIX-W67-KI001), so such a request claims no idempotency key and reaches no handler.
 // - the idempotency interceptor (OBE-014) is global too, registered after the validation interceptor so it runs after
 //   it: a request is validated before its key is claimed in `idempotency_keys`. It needs the tenant transaction of the
 //   tenancy module, the KEKs of MASTER_KEY_DIR for the replays that carry a token, and Nest's discovery service for the

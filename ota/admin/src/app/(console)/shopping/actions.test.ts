@@ -814,3 +814,58 @@ describe("the retries of the shopping actions", () => {
     expect(api.sent(PRICING)).toHaveLength(1);
   });
 });
+
+// ---- A reason that holds a card number (FIX-W67-KI001) -----------------------------------------------------------------
+
+describe("a reason that holds a card number (FIX-W67-KI001)", () => {
+  const CARD_REASON = "Caller read out 4111 1111 1111 1111";
+  const CARD_MESSAGE = "A reason never holds a card number: remove it.";
+
+  it("[FIX-W67-KI001 AC3] the two search forms refuse it at the reason with the API's words, before any call", async () => {
+    signedIn("agent");
+    for (const state of [
+      await searchOffers(offerForm({ reason: CARD_REASON })),
+      await searchAvailability(availabilityForm({ reason: CARD_REASON })),
+    ]) {
+      expect(state).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        fieldErrors: { reason: CARD_MESSAGE },
+      });
+      expect(JSON.stringify(state)).not.toMatch(/4111/);
+    }
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[FIX-W67-KI001 AC3] the upsell and the quote say so too, instead of a stale offer, without a request", async () => {
+    signedIn("agent");
+    for (const state of [
+      await upsellOffer({ offer: OFFER, reason: CARD_REASON }),
+      await quoteOffer({ offer: OFFER, reason: CARD_REASON, fareRules: false }),
+    ]) {
+      expect(state).toMatchObject({ ok: false, code: "VALIDATION_FAILED", message: CARD_MESSAGE });
+      expect(JSON.stringify(state)).not.toMatch(/4111/);
+    }
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[FIX-W67-KI001 AC3] shows the API's card_data refusal at the search form's reason", async () => {
+    signedIn("agent");
+    const refusal = () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [{ path: "/reason", code: "card_data", message: CARD_MESSAGE }],
+      });
+    api.on(OFFERS, refusal);
+    api.on(AVAILABILITY, refusal);
+    for (const state of [
+      await searchOffers(offerForm({ reason: "Caller compares fares" })),
+      await searchAvailability(availabilityForm({ reason: "Caller compares fares" })),
+    ]) {
+      expect(state).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        fieldErrors: { reason: CARD_MESSAGE },
+      });
+    }
+  });
+});

@@ -1179,6 +1179,93 @@ describe("console.payments.refund by finance, sent by the payments queue and fin
   });
 });
 
+describe("a payment reason that holds a card number (FIX-W67-KI001)", () => {
+  it("[FIX-W67-KI001 AC5] console.payments.capture and refund refuse it at /reason and /reasonNote before the key, Stripe and any row", async () => {
+    const agent = await staff("agent");
+    const finance = await staff("finance");
+    const authorized = await stripePayment({ status: "authorized" });
+    const captured = await stripePayment({ status: "captured", amountCaptured: "452.10" });
+    const authorizedBefore = await paymentRow(authorized.id);
+    const capturedBefore = await paymentRow(captured.id);
+    stripe.reset();
+    const captureKey = randomUUID();
+    const refundKey = randomUUID();
+
+    const capture = await agent.capture(
+      authorized.id,
+      '"1"',
+      { reason: "Traveller confirmed card 4111 1111 1111 1111 by phone" },
+      captureKey,
+    );
+    const refund = await finance.refund(
+      captured.id,
+      {
+        amount: { amount: "10.00", currency: "EUR" },
+        reason: "goodwill",
+        reasonNote: "Refund to 4111-1111-1111-1111",
+      },
+      refundKey,
+    );
+
+    expect(answer(capture)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleCapturePayment", capture);
+    expect(capture.body.error.fieldErrors).toEqual([
+      { path: "/reason", code: "card_data", message: "A reason never holds a card number: remove it." },
+    ]);
+    expect(answer(refund)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleRefundPayment", refund);
+    expect(refund.body.error.fieldErrors).toEqual([
+      { path: "/reasonNote", code: "card_data", message: "A reason never holds a card number: remove it." },
+    ]);
+    for (const res of [capture, refund]) {
+      expect(res.text).not.toContain("4111");
+    }
+    // Nothing asked of Stripe, captured or refunded, no idempotency record, and no row that holds the text: the audit
+    // interceptor's own rows of the refused calls hold their action, target and outcome only.
+    expect([...stripeRequestsAbout(authorized.intentId), ...stripeRequestsAbout(captured.intentId)]).toEqual(
+      [],
+    );
+    expect(await paymentRow(authorized.id)).toEqual(authorizedBefore);
+    expect(await paymentRow(captured.id)).toEqual(capturedBefore);
+    expect(await refundsOf(captured.id)).toEqual([]);
+    expect(
+      (await staffActionsOn(authorized.id)).map((row) => [row.action, row.outcome, row.reason, row.after]),
+    ).toEqual([["payments.capture", "failed", null, null]]);
+    expect(
+      (await staffActionsOn(captured.id)).map((row) => [row.action, row.outcome, row.reason, row.after]),
+    ).toEqual([["payments.refund", "failed", null, null]]);
+    const stored = await alphaTx(async (trx) => ({
+      keys: await trx
+        .selectFrom("idempotency_keys")
+        .select("key")
+        .where("key", "in", [captureKey, refundKey])
+        .execute(),
+      text: JSON.stringify([
+        await trx.selectFrom("staff_actions").selectAll().execute(),
+        await trx.selectFrom("payment_events").selectAll().execute(),
+        await trx.selectFrom("idempotency_keys").selectAll().execute(),
+        await trx.selectFrom("refunds").selectAll().execute(),
+      ]),
+    }));
+    expect(stored.keys).toEqual([]);
+    expect(stored.text).not.toContain("1111 1111");
+    expect(stored.text).not.toContain("111111111111");
+
+    // The keys were never claimed: the same refund key without the card number creates the refund.
+    const refunded = await finance.refund(
+      captured.id,
+      {
+        amount: { amount: "10.00", currency: "EUR" },
+        reason: "goodwill",
+        reasonNote: "Goodwill for the delay",
+      },
+      refundKey,
+    );
+    expect(answer(refunded)).toEqual([201, undefined]);
+    expect((await refundsOf(captured.id)).map((row) => row.reason_note)).toEqual(["Goodwill for the delay"]);
+  });
+});
+
 describe("console.payments.refund", () => {
   it("[OBE-068 AC1] is refused to an agent with 403 FORBIDDEN, audited, and nothing is asked for", async () => {
     const agent = await staff("agent");

@@ -8,13 +8,13 @@
 // HTTP, database, Amadeus, Stripe and queue paths are in test/integration/console/review-closure.int.test.ts. Card
 // numbers here are test data only (Visa's documented test PAN and Mastercard's).
 import { AppError, isAppError } from "@velexis/errors";
+import { holdsCardNumber } from "@velexis/logger";
 import { describe, expect, it } from "vitest";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import {
   AIRLINE_CARD_CHARGE_NOTE,
   closureEventOf,
   closureSupplierAnswerOf,
-  holdsCardNumber,
   inReview,
   notInReview,
   orderHeldBy,

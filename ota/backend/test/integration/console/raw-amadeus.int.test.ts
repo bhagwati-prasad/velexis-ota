@@ -805,6 +805,46 @@ describe("console.amadeus shopping reads", () => {
     expect(amadeusCalls("searchFlightOffers")).toEqual([]);
   });
 
+  it("[FIX-W67-KI001 AC5] refuses a reason that holds a card number at /reason before Amadeus, the supplier log and the audit", async () => {
+    const agent = await staffSession(alphaId, "agent");
+
+    const res = await agent.post(SEARCH, {
+      amadeus: searchQuery(),
+      reason: "Caller paid with 4111 1111 1111 1111 last time",
+    });
+
+    expect(answer(res)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleAmadeusSearchFlightOffers", res);
+    expect(res.body.error.fieldErrors).toEqual([
+      { path: "/reason", code: "card_data", message: "A reason never holds a card number: remove it." },
+    ]);
+    expect(res.text).not.toContain("4111");
+    // No Amadeus call (the stub saw nothing but a token request, if any), no supplier_requests row, and only the audit
+    // interceptor's row of the refused call, without the reason.
+    expect(stub.requests().filter((entry) => entry.operation !== "oauth2Token")).toEqual([]);
+    expect(await supplierRequestsOf("tenant_alpha", agent.member.staffId)).toEqual([]);
+    expect(await staffActionsOf("tenant_alpha", agent.member.staffId)).toEqual([
+      expect.objectContaining({
+        action: "amadeus.searchFlightOffers",
+        outcome: "failed",
+        reason: null,
+        after: null,
+      }),
+    ]);
+    const stored = await inTenant("tenant_alpha", async (trx) =>
+      JSON.stringify([
+        await trx.selectFrom("staff_actions").selectAll().execute(),
+        await trx.selectFrom("supplier_requests").selectAll().execute(),
+      ]),
+    );
+    expect(stored).not.toContain("1111 1111");
+
+    // Without the card number the same search reaches Amadeus and is audited with its reason.
+    const searched = await agent.post(SEARCH, { amadeus: searchQuery(), reason: "Caller compares fares" });
+    expect(answer(searched)).toEqual([200, undefined]);
+    expect(amadeusCalls("searchFlightOffers")).toHaveLength(1);
+  });
+
   it("refuses a role without amadeus:read before any call, with a denied row", async () => {
     const finance = await staffSession(alphaId, "finance");
 

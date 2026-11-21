@@ -15,7 +15,7 @@ The list is a safety net, not a licence: never log request or response bodies, c
 ## Usage
 
 ```ts
-import { createLogger, pinoHttpOptions, redactPayload, maskPan } from "@velexis/logger";
+import { createLogger, pinoHttpOptions, redactPayload, maskPan, holdsCardNumber } from "@velexis/logger";
 
 // One logger per process. LOG_LEVEL and APP_ENV come from the app's typed config (@velexis/config).
 const logger = createLogger({ app: "ota-api", env: config.APP_ENV, level: config.LOG_LEVEL });
@@ -31,6 +31,10 @@ logger.error({ err }, "checkout.failed"); // err keeps type, message, stack, cod
 const stored = redactPayload(supplierRequestBody); // deep copy: card number -> last 4, CVC dropped, tokens [REDACTED]
 
 maskPan("4111111111111111"); // "411111******1111" (BIN + last 4, PCI truncation; ADR-0011)
+
+// Before storing a text a person typed (a staff note, a reason, a remark): never one that holds a card number.
+holdsCardNumber("Card 4111 1111 1111 1111 was charged"); // true
+holdsCardNumber("Ticket 057-2412345678, +46 70 123 45 67"); // false
 ```
 
 Plain Node processes (workers, CLIs, the Next.js servers) use `createLogger` alone. Tests pass `destination` (any object with `write(line)`) to capture the lines.
@@ -47,6 +51,7 @@ Plain Node processes (workers, CLIs, the Next.js servers) use `createLogger` alo
 | `REDACT_PATHS`, `REDACT_CENSOR` | The single redaction list and its censor `[REDACTED]`. |
 | `redactPayload(value)`, `CIRCULAR_REFERENCE` | The shared redactor for persisted payload copies, and the `[Circular]` marker it puts in place of a reference back to an enclosing object. See below. |
 | `maskPan(pan)` | BIN and last 4 digits of a card number; shorter values keep at most the last 4 digits. |
+| `holdsCardNumber(text)` | Whether a free text holds a card number: 12 to 19 digits, grouped by single spaces or dashes or not, wherever they stand among other digits (every span of whole consecutive groups is tried), starting with 2 to 6 and passing the Luhn check. A tab, a line break or any other character ends a run of groups. Amounts, dates, phones of up to 11 digits and ticket numbers of airline codes starting with 0, 1 or 7 to 9 never match; a 13-digit ticket number of an airline code from 2 to 6, or a phone of 12 digits or more written with a country code from 2 to 6, matches when its digits pass the Luhn check (one in ten). It answers a boolean and never keeps or returns the text. The redactor (below) masks by key name and never looks into free text: the OTA API refuses a console note, reason or remark that holds a card number with it (`card_data`, FIX-W67-KI001), and so do the OTA admin's server actions; [`src/card-number.ts`](src/card-number.ts). |
 
 ### `pinoHttpOptions`
 

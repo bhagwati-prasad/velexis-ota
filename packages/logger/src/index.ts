@@ -21,3 +21,4 @@ export {
 export { REDACT_PATHS, REDACT_CENSOR } from "./redact-paths.js";
 export { redactPayload, CIRCULAR_REFERENCE } from "./redact-payload.js";
 export { maskPan } from "./mask.js";
+export { holdsCardNumber } from "./card-number.js";

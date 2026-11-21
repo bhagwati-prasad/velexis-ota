@@ -11475,15 +11475,15 @@ export interface components {
             pricedOfferId: string;
             /** @description Customer the booking belongs to (shows in their "My trips"); omit for a guest booking. */
             customerId?: string;
-            /** @description Flight Create Orders data.travelers, verbatim (ids = travelerPricings[].travelerId). */
+            /** @description Flight Create Orders data.travelers, verbatim (ids = travelerPricings[].travelerId). Never a card number in an emergency contact's `text`: one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/travelers/<index>/emergencyContact/text`, before anything is stored or sent; the error never repeats the text. */
             travelers: components["schemas"]["AmadeusTraveler"][];
             /** @description data.contacts (default: customer contact or the agency contact). */
             contacts?: components["schemas"]["AmadeusContact"][];
-            /** @description data.remarks: general (subType, category, text, travelerIds, flightOfferIds) and airline (subType, keyword, airlineCode, text, travelerIds, flightOfferIds). */
+            /** @description data.remarks: general (subType, category, text, travelerIds, flightOfferIds) and airline (subType, keyword, airlineCode, text, travelerIds, flightOfferIds). Never a card number: a remark text that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/remarks/general/<index>/text` or `/remarks/airline/<index>/text`, before anything is stored or sent; the error never repeats the text. */
             remarks?: components["schemas"]["AmadeusRemarks"];
             /** @description data.ticketingAgreement: option CONFIRM | DELAY_TO_QUEUE | DELAY_TO_CANCEL with `delay` (days, e.g. 2D) — the only settable ticketing time limit. `dateTime` and `segmentIds` are read-only in the Amadeus specs (computed by Amadeus, returned on the order); sending them → 400 VALIDATION_FAILED (fieldErrors code `read_only`). */
             ticketingAgreement?: components["schemas"]["AmadeusTicketingAgreement"];
-            /** @description data.automatedProcess: code IMMEDIATE | DELAYED | ERROR, queue {number, category}, text, delay, officeId, dateTime. */
+            /** @description data.automatedProcess: code IMMEDIATE | DELAYED | ERROR, queue {number, category}, text, delay, officeId, dateTime. Never a card number in a process `text`: one answers `400 VALIDATION_FAILED` with the field code `card_data` at `/automatedProcess/<index>/text`, before anything is stored or sent. */
             automatedProcess?: components["schemas"]["AmadeusAutomatedProcess"][];
             /** @description data.formOfPayments: b2bWallet, creditCard (with paymentOperationContext / threeDomainSecure) or other (ACCOUNT, CHECK, CASH, NONREFUNDABLE). Card data is forwarded, never stored. */
             formOfPayments?: components["schemas"]["AmadeusFormOfPayment"][];
@@ -11513,14 +11513,14 @@ export interface components {
             metadata?: {
                 [key: string]: string;
             };
-            /** @description Internal note added to the booking. */
+            /** @description Internal note added to the booking. Never a card number: a note that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/note`, before anything is stored or sent; the error never repeats the text. */
             note?: string;
-            /** @description Audit justification (staff_actions.reason). */
+            /** @description Audit justification (staff_actions.reason). Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Body of console.bookings.patch: the Flight Order Management PATCH elements (sent inside data) + Velexis options. At least one Amadeus element, `tags` or `metadata` is required. **Element semantics.** Amadeus PATCH replaces every top-level element present in `data` and leaves absent elements untouched. Velexis therefore merges `travelers` (`mergeTravelers`), `remarks` (`mergeRemarks`) and `contacts` (`mergeContacts`) with the stored order before sending, so partial input adds or updates instead of erasing; `formOfPayments`, `ticketingAgreement`, `automatedProcess`, `associatedRecords`, `commissions`, `formOfIdentifications` and `tickets` are sent as given and replace the order's element (send the complete list); `flightOffers` add services; `queuingOfficeId` / `ownerOfficeId` replace the office. `tags` and `metadata` are local only (no Amadeus call). */
         ConsoleBookingPatchRequest: {
-            /** @description Travellers to update (matched by id). */
+            /** @description Travellers to update (matched by id). Never a card number in an emergency contact's `text`: one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/travelers/<index>/emergencyContact/text`, before anything is stored or sent; the error never repeats the text. */
             travelers?: components["schemas"]["AmadeusTraveler"][];
             /** @description Merge each traveller over the stored one before sending. Default: `true`. */
             mergeTravelers?: boolean;
@@ -11528,7 +11528,7 @@ export interface components {
             contacts?: components["schemas"]["AmadeusContact"][];
             /** @description Merge `contacts` by `purpose` with the stored contacts before sending (`false` = the list replaces all order contacts). Default: `true`. */
             mergeContacts?: boolean;
-            /** @description General and airline remarks. With `mergeRemarks` (default) the remarks sent are **added** to the order's remarks (Velexis sends the stored remarks plus the new ones; exact duplicates — same kind, subType, airlineCode and text — are skipped). With `mergeRemarks: false` each list sent (`general` and/or `airline`) replaces all remarks of that kind; send the remaining remarks to delete one (the Velexis BACKOFFICE remark is always kept). */
+            /** @description General and airline remarks. With `mergeRemarks` (default) the remarks sent are **added** to the order's remarks (Velexis sends the stored remarks plus the new ones; exact duplicates — same kind, subType, airlineCode and text — are skipped). With `mergeRemarks: false` each list sent (`general` and/or `airline`) replaces all remarks of that kind; send the remaining remarks to delete one (the Velexis BACKOFFICE remark is always kept). Never a card number: a remark text that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/remarks/general/<index>/text` or `/remarks/airline/<index>/text`, before anything is stored or sent; the error never repeats the text. */
             remarks?: components["schemas"]["AmadeusRemarks"];
             /** @description Add `remarks` to the stored remarks (`true`) or replace the `general` / `airline` lists sent (`false`). Default: `true`. */
             mergeRemarks?: boolean;
@@ -11536,7 +11536,7 @@ export interface components {
             formOfPayments?: components["schemas"]["AmadeusFormOfPayment"][];
             /** @description Ticketing agreement: `option` (CONFIRM | DELAY_TO_QUEUE | DELAY_TO_CANCEL) with `delay` (days, e.g. `1D`) — `delay` is the only settable ticketing time limit. `dateTime` and `segmentIds` are read-only in the Amadeus specs (computed by Amadeus and returned on the order, see ConsoleBookingDetails.ticketingAgreement); sending them → `400 VALIDATION_FAILED` (fieldErrors code `read_only`). */
             ticketingAgreement?: components["schemas"]["AmadeusTicketingAgreement"];
-            /** @description Automated queue processes; replaces the order's list (send every entry to keep). */
+            /** @description Automated queue processes; replaces the order's list (send every entry to keep). Never a card number in a process `text`: one answers `400 VALIDATION_FAILED` with the field code `card_data` at `/automatedProcess/<index>/text`, before anything is stored or sent. */
             automatedProcess?: components["schemas"]["AmadeusAutomatedProcess"][];
             /** @description Queuing office. */
             queuingOfficeId?: string;
@@ -11560,7 +11560,7 @@ export interface components {
             };
             /** @description E-mail the traveller about the change: `booking.updated` to the booking's contact e-mail (the itinerary attached when one is ready), and a short notice to the previous address when the change moved it. A patch of `tags` and `metadata` alone sends nothing and answers the warning `CUSTOMER NOT NOTIFIED`. Default: `false`. */
             notifyCustomer?: boolean;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Body of console.bookings.issue (Flight Order Issue data + Velexis options). */
@@ -11573,7 +11573,7 @@ export interface components {
             allowUnpaid?: boolean;
             /** @description Send e-ticket receipts to the primary contact. Default: `true`. */
             notifyCustomer?: boolean;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Body of console.bookings.cancel. */
@@ -11583,7 +11583,7 @@ export interface components {
              * @enum {string}
              */
             reasonCode: "customer_request" | "duplicate" | "fraud" | "schedule_change" | "no_payment" | "ticketing_deadline" | "airline_request" | "other";
-            /** @description Free-text justification (audit). */
+            /** @description Free-text justification (audit). Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason: string;
             /** @description What to refund of captured payments (default mode none). */
             refund?: {
@@ -11607,7 +11607,7 @@ export interface components {
             outcome: "order_found" | "not_booked";
             /** @description `order_found` only, required there: the order's record locator (originating system `GDS`), which the API reads and checks against the booking's remark. */
             recordLocator?: string;
-            /** @description What the staff found and did, kept as a staff-only note on the booking and as the reason of the staff action. Required with `not_booked`. Never a card number (`400 VALIDATION_FAILED`). */
+            /** @description What the staff found and did, kept as a staff-only note on the booking and as the reason of the staff action. Required with `not_booked`. Never a card number: a note that holds one answers `400 VALIDATION_FAILED` with the field code `card_data` at `/note`. */
             note?: string;
         };
         /** @description Options of console.bookings.resync (Amadeus GET query parameters). */
@@ -11630,7 +11630,7 @@ export interface components {
         };
         /** @description Body of console.bookings.addNote. */
         ConsoleBookingNoteRequest: {
-            /** @description Note text. */
+            /** @description Note text. Never a card number: a note that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/text`, before anything is stored or sent; the error never repeats the text. */
             text: string;
             /** @description Also show it in the customer's booking timeline. Default: `false`. */
             visibleToCustomer?: boolean;
@@ -11810,9 +11810,9 @@ export interface components {
             sendConfirmation?: boolean;
             /** @description Staff tags. */
             tags?: string[];
-            /** @description Internal note. */
+            /** @description Internal note. Never a card number: a note that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/note`, before anything is stored or sent; the error never repeats the text. */
             note?: string;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description One PNR on a queue (Queue List data[] item, wrapped). */
@@ -11993,7 +11993,7 @@ export interface components {
             amadeus: components["schemas"]["AmadeusGetFlightOffersQuery"];
             /** @description Booking this call is about (links supplier_requests / staff_actions). */
             bookingId?: string;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Verbatim Amadeus Flight Offers Search response. */
@@ -12020,7 +12020,7 @@ export interface components {
             amadeus: components["schemas"]["AmadeusGetFlightAvailabilitiesQuery"];
             /** @description Related booking. */
             bookingId?: string;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Result of console.amadeus.searchFlightAvailabilities. */
@@ -12048,7 +12048,7 @@ export interface components {
             };
             /** @description Related booking. */
             bookingId?: string;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Result of console.amadeus.upsellAirOffers. */
@@ -12076,7 +12076,7 @@ export interface components {
             };
             /** @description Related booking. */
             bookingId?: string;
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Result of console.amadeus.quoteAirOffers. */
@@ -12113,7 +12113,7 @@ export interface components {
             contactEmail?: string;
             /** @description With importAsBooking: selling price mode. */
             pricing?: components["schemas"]["ConsolePricingInput"];
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Body of console.amadeus.issueFlightOrder. */
@@ -12126,7 +12126,7 @@ export interface components {
                     formOfPayments?: components["schemas"]["AmadeusFormOfPayment"][];
                 };
             };
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Result of the raw flight-order operations (create, issue, get, patch). */
@@ -12344,7 +12344,7 @@ export interface components {
                 /** @description Elements to update. */
                 data: components["schemas"]["ConsoleAmadeusFlightOrderPatch"];
             };
-            /** @description Audit justification. */
+            /** @description Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason?: string;
         };
         /** @description Result of console.amadeus.cancelFlightOrder. */
@@ -13526,7 +13526,7 @@ export interface components {
         ConsolePaymentCaptureRequest: {
             /** @description Amount to capture, in the payment's currency: positive, at most two decimals and the currency's minor units, at most the authorised amount. Omitted: the whole authorised amount. Less than authorised releases the rest. */
             amount?: components["schemas"]["Money"];
-            /** @description Audit justification, stored in `staff_actions`. */
+            /** @description Audit justification, stored in `staff_actions`. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text. */
             reason: string;
         };
         /** @description Body of console.payments.refund. */
@@ -13538,7 +13538,7 @@ export interface components {
              * @enum {string}
              */
             reason: "customer_request" | "booking_cancelled" | "schedule_change" | "duplicate" | "fraud" | "goodwill" | "other";
-            /** @description Free-text explanation (`refunds.reason_note`), also kept in `staff_actions`. */
+            /** @description Free-text explanation (`refunds.reason_note`), also kept in `staff_actions`. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/reasonNote`, before anything is stored or sent; the error never repeats the text. */
             reasonNote?: string;
         };
         /** @description A Stripe event as Stripe delivers it to a webhook endpoint (Stripe's own field names, in snake_case). The receiver reads these fields after the signature check and the `metadata` and ids of `data.object`; the rest is ignored and never stored. */
@@ -25376,7 +25376,7 @@ export interface operations {
     consoleAmadeusCancelFlightOrder: {
         parameters: {
             query: {
-                /** @description Audit justification (staff_actions.reason, bookings.cancel_reason). */
+                /** @description Audit justification (staff_actions.reason, bookings.cancel_reason). Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/query/reason`, before anything is stored or sent; the error never repeats the text. */
                 reason: string;
             };
             header?: {

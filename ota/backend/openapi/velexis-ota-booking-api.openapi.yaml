@@ -17440,7 +17440,11 @@ paths:
         - name: reason
           in: query
           required: true
-          description: Audit justification (staff_actions.reason, bookings.cancel_reason).
+          description: >-
+            Audit justification (staff_actions.reason, bookings.cancel_reason). Never a card number: a reason that holds
+            one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400
+            VALIDATION_FAILED` with the field code `card_data` at `/query/reason`, before anything is stored or sent;
+            the error never repeats the text.
           schema:
             type: string
             minLength: 3
@@ -41781,7 +41785,12 @@ components:
           maxItems: 18
           items:
             $ref: '#/components/schemas/AmadeusTraveler'
-          description: Flight Create Orders data.travelers, verbatim (ids = travelerPricings[].travelerId).
+          description: >-
+            Flight Create Orders data.travelers, verbatim (ids = travelerPricings[].travelerId). Never a card number in
+            an emergency contact's `text`: one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or
+            not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/travelers/<index>/emergencyContact/text`, before anything is stored or sent; the error never repeats the
+            text.
         contacts:
           type: array
           minItems: 1
@@ -41793,7 +41802,10 @@ components:
           $ref: '#/components/schemas/AmadeusRemarks'
           description: >-
             data.remarks: general (subType, category, text, travelerIds, flightOfferIds) and airline (subType, keyword,
-            airlineCode, text, travelerIds, flightOfferIds).
+            airlineCode, text, travelerIds, flightOfferIds). Never a card number: a remark text that holds one (12 to 19
+            digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with
+            the field code `card_data` at `/remarks/general/<index>/text` or `/remarks/airline/<index>/text`, before
+            anything is stored or sent; the error never repeats the text.
         ticketingAgreement:
           $ref: '#/components/schemas/AmadeusTicketingAgreement'
           description: >-
@@ -41809,7 +41821,8 @@ components:
             $ref: '#/components/schemas/AmadeusAutomatedProcess'
           description: >-
             data.automatedProcess: code IMMEDIATE | DELAYED | ERROR, queue {number, category}, text, delay, officeId,
-            dateTime.
+            dateTime. Never a card number in a process `text`: one answers `400 VALIDATION_FAILED` with the field code
+            `card_data` at `/automatedProcess/<index>/text`, before anything is stored or sent.
         formOfPayments:
           type: array
           minItems: 1
@@ -41874,11 +41887,17 @@ components:
         note:
           type: string
           maxLength: 2000
-          description: Internal note added to the booking.
+          description: >-
+            Internal note added to the booking. Never a card number: a note that holds one (12 to 19 digits that pass
+            the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code
+            `card_data` at `/note`, before anything is stored or sent; the error never repeats the text.
         reason:
           type: string
           maxLength: 500
-          description: Audit justification (staff_actions.reason).
+          description: >-
+            Audit justification (staff_actions.reason). Never a card number: a reason that holds one (12 to 19 digits
+            that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field
+            code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleBookingPatchRequest:
       type: object
       additionalProperties: false
@@ -41901,7 +41920,11 @@ components:
           maxItems: 18
           items:
             $ref: '#/components/schemas/AmadeusTraveler'
-          description: Travellers to update (matched by id).
+          description: >-
+            Travellers to update (matched by id). Never a card number in an emergency contact's `text`: one (12 to 19
+            digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with
+            the field code `card_data` at `/travelers/<index>/emergencyContact/text`, before anything is stored or sent;
+            the error never repeats the text.
         mergeTravelers:
           type: boolean
           description: 'Merge each traveller over the stored one before sending. Default: `true`.'
@@ -41926,7 +41949,10 @@ components:
             remarks (Velexis sends the stored remarks plus the new ones; exact duplicates — same kind, subType,
             airlineCode and text — are skipped). With `mergeRemarks: false` each list sent (`general` and/or `airline`)
             replaces all remarks of that kind; send the remaining remarks to delete one (the Velexis BACKOFFICE remark
-            is always kept).
+            is always kept). Never a card number: a remark text that holds one (12 to 19 digits that pass the Luhn
+            check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data`
+            at `/remarks/general/<index>/text` or `/remarks/airline/<index>/text`, before anything is stored or sent;
+            the error never repeats the text.
         mergeRemarks:
           type: boolean
           description: >-
@@ -41954,7 +41980,10 @@ components:
           maxItems: 31
           items:
             $ref: '#/components/schemas/AmadeusAutomatedProcess'
-          description: Automated queue processes; replaces the order's list (send every entry to keep).
+          description: >-
+            Automated queue processes; replaces the order's list (send every entry to keep). Never a card number in a
+            process `text`: one answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/automatedProcess/<index>/text`, before anything is stored or sent.
         queuingOfficeId:
           type: string
           pattern: ^[A-Z0-9]{9}$
@@ -42019,7 +42048,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleBookingIssueRequest:
       type: object
       additionalProperties: false
@@ -42047,7 +42079,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleBookingCancelRequest:
       type: object
       additionalProperties: false
@@ -42077,7 +42112,10 @@ components:
           type: string
           minLength: 3
           maxLength: 500
-          description: Free-text justification (audit).
+          description: >-
+            Free-text justification (audit). Never a card number: a reason that holds one (12 to 19 digits that pass the
+            Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code
+            `card_data` at `/reason`, before anything is stored or sent; the error never repeats the text.
         refund:
           type: object
           additionalProperties: false
@@ -42130,7 +42168,8 @@ components:
           maxLength: 2000
           description: >-
             What the staff found and did, kept as a staff-only note on the booking and as the reason of the staff
-            action. Required with `not_booked`. Never a card number (`400 VALIDATION_FAILED`).
+            action. Required with `not_booked`. Never a card number: a note that holds one answers `400
+            VALIDATION_FAILED` with the field code `card_data` at `/note`.
     ConsoleBookingResyncRequest:
       type: object
       additionalProperties: false
@@ -42188,7 +42227,10 @@ components:
           type: string
           minLength: 1
           maxLength: 2000
-          description: Note text.
+          description: >-
+            Note text. Never a card number: a note that holds one (12 to 19 digits that pass the Luhn check, grouped by
+            spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/text`, before
+            anything is stored or sent; the error never repeats the text.
         visibleToCustomer:
           type: boolean
           description: 'Also show it in the customer''s booking timeline. Default: `false`.'
@@ -42568,11 +42610,17 @@ components:
         note:
           type: string
           maxLength: 2000
-          description: Internal note.
+          description: >-
+            Internal note. Never a card number: a note that holds one (12 to 19 digits that pass the Luhn check, grouped
+            by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/note`,
+            before anything is stored or sent; the error never repeats the text.
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     QueueItem:
       type: object
       required:
@@ -42974,7 +43022,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusFlightOffersReply:
       type: object
       required:
@@ -43029,7 +43080,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusAvailabilitiesResult:
       type: object
       required:
@@ -43086,7 +43140,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusUpsellResult:
       type: object
       required:
@@ -43145,7 +43202,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusPricingResult:
       type: object
       required:
@@ -43213,7 +43273,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusIssueRequest:
       type: object
       additionalProperties: false
@@ -43243,7 +43306,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusFlightOrderResult:
       type: object
       required:
@@ -43656,7 +43722,10 @@ components:
         reason:
           type: string
           maxLength: 500
-          description: Audit justification.
+          description: >-
+            Audit justification. Never a card number: a reason that holds one (12 to 19 digits that pass the Luhn check,
+            grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at
+            `/reason`, before anything is stored or sent; the error never repeats the text.
     ConsoleAmadeusCancelResult:
       type: object
       required:
@@ -46418,7 +46487,11 @@ components:
           type: string
           minLength: 3
           maxLength: 500
-          description: Audit justification, stored in `staff_actions`.
+          description: >-
+            Audit justification, stored in `staff_actions`. Never a card number: a reason that holds one (12 to 19
+            digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with
+            the field code `card_data` at `/reason`, before anything is stored or sent; the error never repeats the
+            text.
     ConsolePaymentRefundRequest:
       type: object
       additionalProperties: false
@@ -46447,7 +46520,11 @@ components:
           type: string
           minLength: 1
           maxLength: 500
-          description: Free-text explanation (`refunds.reason_note`), also kept in `staff_actions`.
+          description: >-
+            Free-text explanation (`refunds.reason_note`), also kept in `staff_actions`. Never a card number: a reason
+            that holds one (12 to 19 digits that pass the Luhn check, grouped by spaces or dashes or not) answers `400
+            VALIDATION_FAILED` with the field code `card_data` at `/reasonNote`, before anything is stored or sent; the
+            error never repeats the text.
     StripeWebhookEvent:
       type: object
       description: >-

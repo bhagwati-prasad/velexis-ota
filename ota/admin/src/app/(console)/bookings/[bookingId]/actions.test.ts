@@ -1946,3 +1946,205 @@ describe("the idempotency key after a refusal (OADR-0018 point 5, revision of 20
     expect(beforeTheCall.nextActionKey).toBeUndefined();
   });
 });
+
+// ---- A free text that holds a card number (FIX-W67-KI001) -------------------------------------------------------------
+
+describe("a free text that holds a card number (FIX-W67-KI001)", () => {
+  // Visa's documented test PAN, in the groups a staff member would paste it.
+  const CARD_TEXT = "The traveller read out 4111 1111 1111 1111";
+
+  /** One action of the page whose free text holds `text`, the field it shows the refusal at, and the API's pointer. */
+  function cases(text: string) {
+    return [
+      {
+        name: "issueTickets",
+        route: ISSUE,
+        field: "reason",
+        pointer: "/reason",
+        message: "A reason never holds a card number: remove it.",
+        run: () =>
+          issueTickets(
+            INITIAL_ACTION_STATE,
+            formOf({ bookingId: BOOKING_ID, version: VERSION, actionKey: randomUUID(), reason: text }),
+          ),
+      },
+      {
+        name: "cancelBooking",
+        route: CANCEL,
+        field: "reason",
+        pointer: "/reason",
+        message: "A reason never holds a card number: remove it.",
+        run: () =>
+          cancelBooking(
+            INITIAL_ACTION_STATE,
+            formOf({
+              bookingId: BOOKING_ID,
+              version: VERSION,
+              actionKey: randomUUID(),
+              reason: text,
+              reasonCode: "other",
+              refundMode: "none",
+              currency: "EUR",
+            }),
+          ),
+      },
+      {
+        name: "patchBooking (reason)",
+        route: PATCH,
+        field: "reason",
+        pointer: "/reason",
+        message: "A reason never holds a card number: remove it.",
+        run: () =>
+          patchBooking(
+            INITIAL_ACTION_STATE,
+            formOf({
+              bookingId: BOOKING_ID,
+              version: VERSION,
+              reason: text,
+              element: "remark",
+              remarkType: "ITINERARY",
+              remarkText: "Window seat.",
+            }),
+          ),
+      },
+      {
+        name: "patchBooking (remark)",
+        route: PATCH,
+        field: "remarkText",
+        pointer: "/remarks/general/0/text",
+        message: "A remark never holds a card number: remove it.",
+        run: () =>
+          patchBooking(
+            INITIAL_ACTION_STATE,
+            formOf({
+              bookingId: BOOKING_ID,
+              version: VERSION,
+              reason: REASON,
+              element: "remark",
+              remarkType: "ITINERARY",
+              remarkText: text,
+            }),
+          ),
+      },
+      {
+        name: "addNote",
+        route: NOTES,
+        field: "text",
+        pointer: "/text",
+        message: "A note never holds a card number: remove it.",
+        run: () =>
+          addNote(INITIAL_ACTION_STATE, formOf({ bookingId: BOOKING_ID, actionKey: randomUUID(), text })),
+      },
+      {
+        name: "capturePayment",
+        route: CAPTURE,
+        field: "reason",
+        pointer: "/reason",
+        message: "A reason never holds a card number: remove it.",
+        run: () =>
+          capturePayment(
+            INITIAL_ACTION_STATE,
+            formOf({
+              paymentId: PAYMENT_ID,
+              version: PAYMENT_VERSION,
+              actionKey: randomUUID(),
+              reason: text,
+              currency: "EUR",
+            }),
+          ),
+      },
+      {
+        name: "refundPayment",
+        route: REFUND,
+        field: "reason",
+        pointer: "/reasonNote",
+        message: "A reason never holds a card number: remove it.",
+        run: () =>
+          refundPayment(
+            INITIAL_ACTION_STATE,
+            formOf({
+              paymentId: PAYMENT_ID,
+              actionKey: randomUUID(),
+              reason: text,
+              refundReason: "other",
+              amount: "1.00",
+              currency: "EUR",
+            }),
+          ),
+      },
+      {
+        name: "closeBookingReview",
+        route: REVIEW,
+        field: "note",
+        pointer: "/note",
+        message: "A note never holds a card number: remove it.",
+        run: () =>
+          closeBookingReview(
+            INITIAL_ACTION_STATE,
+            formOf({
+              bookingId: BOOKING_ID,
+              version: VERSION,
+              actionKey: randomUUID(),
+              outcome: "not_booked",
+              note: text,
+            }),
+          ),
+      },
+    ];
+  }
+
+  it("[FIX-W67-KI001 AC3] refuses it at the field with the API's words, before any call and without repeating it", async () => {
+    signedIn("owner");
+    for (const action of cases(CARD_TEXT)) {
+      const state = await action.run();
+      expect(state, action.name).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        fieldErrors: { [action.field]: action.message },
+      });
+      expect(JSON.stringify(state), action.name).not.toMatch(/4111/);
+    }
+    // Only console.auth.me (the staff check of each action): no booking or payment call was made.
+    expect(actionRequests()).toEqual([]);
+    expect(nextCache.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W67-KI001 AC3] refuses it grouped by dashes or joined, and lets phones, amounts and ticket numbers through", async () => {
+    signedIn("owner");
+    for (const text of ["Card 5555-5555-5555-4444, ask the airline", "PAN 4111111111111111 seen"]) {
+      const state = await addNote(
+        INITIAL_ACTION_STATE,
+        formOf({ bookingId: BOOKING_ID, actionKey: randomUUID(), text }),
+      );
+      expect(state.fieldErrors, text).toEqual({ text: "A note never holds a card number: remove it." });
+    }
+    expect(actionRequests()).toEqual([]);
+    api.on(NOTES, () => Response.json({ id: "evt_1" }, { status: 201 }));
+    const kept = "Called +46 70 123 45 67; ticket 057-2412345678 refunded 1364.06 EUR.";
+    expect(
+      await addNote(
+        INITIAL_ACTION_STATE,
+        formOf({ bookingId: BOOKING_ID, actionKey: randomUUID(), text: kept }),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(only(NOTES).body).toEqual({ text: kept, visibleToCustomer: false });
+  });
+
+  it("[FIX-W67-KI001 AC3] shows the API's card_data refusal at the same field when the API finds one", async () => {
+    signedIn("owner");
+    for (const action of cases("Rebooked on the traveller's request.")) {
+      api.on(action.route, () =>
+        apiError("VALIDATION_FAILED", 400, {
+          fieldErrors: [{ path: action.pointer, code: "card_data", message: action.message }],
+        }),
+      );
+      const state = await action.run();
+      expect(state, action.name).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        requestId: "req_fake_1",
+        fieldErrors: { [action.field]: action.message },
+      });
+    }
+  });
+});
