@@ -1591,7 +1591,10 @@ check "an upload whose migrations/tenant is a symbolic link (to r30's) is refuse
   all_of lacks_set r30_current_unchanged nothing_ran r31_waits
 rm -rf "${SRV:?}/incoming/$R31"
 # A release already on the VM that lost a set (copied there before this check existed) is refused the same way.
-chmod u+w "$SRV/releases/$R30/migrations"
+# velexis-deploy leaves an installed release without write permission (u=rX), and moving a directory to another
+# folder rewrites its ".." entry, so the set folder needs u+w as well as its parent; root ignores both modes, CI's
+# runner user does not.
+chmod u+w "$SRV/releases/$R30/migrations" "$SRV/releases/$R30/migrations/reference"
 mv "$SRV/releases/$R30/migrations/reference" "$PREFIX/r30-reference"
 FP_BEFORE="$(fingerprint "$ROOT")"
 deploy "$R30"
@@ -1599,7 +1602,7 @@ set=reference
 check "re-deploying r30, already on the VM, without migrations/reference is refused the same way, changing nothing [FIX-W68-DEPLOYSCRIPT AC1]" \
   all_of lacks_set r30_current_unchanged nothing_ran
 mv "$PREFIX/r30-reference" "$SRV/releases/$R30/migrations/reference"
-chmod u-w "$SRV/releases/$R30/migrations"
+chmod u-w "$SRV/releases/$R30/migrations/reference" "$SRV/releases/$R30/migrations"
 
 # pack-release.sh, run as it is from a copy in a small workspace: the migration sets of the repository, the migration
 # CLI's package.json, a stand-in for build-caddy.sh and a pnpm on PATH that only records `pnpm deploy` and writes a
@@ -1724,8 +1727,10 @@ check "nothing changed: current is r35, no unit, Caddyfile or snapshot staged, n
 # with TRUST_PROXY back, r30's env check passes.
 cp -p "$PREFIX/ota-backend.env.both" "$OTA_ENV"
 cp -p "$SRV/releases/$R30/RELEASE.json" "$PREFIX/r30-RELEASE.json"
+# Rewritten in place through a redirection: sed -i would write its temporary file into the release folder, which
+# velexis-deploy leaves without write permission (root ignores that, CI's runner user does not).
 chmod u+w "$SRV/releases/$R30/RELEASE.json"
-sed -i -E 's/"node": "[^"]*"/"node": "v18.20.4"/' "$SRV/releases/$R30/RELEASE.json"
+sed -E 's/"node": "[^"]*"/"node": "v18.20.4"/' "$PREFIX/r30-RELEASE.json" >"$SRV/releases/$R30/RELEASE.json"
 chmod u-w "$SRV/releases/$R30/RELEASE.json"
 deploy --rollback
 rollback_across_majors() {
