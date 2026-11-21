@@ -29,9 +29,9 @@
     {
       "from": "vd",
       "to": "fs",
-      "label": "check_env_files: every variable of deploy/env/*.env.example exists in /etc/velexis/*.env",
+      "label": "check_env_files: every variable of deploy/env/*.env.example exists in /etc/velexis/*.env, and no value still holds CHANGE_ME",
       "kind": "call",
-      "note": "Missing names → 'env files lack variables…'; nothing changed."
+      "note": "Missing names → 'env files lack variables…'; a value still holding CHANGE_ME → 'env files hold values still at the templates' CHANGE_ME placeholders…'; nothing changed."
     },
     {
       "from": "vd",

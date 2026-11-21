@@ -481,12 +481,13 @@ What a refusal should look like:
 - `SELECT action, outcome, reason, staff_role FROM tenant_<key>.staff_actions ORDER BY created_at DESC LIMIT 10;` one row per change or refusal; no row for list reads; reads `customer.view`, `pnr.lookup`, `order.retrieve`, `amadeus.*` audited.
 ```
 
-```warning
-**Card numbers in free text.** Only the review closure's note refuses a card number ("A note never holds a card
-number: remove it."). A staff note (**Add a note**), a cancel or issue reason, a refund note and a remark are stored
-as typed: add a note `4111 1111 1111 1111` and check
-`SELECT summary, data FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER BY created_at DESC LIMIT 1;`.
-Today the number is stored in clear (and shown to the customer when "Visible to the customer" is ticked). Report it.
+```note
+**Card numbers in free text are refused.** A note, a cancel, issue, capture or refund reason, a remark, the PNR
+import's note or reason and the shopping reason that hold a card number show "A note never holds a card number:
+remove it." (or "A reason …" / "A remark …") at the field; nothing is sent to the API, which refuses the same text
+with `card_data`. Add a note `4111 1111 1111 1111` and check that
+`SELECT summary, data FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER BY created_at DESC LIMIT 1;`
+finds no such row.
 ```
 
 ```bug-hunt

@@ -90,7 +90,7 @@
       "group": "logger",
       "kind": "lib",
       "term": "redact-payload",
-      "detail": "Deep copy for persisted payloads: card number → last 4, CVC dropped, tokens `[REDACTED]`; `maskPan` keeps BIN + last 4."
+      "detail": "Deep copy for persisted payloads: card number → last 4, CVC dropped, tokens `[REDACTED]`; `maskPan` keeps BIN + last 4; `holdsCardNumber` (card-number.ts) says whether a free text holds a card number."
     },
     {
       "id": "envelope",

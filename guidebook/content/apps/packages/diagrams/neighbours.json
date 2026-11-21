@@ -96,7 +96,7 @@
       "group": "runtime",
       "kind": "lib",
       "term": "redact-paths",
-      "detail": "pino, `REDACT_PATHS`, `pinoHttpOptions`, `redactPayload`, `maskPan`."
+      "detail": "pino, `REDACT_PATHS`, `pinoHttpOptions`, `redactPayload`, `maskPan`, `holdsCardNumber`."
     },
     {
       "id": "crypto",

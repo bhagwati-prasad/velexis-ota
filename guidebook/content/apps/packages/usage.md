@@ -98,7 +98,7 @@ then the root `.env.local` (each file only fills variables still unset).
 
 | What to try | Command / action | What should happen |
 |---|---|---|
-| Tests | `pnpm --filter @velexis/logger test` | `redaction.test.ts` and `redact-payload.test.ts` green |
+| Tests | `pnpm --filter @velexis/logger test` | `redaction.test.ts`, `redact-payload.test.ts` and `card-number.test.ts` green |
 | Request id | `curl -si -H 'X-Request-Id: bughunt-0001' http://127.0.0.1:4000/v1/storefront` (OTA API running) | Response header `X-Request-Id: bughunt-0001`; one log line with `requestId":"bughunt-0001"`, `route`, `status`, `durationMs` |
 | Invalid request id | `-H 'X-Request-Id: x'` (shorter than 8) | Replaced by a UUID in the response header and the log |
 | Health is quiet | `curl http://127.0.0.1:4000/health/ready` | No request log line |
@@ -195,7 +195,7 @@ flow-drive-stub
 |---|---|---|---|
 | `portal` | `specs/portal-*.e2e.ts`, `specs/console-*.e2e.ts`, smoke | http://127.0.0.1:3000 | built platform apps; `E2E_WITH_OTA=1` for journeys that provision an OTA |
 | `platform-admin` | `specs/admin-*.e2e.ts`, smoke | http://127.0.0.1:3001 | built platform apps |
-| `storefront` | `specs/storefront/**` (search, checkout with airline card, account and bookings, content pages, a11y, live and domains) | http://127.0.0.1:4173 | `E2E_WITH_OTA=1` |
+| `storefront` | `specs/storefront/**` (search, checkout with airline card, account and bookings, two tabs refreshing one session, content pages, a11y, live and domains) | http://127.0.0.1:4173 | `E2E_WITH_OTA=1` |
 | `ota-admin` | `specs/ota-admin/**` (SSO and bookings, PNR import, roles, settings effects, live environment, session expiry, reconciliation review, payments, a11y and headers) | http://127.0.0.1:3002 | `E2E_WITH_OTA=1` |
 | `portal-stripe`, `storefront-stripe` | journeys tagged `@stripe` (`storefront-stripe` also runs `specs/ota-admin/payments.e2e.ts`) | 3000 / 4173 | `E2E_STRIPE=1` + test-mode Stripe keys + Stripe CLI; `storefront-stripe` also needs `E2E_WITH_OTA=1` (nightly and on demand) |
 

@@ -239,7 +239,8 @@ Each task has a stepper above in the [Tour](#tour); here is the short version wi
    `repo:tools/e2e/specs/admin-tenant-lifecycle.e2e.ts` and `repo:tools/e2e/specs/admin-suspension-storefront.e2e.ts`.
    Cross-app: [[journey:suspend-and-resume-ota]].
 2. **Retry a failed job** — `/provisioning-jobs?status=failed` → job → **Retry**. A failed `provision` job puts the
-   OTA back to "Setting up".
+   OTA back to "Setting up", even when an owner already owns `MAX_TENANTS_PER_ACCOUNT` OTAs: the admin's retry is
+   exempt from the limit that the owner's retry applies.
 3. **Fix a waiting Amadeus connection** — dashboard pool warning → `/amadeus/offices` → **Add offices** → **Assign**
    by key. Proven by `repo:tools/e2e/specs/admin-amadeus-pool.e2e.ts`; cross-app:
    [[journey:amadeus-and-stripe-connections]].

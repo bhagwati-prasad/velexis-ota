@@ -65,7 +65,7 @@
     {
       "from": "failed",
       "to": "provisioning",
-      "label": "retryProvisioning (owner) / adminRetryProvisioningJob - the OTA limit is not checked again (bug)"
+      "label": "retryProvisioning (owner; 422 tenant_limit while an owner is at MAX_TENANTS_PER_ACCOUNT) / adminRetryProvisioningJob (exempt from the limit)"
     },
     {
       "from": "active",

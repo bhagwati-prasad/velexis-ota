@@ -43,7 +43,7 @@
       "title": "Note and resync",
       "actor": "Agent",
       "body": "Add an internal note; press Resync.",
-      "expect": "Note: `201`, a `booking_events` row `staff.note` (staff only unless `visibleToCustomer`), the text stored as typed in `summary` and `data` (no card-number check here, unlike the review-closure note); staff action `booking.note` with the note id only. Needs `bookings:write`: a finance user gets `403 FORBIDDEN`. Resync: Flight Order Management GET, segments/tickets updated, `429 RATE_LIMITED` within 10 s of the last refresh of the booking."
+      "expect": "Note: `201`, a `booking_events` row `staff.note` (staff only unless `visibleToCustomer`), the text stored in `summary` and `data` (a text that holds a card number is refused with `400 VALIDATION_FAILED`, `card_data` at `/text`, as the review-closure note); staff action `booking.note` with the note id only. Needs `bookings:write`: a finance user gets `403 FORBIDDEN`. Resync: Flight Order Management GET, segments/tickets updated, `429 RATE_LIMITED` within 10 s of the last refresh of the booking."
     },
     {
       "title": "Forbidden actions",

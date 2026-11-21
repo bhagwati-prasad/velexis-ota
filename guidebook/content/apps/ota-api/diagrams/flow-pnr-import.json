@@ -16,7 +16,7 @@
       "title": "Import",
       "actor": "Agent",
       "body": "Import with a reason and a pricing mode (markup rules, net, override).",
-      "expect": "`POST /v1/console/bookings/imports` → `201` booking `channel = import`, status from the order (`confirmed`, `partially_ticketed`, `ticketed` or `cancelled`), `ticketing_status` `issued` / `partially_issued`, or `manual_review` for an order without tickets (the ticketing job never takes it); no payment (`paymentStatus = not_applicable`); staff action `booking.import`, event `booking.imported`. An optional `note` becomes a `staff.note` event, stored as typed (no card-number check)."
+      "expect": "`POST /v1/console/bookings/imports` → `201` booking `channel = import`, status from the order (`confirmed`, `partially_ticketed`, `ticketed` or `cancelled`), `ticketing_status` `issued` / `partially_issued`, or `manual_review` for an order without tickets (the ticketing job never takes it); no payment (`paymentStatus = not_applicable`); staff action `booking.import`, event `booking.imported`. An optional `note` becomes a `staff.note` event; a note or reason that holds a card number is refused (`400 VALIDATION_FAILED`, `card_data`) before Amadeus is called."
     },
     {
       "title": "Import twice",

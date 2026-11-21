@@ -121,7 +121,7 @@ all 144 operations). Each operation has an [[operation-scope]] (`public`, `porta
 | `GET /v1/tenants` (`portal_unverified`) | Account with no OTA | Only OTAs where the caller is an active member |
 | `POST /v1/tenants` (`Idempotency-Key`, 16-128 characters `[A-Za-z0-9_-]`) | Unverified account; 4th OTA; same key twice | `202`; `403 EMAIL_NOT_VERIFIED`; `409 TENANT_KEY_UNAVAILABLE`; `422 UNPROCESSABLE tenant_limit` (OTAs the caller owns that are not `failed`, MAX_TENANTS_PER_ACCOUNT); replay returns the stored `202`. With `FEATURE_STRIPE_BILLING` on, `planCode` is required and its plan needs a Stripe Price (`422 PLAN_NOT_AVAILABLE`) |
 | `GET/PATCH /v1/tenants/{tenantId}` | As non-member; invalid country | `404 NOT_FOUND` for non-members (never 403); profile edits by owner/admin; publishes `vx:invalidate tenant` |
-| `GET …/provisioning`, `POST …/provisioning/retry` | Retry an active OTA | Step log and status; retry (owner) only for `failed` (`409 PROVISIONING_NOT_RETRYABLE`), `202` with a **new** job; the tenant limit is not checked again (see the bug-hunt below) |
+| `GET …/provisioning`, `POST …/provisioning/retry` | Retry an active OTA | Step log and status; retry (owner) only for `failed` (`409 PROVISIONING_NOT_RETRYABLE`), `202` with a **new** job, or `422 UNPROCESSABLE tenant_limit` (createTenant's error; nothing changes) while an owner of the OTA already owns `MAX_TENANTS_PER_ACCOUNT` OTAs that are not `failed`; the admin's job retry is exempt (see the bug-hunt below) |
 | `POST …/initial-keys/reveal` | Reveal twice; after 24 h | Owner only; keys once (`no-store`), then `410 KEYS_ALREADY_REVEALED`; before the set-up issued keys `404` ([[initial-keys-reveal]]) |
 | `GET …/onboarding` | Fresh OTA | [[onboarding-checklist]]: `email_verified`, `mfa_enabled`, `ota_active`, `api_key`, `storefront_open`, `amadeus_test`, `team_invited`, then M5 items when their switch is on |
 | `POST …/go-live` | With missing preconditions | See [[go-live]]: `422 LIVE_PRECONDITIONS_UNMET` with `details.missing` |
@@ -341,10 +341,12 @@ answer) is retried with backoff (30 s × 2^attempt); after 5 attempts the job an
 ```
 
 ```bug-hunt
-**Known bug: retry bypasses the OTA limit.** `createTenant` counts only the caller's non-`failed` OTAs, and
-`retryProvisioning` never counts again. With the default `MAX_TENANTS_PER_ACCOUNT=3`: let OTA A fail, create B, C and D,
-then retry A. Expected `422 UNPROCESSABLE tenant_limit`; actual `202` and four non-failed OTAs
-(`repo:platform/backend/src/provisioning/lifecycle.service.ts#L394`). The admin's job retry does not count either.
+**The OTA limit on retry.** `createTenant` counts only the caller's non-`failed` OTAs, so a failed OTA frees its slot;
+`retryProvisioning` counts again for every owner of the OTA, under the owners' account locks, before it reopens it.
+With the default `MAX_TENANTS_PER_ACCOUNT=3`: let OTA A fail, create B, C and D, then retry A: `422 UNPROCESSABLE
+tenant_limit`, as `createTenant` answers, and A stays `failed` with no new job
+(`repo:platform/backend/src/provisioning/lifecycle.service.ts#L438`). The platform admin's job retry still reopens A:
+it is exempt from the limit (a deliberate staff action, scope PF-10).
 ```
 
 ```bug-hunt

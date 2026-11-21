@@ -273,8 +273,12 @@ platform-api/tenant-states
   snapshots, events, staff actions, idempotency bodies, notification payloads); identity document numbers keep their
   last 4. Request bodies are never logged.
 - **Audit**: one [[staff-action]] row per state-changing or refused console call and per audited read
-  (`repo:ota/backend/src/console/staff-actions.writer.ts`). Free-text staff notes are stored as typed: only the
-  review-closure note is checked for card numbers (`holdsCardNumber`, `repo:ota/backend/src/console/review-closure.service.ts`).
+  (`repo:ota/backend/src/console/staff-actions.writer.ts`). Every console free-text field (notes, reasons, remarks,
+  process and emergency-contact texts) refuses a card number in the request validation, before the idempotency key is
+  claimed and before any booking write or supplier call (`400 VALIDATION_FAILED`, field code `card_data`;
+  `holdsCardNumber` of `@velexis/logger`, `repo:ota/backend/src/common/http/card-free-text.ts`); the refusal's audit row
+  holds the action and target only. The review-closure note keeps its own check
+  (`repo:ota/backend/src/console/review-closure.service.ts`).
 - **Tenancy**: only `active` tenants are served (`403 TENANT_SUSPENDED`); every repository has a two-tenant isolation
   test. Review: `repo:ota/docs/security-review.md`.
 

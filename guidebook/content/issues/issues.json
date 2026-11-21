@@ -1,147 +1,5 @@
 [
   {
-    "id": "KI-001",
-    "title": "Staff notes (and other console free text) store a typed card number in clear",
-    "app": "ota-api",
-    "severity": "high",
-    "kind": "security",
-    "status": "confirmed",
-    "where": [
-      "ota/backend/src/console/console-booking-actions.service.ts:2048-2063",
-      "ota/backend/src/console/pnr-import.service.ts:1541-1549",
-      "ota/backend/src/console/review-closure.service.ts:183",
-      "ota/backend/src/console/review-closure.service.ts:233",
-      "packages/logger/src/redact-payload.ts:217",
-      "ota/backend/src/bookings/cancellation.service.ts:993",
-      "ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts:1123-1131",
-      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:42180-42195"
-    ],
-    "summary": "Staff notes keep a typed card number: only the review-closure note refuses one (`holdsCardNumber`). `console.bookings.addNote` and the note of `console.bookings.import` (PNR import) store the text as typed in `booking_events.summary` and `data`, because `redactPayload` masks by key name only. A note marked visible to the customer also shows on the storefront booking page. Cancel reasons (`bookings.cancel_reason`, `staff_actions.reason`), refund notes and issue or capture reasons are free text too. A pasted card number ends up in the tenant database and its backups (PCI scope). It needs a staff member to paste one, hence high rather than critical.",
-    "reproduce": [
-      "Create your own OTA in the portal and press **Open console** (the demo OTA has no staff member).",
-      "Open a booking, **Timeline and notes** → **Add a note**, type `card 4111 1111 1111 1111` and press **Add note**.",
-      "Query (development only): `SELECT summary, data FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER BY created_at DESC LIMIT 1;`"
-    ],
-    "expected": "`400 VALIDATION_FAILED` at `/text` with “A note never holds a card number: remove it.” (code `card_data`), as for the review-closure note, and nothing stored.",
-    "actual": "“Note added.” (201). `summary` and `data` hold the full number. It shows in the console timeline, and on the storefront booking page when “Visible to the customer” is ticked.",
-    "fix": "Move `holdsCardNumber` to a shared module. Call it in `addNote` (field `/text`), the PNR import (`/note`) and every other console free-text field (cancel, issue and capture reasons, refund `reasonNote`, remarks), answering like the review closure. Mirror the check in the OTA admin forms for an early message, and say so in the contract descriptions. Check existing `staff.note` rows for card numbers (a data check, no schema change).",
-    "files": [
-      "ota/backend/src/console/console-booking-actions.service.ts",
-      "ota/backend/src/console/pnr-import.service.ts",
-      "ota/backend/src/console/review-closure.service.ts",
-      "ota/backend/src/console/console-payments.service.ts",
-      "ota/backend/src/bookings/cancellation.service.ts",
-      "ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts",
-      "ota/admin/src/app/(console)/bookings/[bookingId]/note-form.tsx",
-      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml"
-    ],
-    "migration": false,
-    "journey": "console-manage-booking",
-    "step": "note",
-    "terms": ["card-redaction", "redact-payload", "pci-scope", "pnr-import"]
-  },
-  {
-    "id": "KI-002",
-    "title": "Retrying a failed OTA ignores MAX_TENANTS_PER_ACCOUNT",
-    "app": "platform-api",
-    "severity": "medium",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": [
-      "platform/backend/src/provisioning/lifecycle.service.ts:394",
-      "platform/backend/src/provisioning/lifecycle.service.ts:406",
-      "platform/backend/src/provisioning/lifecycle.service.ts:615-619",
-      "platform/backend/src/memberships/memberships.repository.ts:281",
-      "platform/backend/src/admin/admin-jobs.service.ts:297",
-      "platform/docs/scope.md:119"
-    ],
-    "summary": "Retrying a failed OTA can take an owner over `MAX_TENANTS_PER_ACCOUNT`. `createTenant` counts only the owner's OTAs that are not failed, so a failed OTA frees its slot, but `retryProvisioning` (and the admin job retry) turns it back to `provisioning` without counting again. Scope PF-10 AC4 sets the limit.",
-    "reproduce": [
-      "In `platform/backend/.env.local` set `MAX_TENANTS_PER_ACCOUNT=1` and restart the API and the worker. Keep the OTA worker stopped.",
-      "Sign up and verify an account. Create OTA `alpha` in the portal; its job stays running.",
-      "As `velexis_migrator` (development only): `UPDATE platform.provisioning_jobs SET status = 'failed', finished_at = now(), locked_until = NULL WHERE tenant_id = (SELECT id FROM platform.tenants WHERE key = 'alpha') AND status IN ('queued', 'running'); UPDATE platform.tenants SET status = 'failed' WHERE key = 'alpha';`",
-      "Create OTA `beta`: `202` (alpha is failed, so it does not count).",
-      "Open alpha's set-up page and press **Retry** (`POST /v1/tenants/<alpha id>/provisioning/retry`).",
-      "Count the owner's OTAs that are not failed: `SELECT count(*) FROM platform.tenants t JOIN platform.tenant_memberships m ON m.tenant_id = t.id WHERE m.account_id = '<account id>' AND m.role = 'owner' AND t.status <> 'failed';`"
-    ],
-    "expected": "Retry answers `422 UNPROCESSABLE` with `details.reason = tenant_limit` while the owner already holds the maximum.",
-    "actual": "Retry answers `202`; the owner has 2 OTAs that are not failed with a limit of 1.",
-    "fix": "In `retryProvisioning`, after locking the tenant and before `reopenFailed`, lock the caller's account row (`FOR UPDATE`, as `create()` does) and refuse with the same `tenant_limit` error when `countOwnedTenants >= maxTenantsPerAccount`. Decide, and document, whether the admin retry applies the rule to the OTA's owners or stays exempt.",
-    "files": [
-      "platform/backend/src/provisioning/lifecycle.service.ts",
-      "platform/backend/src/admin/admin-jobs.service.ts",
-      "platform/backend/test/integration/provisioning"
-    ],
-    "migration": false,
-    "journey": "signup-and-provision",
-    "step": "wizard",
-    "terms": ["provisioning-job", "provisioning"]
-  },
-  {
-    "id": "KI-003",
-    "title": "Two storefront tabs can race the cookie refresh and revoke the session",
-    "app": "sdk",
-    "severity": "medium",
-    "kind": "bug",
-    "status": "plausible",
-    "where": [
-      "ota/sdk/src/internal/session.js:10-20",
-      "ota/sdk/src/internal/session.js:951-965",
-      "ota/backend/src/identity/sessions.service.ts:40",
-      "ota/backend/src/identity/sessions.service.ts:326-328"
-    ],
-    "summary": "Two tabs that refresh at the same moment can sign the customer out everywhere. Cookie-mode refreshes are single-flighted only within one client family, that is one page, so two tabs whose `__Host-vx_at` expired can both send `POST /v1/auth/refresh` with the same `__Host-vx_rt`. The API has no grace window: the second is a reuse and the whole family is revoked. Nothing coordinates tabs (`BroadcastChannel`, `navigator.locks` or storage events). How often it happens depends on timing; a two-tab test settles it.",
-    "reproduce": [
-      "Sign in on `http://localhost:5173` and open `/bookings.html` in two tabs.",
-      "In DevTools delete `__Host-vx_at`, then reload both tabs at the same moment (or leave two pages polling past the 15 minutes).",
-      "Check (development only): `SELECT revoke_reason FROM tenant_demo.customer_sessions ORDER BY updated_at DESC LIMIT 3;`"
-    ],
-    "expected": "Both tabs stay signed in.",
-    "actual": "When both refreshes are in flight together, the second answers `401 REFRESH_TOKEN_REUSED`, the family gets `revoke_reason = 'rotation_reuse'`, and both tabs show **Sign in**.",
-    "fix": "Serialise cookie-mode refreshes across tabs with `navigator.locks.request('vx-refresh', …)` in the SDK's cookie refresh, or accept the immediately previous refresh token for a few seconds on the server.",
-    "files": ["ota/sdk/src/internal/session.js", "ota/backend/src/identity/sessions.service.ts"],
-    "migration": false,
-    "journey": "my-bookings-change-and-cancel",
-    "step": "silent-refresh",
-    "terms": ["refresh-token-reuse", "refresh-family", "cookie-mode", "single-flight-refresh"]
-  },
-  {
-    "id": "KI-004",
-    "title": "CHANGE_ME placeholders pass velexis-deploy and check-vm",
-    "app": "deploy",
-    "severity": "medium",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": [
-      "deploy/scripts/deploy.sh:265-278",
-      "deploy/scripts/check-vm.sh:886-909",
-      "deploy/scripts/provision-vm.sh:1341-1342",
-      "deploy/env/platform-backend.env.example:44",
-      "deploy/env/platform-backend.env.example:47",
-      "deploy/env/ota-backend.env.example:36",
-      "deploy/env/ota-backend.env.example:40",
-      "deploy/env/alert.env.example:6-7",
-      "deploy/env/backup.env.example:20"
-    ],
-    "summary": "Env files that still hold the templates' `CHANGE_ME` values pass both checks. `check_env_files` (deploy.sh) and `group_envfiles` (check-vm.sh) check only that each template variable exists. A value still at `smtps://CHANGE_ME_USER:CHANGE_ME_PASSWORD@smtp.example.com:465` or `CHANGE_ME_ops@example.com` is a valid URL or e-mail address, so the apps start. Only `provision-vm.sh --steps envfiles` warns.",
-    "reproduce": [
-      "On a throwaway VM leave `SMTP_URL` in `/etc/velexis/platform-backend.env` at the template's `CHANGE_ME` value.",
-      "`sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh --only envfiles`: all PASS.",
-      "Run Deploy: green. Sign up in the portal: no e-mail arrives (outbox retries and failures in the platform worker log)."
-    ],
-    "expected": "check-vm FAILs, and `velexis-deploy` refuses, while any value of an env file still contains `CHANGE_ME`, without printing the value.",
-    "actual": "Deploy and check-vm pass; e-mails and alerts fail later, at run time.",
-    "fix": "In `check_env_files` and `group_envfiles` add `grep -l CHANGE_ME` per destination file and fail naming `file:VARIABLE` (never the value). Cover both in the script tests.",
-    "files": [
-      "deploy/scripts/deploy.sh",
-      "deploy/scripts/check-vm.sh",
-      "deploy/scripts/test/deploy.test.sh",
-      "deploy/scripts/test/check-vm.test.sh"
-    ],
-    "migration": false,
-    "terms": ["env-file", "check-vm", "velexis-deploy"]
-  },
-  {
     "id": "KI-005",
     "title": "Set-up page calls getTenant twice per request",
     "app": "portal",
@@ -149,7 +7,7 @@
     "kind": "perf",
     "status": "confirmed",
     "where": [
-      "platform/frontend/src/app/(app)/otas/[tenantId]/setup/page.tsx:308",
+      "platform/frontend/src/app/(app)/otas/[tenantId]/setup/page.tsx:325",
       "platform/frontend/src/lib/tenant.ts:52",
       "platform/frontend/README.md:114"
     ],
@@ -299,8 +157,8 @@
     "status": "confirmed",
     "where": [
       "platform/frontend/src/app/(app)/dashboard/page.tsx:120-125",
-      "platform/backend/src/provisioning/lifecycle.service.ts:616",
-      "platform/frontend/src/app/(app)/otas/new/actions.ts:232-234"
+      "platform/backend/src/provisioning/lifecycle.service.ts:664",
+      "platform/frontend/src/app/(app)/otas/new/actions.ts:226-228"
     ],
     "summary": "The OTA limit shows only after the whole wizard. The dashboard offers **Create an OTA** to every verified account, so an owner who already has `MAX_TENANTS_PER_ACCOUNT` (3 locally) OTAs that are not failed fills in all three wizard steps before `422 UNPROCESSABLE` (`tenant_limit`) appears on the review. This matches scope PF-10 AC4 as written.",
     "reproduce": [
@@ -503,7 +361,7 @@
       "ota/frontend/src/pages/checkout-pay-airline.js:968",
       "ota/frontend/src/pages/checkout-pay-airline.js:988",
       "ota/frontend/src/pages/checkout-pay-airline.js:1036-1037",
-      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38192-38195"
+      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38196-38199"
     ],
     "summary": "The airline-card page sends expiry years above 2099, which the API refuses after a round trip. The page checks only that the year is at least 2000 and not past, but the contract caps `expiryYear` at 2099, so the API answers `400 VALIDATION_FAILED` and the page empties every input. A 400 is not a decline, so no attempt is counted.",
     "reproduce": [
@@ -557,7 +415,7 @@
     "where": [
       "ota/frontend/src/pages/checkout-pay-airline.js:73",
       "ota/frontend/src/pages/checkout-pay-airline.js:126",
-      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38177-38181"
+      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38181-38185"
     ],
     "summary": "A card holder name with accents is refused with no hint why. Holder names must match `^[A-Za-z .'-]{2,64}$` on the page and `^[A-Za-z .'-]+$` in the contract (Amadeus sends them in upper case), so “José Müller” gets “Enter the name as it is written on the card”.",
     "reproduce": [
@@ -754,7 +612,7 @@
       "ota/backend/src/config.ts:173",
       "ota/backend/src/payments/stripe/stripe-client.factory.ts:170-184",
       "ota/backend/src/payments/stripe/stripe.gateway.ts:737-752",
-      "ota/backend/README.md:378",
+      "ota/backend/README.md:379",
       "tools/e2e/README.md:117"
     ],
     "summary": "The dummy Stripe keys of `.env.example` count as configured: the card method is offered and payment fails with 502. After the documented `cp .env.example .env.local`, `STRIPE_SECRET_KEY_TEST=sk_test_replace_me` and `STRIPE_PUBLISHABLE_KEY_TEST=pk_test_replace_me` pass the key patterns, so `storefront.get` offers the card method with the dummy publishable key and `checkout.createPayment` fails at Stripe with `502 PAYMENT_PROVIDER_ERROR`. README §4 says that without keys the storefront offers no payment method; the e2e harness already treats the dummies as unset.",
@@ -911,7 +769,7 @@
     "severity": "low",
     "kind": "ux",
     "status": "confirmed",
-    "where": ["ota/sdk/src/internal/session.js:335-341", "ota/backend/src/tenancy/caller-resolver.ts:180"],
+    "where": ["ota/sdk/src/internal/session.js:362-368", "ota/backend/src/tenancy/caller-resolver.ts:180"],
     "summary": "A client with no key, or with a `hostingKey`, is created without complaint, but every call fails with 401. `sessionModeOf` answers `token` when no key is given, so the client sends no `X-Api-Key`; a `hostingKey` makes a server-mode client, but the MVP API refuses every `hk_` key with `401 INVALID_API_KEY`.",
     "reproduce": [
       "From `ota/sdk`: `node -e \"import('@velexis/ota-sdk').then(async m=>{const c=m.createVelexisClient({baseUrl:'http://127.0.0.1:4000'});try{await c.storefront.get()}catch(e){console.log(e.status,e.code)}})\"`"
@@ -959,7 +817,7 @@
       "packages/db/src/cli/migrate.ts:278-283",
       "packages/db/src/migrate/files.ts:240-241",
       "packages/db/src/migrate/tenants.ts:266-275",
-      "deploy/scripts/deploy.sh:598-611",
+      "deploy/scripts/deploy.sh:617-630",
       "deploy/scripts/pack-release.sh:74-82"
     ],
     "summary": "A missing migrations folder is treated as empty, so a deploy can apply nothing and still succeed. `migrate.js` prints a notice on stderr and exits 0 for a `--dir` that does not exist, and `deploy.sh` and `pack-release.sh` skip a set whose folder is missing. A typo in `--dir`, or a release packed without `migrations/`, deploys code against an unmigrated schema with no error. All three folders exist at this commit, so the original reason for the leniency (CI before X-012) is gone.",
@@ -1043,8 +901,8 @@
     "kind": "bug",
     "status": "confirmed",
     "where": [
-      "deploy/scripts/deploy.sh:126-132",
-      "deploy/scripts/deploy.sh:509-513",
+      "deploy/scripts/deploy.sh:127-133",
+      "deploy/scripts/deploy.sh:528-532",
       ".github/workflows/deploy.yml:188-192"
     ],
     "summary": "A read-only `velexis-deploy --status` during a deploy fails and writes an ERROR into deploy.log. The exclusive `flock` is taken before the arguments are read, so `--status` prints `ERROR: another deploy is running`, exits 1 and appends that line to `/var/log/velexis/deploy.log`. The Deploy workflow's smoke check calls `--status`.",
@@ -1091,7 +949,7 @@
     "severity": "low",
     "kind": "bug",
     "status": "confirmed",
-    "where": [".github/workflows/ci.yml:58-148", "docs/mvp/deployment-single-vm.md:394"],
+    "where": [".github/workflows/ci.yml:58-148", "docs/mvp/deployment-single-vm.md:395"],
     "summary": "CI never runs `backup-restore.test.sh`, so a regression in `backup.sh` or `restore.sh` (the RPO and RTO path) is caught only by a manual run. The `deploy-files` job runs the deploy, healthcheck, ship-logs and log-review tests but not this one; the deployment doc says “CI does not run it yet”.",
     "reproduce": ["Search `.github/workflows/ci.yml` for `backup-restore`: no match."],
     "expected": "CI runs `bash deploy/scripts/test/backup-restore.test.sh` (the integration job already has PostgreSQL 16; add `age`, `rclone` and `zstd`).",
@@ -1109,9 +967,9 @@
     "kind": "bug",
     "status": "confirmed",
     "where": [
-      "deploy/scripts/deploy.sh:483-499",
-      "deploy/scripts/deploy.sh:533-537",
-      "deploy/scripts/deploy.sh:571"
+      "deploy/scripts/deploy.sh:502-518",
+      "deploy/scripts/deploy.sh:552-556",
+      "deploy/scripts/deploy.sh:590"
     ],
     "summary": "`--rollback` switches to a release that cannot start, then fails. `rollback_to` stages the target's snapshot, switches `current` and restarts the units without the env-file and Node-major checks, which run only for a new upload or a redeploy. A target whose variables were removed from `/etc/velexis`, or one built on another Node major, is switched to and then fails.",
     "reproduce": [
@@ -1133,7 +991,7 @@
     "severity": "low",
     "kind": "ux",
     "status": "confirmed",
-    "where": ["deploy/scripts/deploy.sh:525", "deploy/scripts/deploy.sh:640-646"],
+    "where": ["deploy/scripts/deploy.sh:544", "deploy/scripts/deploy.sh:659-665"],
     "summary": "Redeploying the active release with a failing health check says “no other release was active” and does not roll back. When the sha being deployed is already current (`PREV_SHA == SHA`) and a unit fails its health check after the restart, the script dies with that message, although deploy-history holds a previous release.",
     "reproduce": [
       "On a throwaway VM run Deploy twice for the same commit, with PostgreSQL stopped during the second run.",
@@ -1158,7 +1016,7 @@
       "deploy/env/platform-backend.env.example:101",
       "deploy/env/ota-backend.env.example:90",
       "deploy/egress/allowed-hosts.conf:37",
-      "docs/mvp/deployment-single-vm.md:568",
+      "docs/mvp/deployment-single-vm.md:569",
       "platform/backend/src/config.ts:251",
       "platform/frontend/src/lib/config.ts:54",
       "platform/admin/src/lib/config.ts:51",
@@ -1191,7 +1049,7 @@
     "status": "confirmed",
     "where": [
       "deploy/env/platform-backend.env.example:86-87",
-      "deploy/scripts/deploy.sh:265-278",
+      "deploy/scripts/deploy.sh:272-285",
       "platform/backend/src/config.ts"
     ],
     "summary": "The platform backend env template requires `STORAGE_DRIVER` and `STORAGE_DIR`, which the platform backend never reads. They point at the OTA's storage folder and nothing under `platform/backend/src` reads either, but `velexis-deploy` still refuses a release until both exist in `/etc/velexis/platform-backend.env`.",

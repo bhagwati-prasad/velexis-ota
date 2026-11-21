@@ -31,7 +31,7 @@
     {
       "title": "Fill the env files",
       "actor": "Developer",
-      "body": "Replace every `CHANGE_ME` and placeholder host in `/etc/velexis/*.env` and `caddy.env` (`PLATFORM_BASE_DOMAIN`, `STOREFRONT_BASE_DOMAIN`, `ACME_EMAIL`); `sudo systemctl restart caddy`.",
+      "body": "Replace every `CHANGE_ME` and placeholder host in `/etc/velexis/*.env` and `caddy.env` (`PLATFORM_BASE_DOMAIN`, `STOREFRONT_BASE_DOMAIN`, `ACME_EMAIL`); `sudo systemctl restart caddy`. Until no value holds `CHANGE_ME`, `check-vm.sh` reports `FAIL` and `velexis-deploy` refuses every release (each named as `file:VARIABLE`, never the value).",
       "expect": "`https://platform.<domain>/` serves the maintenance page with a valid certificate."
     },
     {

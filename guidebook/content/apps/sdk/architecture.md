@@ -31,7 +31,7 @@ components
 | `repo:ota/sdk/src/identity.js`, `flights.js`, `bookings.js`, `console.js` | Mirror the contract files `identity.d.ts`, `flights.d.ts`, `bookings.d.ts`, `console.d.ts`: typedef aliases of `@velexis/api-types` schemas and the namespace factories |
 | `repo:ota/sdk/src/namespaces/` | One factory per namespace; each method is one line, `core.call(op.<key>, params, live(options))`, with JSDoc `@param` / `@returns` / `@throws` |
 | `repo:ota/sdk/src/internal/client.js` | The [[request-core]]: option tables (`CLIENT_OPTIONS`, `REQUEST_OPTIONS`), `validateClientOptions`, `core.call` (path/query/header/body split, `Page` wrapping), `core.request`, `derive` |
-| `repo:ota/sdk/src/internal/session.js` | Mode choice (`sessionModeOf`), credentials per attempt, CSRF (`fetchCsrf`), [[automatic-refresh]] (`refreshCookies`, `refreshTokens`, `startRefresh`, `runRefresh`), the family (`createFamily`: `refreshing`, `replaced`), `adopt` of [[session-result|session results]], `noteRotation` |
+| `repo:ota/sdk/src/internal/session.js` | Mode choice (`sessionModeOf`), credentials per attempt, CSRF (`fetchCsrf`), [[automatic-refresh]] (`refreshCookies`, `runCookieRefresh`, `refreshUnderLock` under the cross-tab Web Lock `underRefreshLock`, `sendAgainWithCookies`, `refreshTokens`, `startRefresh`, `runRefresh`), the family (`createFamily`: `refreshing`, `replaced`), `adopt` of [[session-result|session results]], `noteRotation` |
 | `repo:ota/sdk/src/internal/http.js` | Transport: headers, timeout per attempt, [[retry-policy]] and [[retry-after]], `onResponse`, response parsing |
 | `repo:ota/sdk/src/internal/errors.js` | [[error-envelope]] → class (`errorClassFor`), fallback codes, `parseRetryAfter`, `connectionError` |
 | `repo:ota/sdk/src/internal/pagination.js` | `Page<T>` ([[cursor-pagination]]) and `isPageBody` |
@@ -48,7 +48,8 @@ memory, per [[client-family]]:
 
 | State | Where | Holds |
 |---|---|---|
-| Cookie mode `RefreshState` | `family.cookie.state` | `generation` (finished refreshes), `refreshing` (refresh in flight), `fetchingCsrf` |
+| Cookie mode `RefreshState` | `family.cookie.state` | `generation` (finished refreshes: the family's own and other tabs' it waited for), `refreshedAt` (generation of its last own refresh), `refreshing` (refresh in flight), `force` (refresh even after waiting), `fetchingCsrf` |
+| Cross-tab refresh lock | `navigator.locks`, `COOKIE_REFRESH_LOCK` = `velexis-sdk:cookie-refresh` | Held from before `POST /v1/auth/refresh` until its answer is in; a tab that waited sends its calls again first; the wait is bounded by the refresh's timeout |
 | Refreshes in flight | `family.refreshing` (`Map<refreshToken, Promise>`) | One promise per refresh-token value until the rotation is recorded |
 | Rotated refresh tokens | `family.replaced` (last `FAMILY_TOKENS_KEPT` = 512) | Old refresh token → newest pair of its session, with time (for the 10 s [[rotation-window]]) and order |
 | Per-client replacements | `own` (last 32) and `latest` | Access/refresh tokens this client replaced; its newest pair |
@@ -134,7 +135,8 @@ release-states
 - **Tokens never presented twice.** The [[client-family]] shares one refresh per refresh-token value; a rotated token
   leads to the newest pair only for a client that held it as its own string, or within the 10 s [[rotation-window]];
   otherwise it is sent as it is and the API's [[refresh-token-reuse]] detection revokes the family. Refreshes carry the
-  API key only, never the expired access token.
+  API key only, never the expired access token. In cookie mode the tabs of an origin refresh one at a time under the
+  Web Lock `velexis-sdk:cookie-refresh`, so no tab presents a cookie another tab has just rotated.
 - **CSRF.** [[csrf-token]] copied from `__Host-vx_csrf` on `POST`, `PUT`, `PATCH`, `DELETE`; one re-fetch and one
   resend on `403 CSRF_TOKEN_INVALID`.
 - **Card data (PCI).** `checkout.completeWithAirlineCard` is never retried or resent, gets a new key per call, and its
@@ -185,7 +187,7 @@ CI runs `test` on Node.js 24 with the repository and on Node.js 22.12.0 in the n
 | A client option, its default or its validation message | `repo:ota/sdk/src/internal/client.js` (`CLIENT_OPTIONS`, `REQUEST_OPTIONS`, `DEFAULT_*`) and the typedef in `repo:ota/sdk/src/shared.js` |
 | Which mode a client gets, what each mode refuses | `repo:ota/sdk/src/internal/session.js` (`sessionModeOf`, `COOKIE_REFUSED_*`, `FETCH_INIT`) |
 | CSRF copy / re-fetch | `repo:ota/sdk/src/internal/session.js` (`sendWithCsrf`, `fetchCsrf`, `readCsrfCookie`) |
-| Automatic refresh, family sharing, rotation window | `repo:ota/sdk/src/internal/session.js` (`refreshCookies`, `refreshTokens`, `startRefresh`, `runRefresh`, `resolveRefresh`, `resolveAccess`, `ROTATION_WINDOW_MS`, `FAMILY_TOKENS_KEPT`) |
+| Automatic refresh, family sharing, rotation window | `repo:ota/sdk/src/internal/session.js` (`refreshCookies`, `underRefreshLock`, `COOKIE_REFRESH_LOCK`, `sendAgainWithCookies`, `refreshTokens`, `startRefresh`, `runRefresh`, `resolveRefresh`, `resolveAccess`, `ROTATION_WINDOW_MS`, `FAMILY_TOKENS_KEPT`) |
 | What a session result does to the client | `repo:ota/sdk/src/internal/session.js` (`adopt`, `noteRotation`) and `repo:ota/sdk/src/namespaces/auth.js` (`sessionCall`, `withoutSessionTokens`) |
 | Retries, back-off, `Retry-After`, timeouts, headers order | `repo:ota/sdk/src/internal/http.js` (`RETRY_STATUSES`, `BACKOFF_*`, `MAX_RETRY_AFTER_SECONDS`, `headersOf`) |
 | Status/code → error class, fallback codes, `retryable` | `repo:ota/sdk/src/internal/errors.js` (`errorClassFor`, `fallbackCode`) and `repo:ota/sdk/src/shared.js` (`isRetryable`, `SECRET_KEY_NAME`, `SECRET_IN_TEXT`) |

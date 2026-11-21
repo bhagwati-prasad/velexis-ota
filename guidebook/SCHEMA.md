@@ -5,7 +5,7 @@ root.
 Its reader is the owner, who will walk through every application to find bugs (UI bugs, wrong data, DB fixes). So
 every page must answer: what is this, how do I use it, what should happen, where is the code, which tables change.
 
-Principles: concise but thorough; accurate to the CODE at the commit named in `site.json` (`a68a8cd8`; code beats
+Principles: concise but thorough; accurate to the CODE at the commit named in `site.json` (`f72d3f2a`; code beats
 docs when they disagree; say so); modular (one concern per file, content separate from code, adding an app = adding a
 folder); no secrets (development seed passwords that are already committed in the repo may be quoted, marked
 "development only"); placeholder hosts only (`*.example.com`, `localhost` for local development).

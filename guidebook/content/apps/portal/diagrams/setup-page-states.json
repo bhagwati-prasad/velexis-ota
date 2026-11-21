@@ -81,7 +81,7 @@
     {
       "from": "failed",
       "to": "running",
-      "label": "owner retries (retryProvisioning)"
+      "label": "owner retries (retryProvisioning; at the tenant limit the set-up stays failed and shows the limit message)"
     },
     {
       "from": "payment",

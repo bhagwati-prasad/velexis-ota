@@ -2,7 +2,7 @@
   "id": "cookie-session-states",
   "type": "state",
   "title": "The shared refresh state of a cookie-mode client family",
-  "caption": "RefreshState in internal/session.js (generation, refreshing, fetchingCsrf), shared by the storefront's root client and every client derived from it with withOptions. The browser holds the session in httpOnly cookies (__Host-vx_at, __Host-vx_rt, __Host-vx_bt); JavaScript only reads __Host-vx_csrf.",
+  "caption": "RefreshState in internal/session.js (generation, refreshedAt, refreshing, force, fetchingCsrf), shared by the storefront's root client and every client derived from it with withOptions. The browser holds the session in httpOnly cookies (__Host-vx_at, __Host-vx_rt, __Host-vx_bt); JavaScript only reads __Host-vx_csrf.",
   "states": [
     { "id": "idle", "label": "idle (generation n)", "kind": "initial" },
     {
@@ -15,7 +15,7 @@
       "id": "refreshing",
       "label": "refreshing cookies",
       "kind": "normal",
-      "detail": "One `POST /v1/auth/refresh` with an empty body and `X-CSRF-Token`, sent with the root client's transport settings, whichever client started it."
+      "detail": "One `POST /v1/auth/refresh` with an empty body and `X-CSRF-Token`, sent with the root client's transport settings, whichever client started it, under the origin's Web Lock velexis-sdk:cookie-refresh (a tab that found it held sends no refresh: its calls are sent again first)."
     },
     {
       "id": "next",

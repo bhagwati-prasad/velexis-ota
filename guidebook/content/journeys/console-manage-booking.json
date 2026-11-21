@@ -42,7 +42,7 @@
       "title": "Read the timeline and add a staff note",
       "url": "http://localhost:3002/bookings/bkg_…",
       "actions": "Open the manual-review booking. Read its tabs (Overview, Travellers and contacts, Amadeus order, Tickets and documents, Payments, Timeline and notes, Staff actions). On **Timeline and notes**, under **Add a note**, write a short note and press **Add note**. Then add a note that contains a test card number such as `4111 1111 1111 1111`.",
-      "expect": "\"Note added.\"; the note appears in the timeline marked Internal and never on the storefront's booking page. The note with the card number is accepted too (\"Note added.\") and stored as typed: a known security gap (only the reconciliation-review note refuses a card number, *A note never holds a card number: remove it.*); report it.",
+      "expect": "\"Note added.\"; the note appears in the timeline marked Internal and never on the storefront's booking page. The note with the card number is refused at the field (*A note never holds a card number: remove it.*) and nothing is stored or sent.",
       "data": "`SELECT type, actor_type, summary, visible_to_customer FROM tenant_<key>.booking_events WHERE booking_id = 'bkg_…' ORDER BY created_at DESC LIMIT 3;` → `staff.note` rows with `visible_to_customer = false`; the card-number note's `summary` holds the whole number. `staff_actions` `booking.note` with the note id only.",
       "code": [
         "ota/admin/src/app/(console)/bookings/[bookingId]/note-form.tsx",

@@ -164,7 +164,7 @@ seq-search-price
 | `POST …/issuance` | `bookings:issue` | Captures first, then issues; `allowUnpaid` owner/admin only; airline card only with `other` CASH/ACCOUNT; `409 BOOKING_NOT_MODIFIABLE` (`cancellation_pending`) |
 | `POST …/cancellation` | `bookings:cancel` | Release/void only; refund `none`/`full`/`amount`; a waiting customer request → `409` (`pending`) |
 | `POST …/review-closure` | `bookings:cancel` | Closes a [[reconcile-outcome]] `manual_review`: order found (record locator must carry the [[velexis-remark]]) or not booked |
-| `POST …/resync`, `POST …/notes` | `bookings:write` | Flight Order Management GET (`429` within 10 s of the last refresh); note = `booking_events` row `staff.note`, staff-only unless `visibleToCustomer`, text stored as typed (no card-number check). Finance cannot add notes (`403`), although the contract's description says it may |
+| `POST …/resync`, `POST …/notes` | `bookings:write` | Flight Order Management GET (`429` within 10 s of the last refresh); note = `booking_events` row `staff.note`, staff-only unless `visibleToCustomer`; a text that holds a card number is refused (`400 VALIDATION_FAILED`, `card_data` at `/text`). Finance cannot add notes (`403`), although the contract's description says it may |
 | `GET /v1/console/bookings/by-record-locator`, `POST …/imports`, `GET …/{id}/amadeus-order` | `bookings:read` / `bookings:write` | [[pnr-import]] with [[office-isolation]] (`403 OFFICE_NOT_ALLOWED`, `409 ORDER_ALREADY_IMPORTED`); verbatim order (audited `order.retrieve`) |
 
 ### Console queues, customers, supplier log, raw Amadeus — `repo:ota/backend/src/console`
@@ -374,13 +374,15 @@ tenant table, Redis key, BullMQ job or log line; `payments` keeps `card_brand`, 
 `supplier_requests.request_body` shows the card as brand + last 4. The completion's body over 10 KB → `400 INVALID_REQUEST` (`body_too_large`) before anything is read.
 ```
 
-```warning
-**Staff notes accept card numbers.** Only the review-closure note refuses a card number (`holdsCardNumber`,
-`400 VALIDATION_FAILED` "A note never holds a card number: remove it."). `POST /v1/console/bookings/{id}/notes` and the
-`note` of `POST /v1/console/bookings/imports` store the text as typed in `booking_events.summary` and `data` (the shared
-redactor does not look inside free text), and with `visibleToCustomer: true` the customer's timeline shows it. Try
-`4111 1111 1111 1111` as a note, then `SELECT summary FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER
-BY created_at DESC LIMIT 1;`.
+```note
+**Card numbers in staff free text are refused.** Every console note, reason and remark answers `400 VALIDATION_FAILED`
+with `card_data` at its pointer ("A note never holds a card number: remove it.", or "A reason …" / "A remark …") when
+it holds a card number (12 to 19 digits, grouped by single spaces or dashes or not, that start with 2 to 6 and pass the
+Luhn check), before the idempotency key is claimed and before anything is stored or sent to Amadeus; the audit keeps one
+`failed` row with the action and target only (`repo:ota/backend/src/common/http/card-free-text.ts`). The review-closure
+note is checked with its outcome rules, after the key is claimed. Try `4111 1111 1111 1111` as a note: `400`, and
+`SELECT summary FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER BY created_at DESC LIMIT 1;` shows no
+such row.
 ```
 
 ```bug-hunt

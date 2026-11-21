@@ -7,8 +7,8 @@
     {
       "title": "Add new env variables first",
       "actor": "Developer",
-      "body": "If the release's `deploy/env/*.env.example` gained a name, add it to `/etc/velexis/<app>.env` (empty is fine). `sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh --only envfiles --templates <new release>/deploy/env` lists gaps.",
-      "expect": "No `env files lack variables` refusal later."
+      "body": "If the release's `deploy/env/*.env.example` gained a name, add it to `/etc/velexis/<app>.env` (empty is fine). `sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh --only envfiles --templates <new release>/deploy/env` lists gaps and values still at `CHANGE_ME`.",
+      "expect": "No `env files lack variables` or `CHANGE_ME placeholders` refusal later."
     },
     {
       "title": "Run the workflow",

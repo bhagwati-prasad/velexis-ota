@@ -217,10 +217,11 @@ fields; `bookings.lookup` and `checkout.complete` resolve `bookingToken: null` (
 only; for `checkout.complete*` it relies on the API's edge answer, so a token there is an API bug). A page with the
 currency switcher and fare rules open (three clients of one family) must send **one** `POST /api/v1/auth/refresh` per
 expiry ([[customer-session]] rotation), never two with the same refresh cookie: two would show up as
-`customer_sessions.revoke_reason = 'rotation_reuse'` and a signed-out customer. **Two tabs are two families**: nothing
-de-duplicates their refreshes, so try two tabs signed in as one customer that both call the API right after
-`__Host-vx_at` expires (for example, delete it once in DevTools, the cookie jar is shared, then reload both tabs at
-the same moment) and check whether the customer is signed out.
+`customer_sessions.revoke_reason = 'rotation_reuse'` and a signed-out customer. **Two tabs are two families**, but their
+cookie refreshes run one at a time under the origin's Web Lock `velexis-sdk:cookie-refresh`. Sign one customer in on
+two tabs, delete `__Host-vx_at` once in DevTools (the cookie jar is shared) and reload both tabs at the same moment:
+only one `POST /api/v1/auth/refresh` goes out and the customer stays signed in. While the first tab refreshes,
+`navigator.locks.query()` in the second tab shows its pending request.
 ```
 
 ```bug-hunt

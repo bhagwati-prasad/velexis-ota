@@ -492,10 +492,12 @@ Stuck `pending` rows point at the `ota-notifications` queue or SMTP; check `redi
 out. `SELECT family_id, remember_me, family_expires_at, revoked_at, revoke_reason FROM tenant_demo.customer_sessions ORDER BY created_at DESC LIMIT 5;`
 Sign out everywhere must revoke every family of the customer.
 
-**Two tabs, one customer.** The SDK de-duplicates refreshes only inside one page; two tabs are two families. Sign in,
-open the same customer in two tabs, delete `__Host-vx_at` in DevTools and reload both tabs at the same moment. If both
-send `POST /api/v1/auth/refresh` with the same `__Host-vx_rt`, the API treats the second as a reuse and revokes the
-family (`revoke_reason = 'rotation_reuse'`): both tabs show "Sign in" again.
+**Two tabs, one customer.** The SDK de-duplicates refreshes inside one page. Across the tabs of one origin it runs
+every refresh under the Web Lock `velexis-sdk:cookie-refresh`. Sign in, open the same customer in two tabs, delete
+`__Host-vx_at` in DevTools and reload both tabs at the same moment. Exactly one `POST /api/v1/auth/refresh` must go
+out, the other tab sends its calls again with the new access cookie, and both tabs stay signed in (`revoke_reason`
+stays empty). Two refreshes with the same `__Host-vx_rt` (possible only without Web Locks: an insecure context or an
+old browser) would be a reuse that revokes the family.
 ```
 
 ```bug-hunt

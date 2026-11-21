@@ -216,8 +216,9 @@ ota-api/payment-states
   role cannot do, for clarity only.
 - **Uploads**: 2 MB server action body limit (Caddy caps the admin host at 10 MB); SVG and files above 1 MB refused
   before any call; the API sniffs bytes.
-- **Free text**: only the review closure's note is checked for a card number (`holdsCardNumber` of
-  `repo:ota/backend/src/console/review-closure.service.ts`); staff notes, reasons and remarks are stored as typed.
+- **Free text**: a note, reason or remark that holds a card number is refused at its field by the server action
+  before any call (`repo:ota/admin/src/lib/card-text.ts`, `holdsCardNumber` of `@velexis/logger`) and by the API
+  (`card_data`).
 - **Template preview** in `<iframe sandbox="" srcdoc>`: no scripts, no same-origin.
 - **Logging**: one line per SDK response (method, path without query, status, request id, duration); never bodies,
   cookies or tokens.

@@ -16,7 +16,7 @@ Rules for every package (`repo:packages/README.md`): name `@velexis/<folder>`, `
 | Package | Entry points (`exports`) | Key source | Build / test |
 |---|---|---|---|
 | `@velexis/config` | `.` | `repo:packages/config/src/define-config.ts`, `env.ts`, `key-files.ts`, `dev-env-files.ts` | `pnpm --filter @velexis/config build` / `test` |
-| `@velexis/logger` | `.` | `repo:packages/logger/src/create-logger.ts`, `http.ts`, `redact-paths.ts`, `redact-payload.ts`, `mask.ts` | `… @velexis/logger test` |
+| `@velexis/logger` | `.` | `repo:packages/logger/src/create-logger.ts`, `http.ts`, `redact-paths.ts`, `redact-payload.ts`, `mask.ts`, `card-number.ts` | `… @velexis/logger test` |
 | `@velexis/crypto` | `.` | `repo:packages/crypto/src/envelope.ts`, `local-file-key-provider.ts`, `rewrap-batch.ts`, `signed-url.ts`, `ids.ts` | `… @velexis/crypto test` |
 | `@velexis/db` | `.`, `./migrate`, `./storage` | `repo:packages/db/src/tenant-db.ts`, `pool.ts`, `migrate/`, `cli/migrate.ts`, `storage/` | `test`, `test:int`, `migrate`, `migrate:tenants`, `codegen` |
 | `@velexis/errors` | `.` | `repo:packages/errors/src/app-error.ts`, `envelope.ts`, `generated/catalogue.ts` | `generate`, `test` |
@@ -324,6 +324,7 @@ ADR-0015's levels: unit (`*.test.ts`), integration (`test/integration/**/*.int.t
 | What gets redacted in logs | `repo:packages/logger/src/redact-paths.ts` + `repo:packages/logger/src/redaction.test.ts` |
 | What gets redacted in stored payloads | `repo:packages/logger/src/redact-payload.ts` + `repo:packages/logger/src/redact-payload.test.ts` |
 | Request id, per-request log line, health-path skipping | `repo:packages/logger/src/http.ts` |
+| Whether a free text holds a card number (`holdsCardNumber`, the console's `card_data` refusal) | `repo:packages/logger/src/card-number.ts` + `repo:packages/logger/src/card-number.test.ts` |
 | Envelope format, AAD rules | `repo:packages/crypto/src/envelope.ts`, `repo:packages/crypto/src/aad.ts` |
 | KEK loading, file rules | `repo:packages/crypto/src/local-file-key-provider.ts` |
 | Re-wrap paging / reports | `repo:packages/crypto/src/rewrap-batch.ts`; callers `repo:platform/backend/src/secrets/rewrap.command.ts`, `repo:ota/backend/src/secrets/rewrap.command.ts` |

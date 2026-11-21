@@ -132,7 +132,7 @@ expected result and your notes as "Actual". Check [Known issues](#/issues) befor
 
 ## Status and sources of truth
 
-- The code at commit `a68a8cd8` is the reference for this guide. Where a document and the code disagree, the guide
+- The code at commit `f72d3f2a` is the reference for this guide. Where a document and the code disagree, the guide
   follows the code and says so.
 - The planning documents (milestones M0 to M6, task ids such as `PBE-`, `OBE-`, `PFE-`, `OAD-`, `OFE-`, `SDK-`, `X-`) are
   in `repo:docs/mvp/README.md`, `repo:platform/docs/plans` and `repo:ota/docs/plans`.

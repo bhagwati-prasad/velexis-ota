@@ -46,7 +46,7 @@
     {
       "from": "sdk",
       "to": "sdk",
-      "label": "refreshCookies: no refresh in flight and generation unchanged → start ONE refresh (root client's transport settings)",
+      "label": "refreshCookies: no refresh in flight and generation unchanged → start ONE refresh (root client's transport settings) under the origin's Web Lock velexis-sdk:cookie-refresh (another tab holding it: wait, then send the calls again without a refresh)",
       "kind": "self"
     },
     {
@@ -61,7 +61,12 @@
       "label": "200 AuthSessionInfo + new __Host-vx_at / __Host-vx_rt",
       "kind": "return"
     },
-    { "from": "sdk", "to": "sdk", "label": "generation += 1; both waiting calls resume", "kind": "self" },
+    {
+      "from": "sdk",
+      "to": "sdk",
+      "label": "generation += 1; lock released; both waiting calls resume",
+      "kind": "self"
+    },
     {
       "from": "sdk",
       "to": "caddy",
