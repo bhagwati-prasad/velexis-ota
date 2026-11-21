@@ -98,6 +98,25 @@
 #       beside the placeholder, an optional file's variable) -> refusal before anything changes, every file:VARIABLE
 #       named and no value printed, also for a release already on the VM; with the values filled in, a commented line
 #       that holds CHANGE_ME (the templates' own header comments included) deploys;
+#   18. a release without one of its migration sets (KI-035, every check ends with [FIX-W68-DEPLOYSCRIPT AC1]): an
+#       upload with db/dist/cli/migrate.js but without migrations/platform, reference or tenant -> refusal naming the
+#       set before anything changes, also for a set folder that is a symbolic link (its SQL would escape SHA256SUMS)
+#       and for a release already on the VM; pack-release.sh, run as it is from a copy
+#       in a small workspace (a stand-in pnpm and build-caddy.sh), packs all three sets beside the migration CLI with
+#       every file in SHA256SUMS, and fails naming a missing set folder before it packs anything;
+#   19. --status while a deploy holds the lock (KI-038, [FIX-W68-DEPLOYSCRIPT AC3]): it prints the status, exits 0 and
+#       writes nothing to deploy.log, while a deploy is still refused ("another deploy is running");
+#   20. the rollback's checks of its target (KI-041, [FIX-W68-DEPLOYSCRIPT AC4]): --rollback to a release whose
+#       template names a variable the env files no longer have -> refusal naming file:VARIABLE, nothing changed; a
+#       target built on another Node major is not refused (ADR-0029 item 10, D12), only noted; an unhealthy release
+#       whose automatic rollback target lacks a variable stays current, nothing switched back, the message naming both
+#       releases, the reason and the way back, which then works;
+#   21. a failed redeploy of the active release (KI-042, [FIX-W68-DEPLOYSCRIPT AC5]): no rollback, exit 1, the message
+#       names --rollback and the release before it in deploy-history, or says that the history names none;
+#   22. CHANGE_ME in every assignment systemd's EnvironmentFile= reads (lead decision (37m), [FIX-W68-DEPLOYSCRIPT
+#       AC6]): indented, blanks around '=', tab-indented, continued and two-line quoted assignments are refused, each
+#       named, no value shown; indented comments (# and ;) deploy; deploy.sh, check-vm.sh and provision-vm.sh hold the
+#       same placeholder_names;
 #   and over the whole run: no DSN or secret of the env files in any output, command line or log, no unit used
 #   without a daemon-reload after its file changed, and no call that fake-systemctl.sh does not know.
 #
@@ -458,6 +477,11 @@ JS
       migrate-fail=*) printf '%s\n' "${opt#migrate-fail=}" >"$dir/FAKE_MIGRATE_FAIL" ;;
       node=*) node="${opt#node=}" ;;
       env-var=*) v="${opt#env-var=}"; printf '%s=\n' "${v#*:}" >>"$dir/deploy/env/${v%%:*}.env.example" ;;
+      env-drop=*) # a variable the release's template no longer names (renamed or removed, KI-041)
+        v="${opt#env-drop=}"
+        grep -q "^${v#*:}=" "$dir/deploy/env/${v%%:*}.env.example" || die "make_release: ${v%%:*}.env.example has no ${v#*:}"
+        sed -i "/^${v#*:}=/d" "$dir/deploy/env/${v%%:*}.env.example" ;;
+      no-migrations=*) rm -rf "${dir:?}/migrations/${opt#no-migrations=}" ;; # a release packed without a set (KI-035)
       optional-template=*)
         printf '# Optional overrides; nothing is required.\n# X023_OPTIONAL=1\n' \
           >"$dir/deploy/env/${opt#optional-template=}.env.example" ;;
@@ -1534,6 +1558,290 @@ r30_live() { rc_is 0 && current_is "$R30" && unit_marker_is r30 && caddy_marker_
 check "with real values and CHANGE_ME only in comments (a commented-out line, the optional file, the templates' header comments), r30 deploys [FIX-W67-KI004 AC3]" \
   all_of header_comments_hold_it r30_live
 rm -f "$ETC/platform-worker.env"
+
+# ---- 18. a release without one of its migration sets (KI-035) ---------------------------------------------------
+step "18. A release with the migration CLI but without one of its migration sets: refused before anything changes; pack-release.sh fails"
+r30_current_unchanged() { current_is "$R30" && nothing_changed; }
+for set in platform reference tenant; do
+  make_release "r31-$set" "no-migrations=$set"
+  R31="$BUILT"
+  upload "$R31"
+  FP_BEFORE="$(fingerprint "$ROOT")"
+  deploy "$R31"
+  lacks_set() {
+    rc_is 1 && output_has "release lacks migrations/$set (a release with the migration CLI needs migrations/platform, migrations/reference and migrations/tenant). Nothing was changed."
+  }
+  r31_waits() { [ -d "$SRV/incoming/$R31" ] && [ ! -e "$SRV/releases/$R31" ] && [ ! -e "$LIB/system/$R31" ]; }
+  check "an upload without migrations/$set is refused, exit 1, naming it, with 'Nothing was changed.' [FIX-W68-DEPLOYSCRIPT AC1]" \
+    lacks_set
+  check "nothing changed: current is r30, no snapshot, unit, Caddyfile, root script, migration or systemctl call; the upload waits [FIX-W68-DEPLOYSCRIPT AC1]" \
+    all_of r30_current_unchanged nothing_ran r31_waits
+  rm -rf "${SRV:?}/incoming/$R31"
+done
+# A set folder that is a symbolic link counts as missing: SHA256SUMS lists regular files only, so the SQL behind the
+# link would run without its checksum ever being verified.
+make_release r31-link no-migrations=tenant
+R31="$BUILT"
+ln -s "$SRV/releases/$R30/migrations/tenant" "$BUILD/$R31/migrations/tenant"
+upload "$R31"
+FP_BEFORE="$(fingerprint "$ROOT")"
+deploy "$R31"
+set=tenant
+check "an upload whose migrations/tenant is a symbolic link (to r30's) is refused the same way, changing nothing [FIX-W68-DEPLOYSCRIPT AC1]" \
+  all_of lacks_set r30_current_unchanged nothing_ran r31_waits
+rm -rf "${SRV:?}/incoming/$R31"
+# A release already on the VM that lost a set (copied there before this check existed) is refused the same way.
+chmod u+w "$SRV/releases/$R30/migrations"
+mv "$SRV/releases/$R30/migrations/reference" "$PREFIX/r30-reference"
+FP_BEFORE="$(fingerprint "$ROOT")"
+deploy "$R30"
+set=reference
+check "re-deploying r30, already on the VM, without migrations/reference is refused the same way, changing nothing [FIX-W68-DEPLOYSCRIPT AC1]" \
+  all_of lacks_set r30_current_unchanged nothing_ran
+mv "$PREFIX/r30-reference" "$SRV/releases/$R30/migrations/reference"
+chmod u-w "$SRV/releases/$R30/migrations"
+
+# pack-release.sh, run as it is from a copy in a small workspace: the migration sets of the repository, the migration
+# CLI's package.json, a stand-in for build-caddy.sh and a pnpm on PATH that only records `pnpm deploy` and writes a
+# package. Nothing else of the repository is needed: every app the workspace lacks is skipped, as pack-release.sh does.
+PACK_WS="$PREFIX/pack-ws"
+mkdir -p "$PACK_WS/deploy/scripts" "$PACK_WS/deploy/caddy/build" "$PACK_WS/packages/db" "$PACK_WS/bin"
+cp "$DEPLOY/scripts/pack-release.sh" "$PACK_WS/deploy/scripts/pack-release.sh"
+printf '{ "name": "@velexis/db", "private": true }\n' >"$PACK_WS/packages/db/package.json"
+cat >"$PACK_WS/deploy/caddy/build/build-caddy.sh" <<'SH'
+#!/usr/bin/env bash
+# deploy.test.sh's build-caddy.sh: writes a stand-in binary into the output folder.
+set -euo pipefail
+mkdir -p "$1"
+printf '#!/bin/sh\necho fake caddy\n' >"$1/caddy"
+chmod 0755 "$1/caddy"
+SH
+cat >"$PACK_WS/bin/pnpm" <<'SH'
+#!/usr/bin/env bash
+# deploy.test.sh's pnpm for pack-release.sh: `pnpm --filter <name> deploy --prod <dest>` writes a package into <dest>.
+set -euo pipefail
+printf '%s\n' "$*" >>"$PACK_LOG"
+[ "${1:-}" = --filter ] && [ "${3:-}" = deploy ] && [ "${4:-}" = --prod ] || { echo "fake pnpm: unexpected $*" >&2; exit 2; }
+mkdir -p "$5/dist/cli"
+printf '{ "name": "%s" }\n' "$2" >"$5/package.json"
+printf '// fake migration CLI\n' >"$5/dist/cli/migrate.js"
+SH
+chmod 0755 "$PACK_WS/bin/pnpm"
+PACK_SHA="$(sha_of pack)"
+pack() { # -> PACK_RC, PACK_OUT (output of pack-release.sh); the release goes to $PACK_WS/out/<sha>
+  PACK_RC=0
+  PACK_OUT="$OUT/pack-$((RUNS + 1)).log"
+  RUNS=$((RUNS + 1))
+  env PATH="$PACK_WS/bin:$FAKEBIN:$PATH" PACK_LOG="$PACK_WS/pnpm.log" RELEASE_SHA="$PACK_SHA" RELEASE_REF=deploy.test.sh \
+    bash "$PACK_WS/deploy/scripts/pack-release.sh" "$PACK_WS/out" </dev/null >"$PACK_OUT" 2>&1 || PACK_RC=$?
+}
+PACK_SETS=("platform platform/backend/migrations/platform" "reference platform/backend/migrations/reference"
+  "tenant ota/backend/migrations/tenant")
+for entry in "${PACK_SETS[@]}"; do
+  read -r set src <<<"$entry"
+  mkdir -p "$PACK_WS/$src"
+  printf -- '-- the %s baseline of the pack workspace\n' "$set" >"$PACK_WS/$src/0001_baseline.sql"
+done
+pack
+PACKED="$PACK_WS/out/$PACK_SHA"
+packed_all_sets() {
+  local entry set src
+  [ "$PACK_RC" = 0 ] || return 1
+  for entry in "${PACK_SETS[@]}"; do
+    read -r set src <<<"$entry"
+    same_file "$PACK_WS/$src/0001_baseline.sql" "$PACKED/migrations/$set/0001_baseline.sql" || return 1
+  done
+  (cd "$PACKED" && sha256sum --quiet --strict -c SHA256SUMS) && grep -q '\./db/dist/cli/migrate.js$' "$PACKED/SHA256SUMS"
+}
+check "pack-release.sh packs migrations/platform, migrations/reference and migrations/tenant beside the migration CLI, every file in SHA256SUMS [FIX-W68-DEPLOYSCRIPT AC1]" \
+  packed_all_sets
+for entry in "${PACK_SETS[@]}"; do
+  read -r set src <<<"$entry"
+  mv "$PACK_WS/$src" "$PACK_WS/$src.away"
+  rm -rf "${PACK_WS:?}/out" "$PACK_WS/pnpm.log"
+  pack
+  pack_refused() {
+    [ "$PACK_RC" = 1 ] &&
+      grep -qxF "ERROR: $src is missing: a release with the migration CLI (packages/db) needs migrations/$set, and velexis-deploy refuses one without it" "$PACK_OUT" &&
+      [ ! -e "$PACK_WS/out" ] && [ ! -e "$PACK_WS/pnpm.log" ]
+  }
+  check "pack-release.sh without $src fails (exit 1, naming it) before it packs anything: no release folder, no pnpm deploy [FIX-W68-DEPLOYSCRIPT AC1]" \
+    pack_refused
+  mv "$PACK_WS/$src.away" "$PACK_WS/$src"
+done
+
+# ---- 19. --status while a deploy holds the lock (KI-038) ---------------------------------------------------------
+step "19. velexis-deploy --status while a deploy holds the lock: the status, exit 0, nothing in deploy.log"
+# The test's own shell holds the lock, as a running deploy does (flock on its own open file of the lock).
+exec 8>"$LOCK"
+flock -n 8 || die "could not take $LOCK for the test"
+cp -p "$LOGS/deploy.log" "$PREFIX/deploy.log.before"
+deploy --status
+status_during_deploy() {
+  rc_is 0 && output_has "current: $SRV/releases/$R30" && [ "$(grep -c ' active$' "$DEPLOY_LOG")" = 7 ] &&
+    not output_has "ERROR"
+}
+log_untouched() { same_file "$PREFIX/deploy.log.before" "$LOGS/deploy.log"; }
+check "--status during a deploy prints current releases/r30 and seven active units, exits 0, and prints no ERROR [FIX-W68-DEPLOYSCRIPT AC3]" \
+  status_during_deploy
+check "--status writes nothing to deploy.log (no 'ERROR: another deploy is running') [FIX-W68-DEPLOYSCRIPT AC3]" log_untouched
+upload "$R30"
+deploy "$R30"
+locked_out() { rc_is 1 && output_has "ERROR: another deploy is running"; }
+check "a deploy during the other one's lock is still refused: 'another deploy is running', exit 1 [FIX-W68-DEPLOYSCRIPT AC3]" \
+  locked_out
+rm -rf "${SRV:?}/incoming/$R30"
+flock -u 8
+exec 8>&-
+
+# ---- 20. the rollback's checks of its target (KI-041) ------------------------------------------------------------
+step "20. --rollback and the automatic rollback check their target's env templates first and refuse before switching; another Node major is only noted"
+OTA_ENV="$ETC/ota-backend.env"
+# r35's template renames TRUST_PROXY to X068_RENAMED; the developer adds the new name and removes the old one.
+make_release r35 unit=r35 caddy=r35 env-var=ota-backend:X068_RENAMED env-drop=ota-backend:TRUST_PROXY
+R35="$BUILT"
+upload "$R35"
+printf 'X068_RENAMED=\n' >>"$OTA_ENV"
+cp -p "$OTA_ENV" "$PREFIX/ota-backend.env.both"
+sed -i '/^TRUST_PROXY=/d' "$OTA_ENV"
+deploy "$R35"
+r35_live() { rc_is 0 && current_is "$R35" && unit_marker_is r35 && serving "$R35"; }
+check "r35, whose template renamed TRUST_PROXY, deploys with the new name only [FIX-W68-DEPLOYSCRIPT AC4]" r35_live
+r35_untouched() { current_is "$R35" && nothing_changed; }
+FP_BEFORE="$(fingerprint "$ROOT")"
+deploy --rollback
+rollback_env_refused() {
+  rc_is 1 &&
+    output_has "rollback to $R30 refused: env files lack variables of release $R30's templates: ota-backend.env:TRUST_PROXY (add them to /etc/velexis, empty is allowed). Nothing was changed." &&
+    not output_has "ROLLBACK to"
+}
+check "--rollback to r30, whose template still names TRUST_PROXY, is refused naming ota-backend.env:TRUST_PROXY, exit 1 [FIX-W68-DEPLOYSCRIPT AC4]" \
+  rollback_env_refused
+check "nothing changed: current is r35, no unit, Caddyfile or snapshot staged, no systemctl call [FIX-W68-DEPLOYSCRIPT AC4]" \
+  all_of r35_untouched nothing_ran
+# r30's RELEASE.json as if it had been built with another Node major (the VM's Node changed since it ran): a rollback
+# across majors is not refused (ADR-0029 item 10, decision D12: every native module is N-API), only noted in the log;
+# with TRUST_PROXY back, r30's env check passes.
+cp -p "$PREFIX/ota-backend.env.both" "$OTA_ENV"
+cp -p "$SRV/releases/$R30/RELEASE.json" "$PREFIX/r30-RELEASE.json"
+chmod u+w "$SRV/releases/$R30/RELEASE.json"
+sed -i -E 's/"node": "[^"]*"/"node": "v18.20.4"/' "$SRV/releases/$R30/RELEASE.json"
+chmod u-w "$SRV/releases/$R30/RELEASE.json"
+deploy --rollback
+rollback_across_majors() {
+  rc_is 0 &&
+    output_has "note: release $R30 was built with Node v18 and the VM runs $VM_NODE; a rollback does not refuse that (ADR-0029 item 10, D12: every native module is N-API)" &&
+    output_has "ROLLBACK to $R30" && current_is "$R30" && all_active && serving "$R30"
+}
+check "--rollback to r30, whose RELEASE.json names Node v18, is not refused (ADR-0029 D12): it notes both majors, switches, and every unit answers for r30 [FIX-W68-DEPLOYSCRIPT AC4]" \
+  rollback_across_majors
+chmod u+w "$SRV/releases/$R30/RELEASE.json"
+cp "$PREFIX/r30-RELEASE.json" "$SRV/releases/$R30/RELEASE.json"
+chmod u-w "$SRV/releases/$R30/RELEASE.json"
+deploy "$R35"
+check "re-deploying r35 (already on the VM) makes it current again [FIX-W68-DEPLOYSCRIPT AC4]" r35_live
+# The automatic rollback: r36 (the repository's templates, without X068_RENAMED) is unhealthy, and the developer has
+# removed X068_RENAMED, which r35, the release it would roll back to, still needs.
+make_release r36 unit=r36 caddy=r36 unhealthy
+R36="$BUILT"
+upload "$R36"
+sed -i '/^X068_RENAMED=/d' "$OTA_ENV"
+deploy "$R36"
+auto_refused() {
+  rc_is 1 &&
+    output_has "deploy of $R36 failed health checks, and the automatic rollback to $R35 was refused before anything was switched back: env files lack variables of release $R35's templates: ota-backend.env:X068_RENAMED (add them to /etc/velexis, empty is allowed). $R36 stays current (the units restarted so far run it, the first unhealthy one is down); fix that, then run: sudo velexis-deploy --rollback (to $R35), or deploy a release that works" &&
+    not output_has "ROLLBACK to"
+}
+r36_stays() {
+  current_is "$R36" && [ "$(restart_order)" = velexis-platform-worker ] && every_restart_of "$R36" &&
+    [ "$(calls_matching '^daemon-reload')" = 1 ] && unit_marker_is r36 && caddy_marker_is r35 && no_staged_caddyfile &&
+    history_ends_with "$R35" && ! grep -q " $R36" "$LIB/deploy-history"
+}
+check "an unhealthy r36 whose rollback target r35 lacks ota-backend.env:X068_RENAMED: exit 1, the message names both releases, the reason and the way back [FIX-W68-DEPLOYSCRIPT AC4]" \
+  auto_refused
+check "nothing was switched back: r36 stays current with its units, only its first unit restarted, r35's Caddyfile stays live, r36's staged one is dropped, no history entry [FIX-W68-DEPLOYSCRIPT AC4]" \
+  r36_stays
+printf 'X068_RENAMED=\n' >>"$OTA_ENV"
+deploy --rollback
+back_to_r35() { rc_is 0 && output_has "ROLLBACK to $R35" && current_is "$R35" && all_active && serving "$R35"; }
+check "with X068_RENAMED back, the --rollback the message names goes back to r35, and every unit answers for it [FIX-W68-DEPLOYSCRIPT AC4]" \
+  back_to_r35
+
+# ---- 21. a failed redeploy of the active release (KI-042) --------------------------------------------------------
+step "21. Re-deploying the active release r35, which now fails its health checks: no rollback, the way back named"
+chmod u+w "$SRV/releases/$R35"
+: >"$SRV/releases/$R35/FAKE_UNHEALTHY"
+chmod u-w "$SRV/releases/$R35"
+cp -p "$LIB/deploy-history" "$PREFIX/deploy-history.before"
+deploy "$R35"
+redeploy_failed() {
+  rc_is 1 &&
+    output_has "deploy of $R35 failed health checks; $R35 was already the active release, so nothing was rolled back and it stays current. To go back to the release before it ($R30 in $VM_ROOT/var/lib/velexis/deploy-history), run: sudo velexis-deploy --rollback" &&
+    not output_has "no other release was active" && not output_has "ROLLBACK to"
+}
+redeploy_no_rollback() {
+  current_is "$R35" && every_restart_of "$R35" && [ "$(restart_order)" = velexis-platform-worker ] &&
+    same_file "$PREFIX/deploy-history.before" "$LIB/deploy-history"
+}
+check "exit 1: r35 was already the active release, nothing was rolled back, and the message names --rollback and r30, the release before it in deploy-history [FIX-W68-DEPLOYSCRIPT AC5]" \
+  redeploy_failed
+check "no automatic rollback: r35 stays current, every restart was r35's, the history is unchanged [FIX-W68-DEPLOYSCRIPT AC5]" \
+  redeploy_no_rollback
+# With a deploy-history that names no release before r35 (as after a VM's first deploy), the message says so.
+printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$R35" >"$LIB/deploy-history"
+deploy "$R35"
+redeploy_failed_alone() {
+  rc_is 1 &&
+    output_has "deploy of $R35 failed health checks; $R35 was already the active release and $VM_ROOT/var/lib/velexis/deploy-history names no release before it, so there is nothing to roll back to" &&
+    not output_has "no other release was active" && not output_has "ROLLBACK to" && current_is "$R35"
+}
+check "exit 1: with no release before r35 in deploy-history, the message says there is nothing to roll back to, and r35 stays current [FIX-W68-DEPLOYSCRIPT AC5]" \
+  redeploy_failed_alone
+cp -p "$PREFIX/deploy-history.before" "$LIB/deploy-history"
+chmod u+w "$SRV/releases/$R35"
+rm -f "$SRV/releases/$R35/FAKE_UNHEALTHY"
+chmod u-w "$SRV/releases/$R35"
+deploy "$R35"
+check "healthy again, the same redeploy of r35 succeeds [FIX-W68-DEPLOYSCRIPT AC5]" r35_live
+
+# ---- 22. CHANGE_ME in every assignment systemd reads (lead decision (37m)) ---------------------------------------
+step "22. CHANGE_ME in indented, spaced, continued and quoted assignments: refused; in indented comments: deployed"
+make_release r37 unit=r37 caddy=r37
+R37="$BUILT"
+upload "$R37"
+for f in platform-backend.env alert.env; do cp -p "$ETC/$f" "$PREFIX/$f.filled"; done
+# systemd 255's EnvironmentFile= reads each of these as an assignment: blanks before the name and around '=', a value
+# continued with a backslash, and a double-quoted value over two lines (whose second line looks like a comment).
+printf '   SMTP_URL=smtps://CHANGE_ME_USER:p-%s@smtp.example.com:465\n' "$TOKEN" >>"$ETC/platform-backend.env"
+printf 'ALERT_SMTP_PASSWORD = CHANGE_ME\n' >>"$ETC/alert.env"
+( umask 077; printf '\tLOG_LEVEL=debug-CHANGE_ME\nX068_JOINED=abc\\\nCHANGE_ME\nX068_QUOTED="first\n# CHANGE_ME"\n' >"$ETC/platform-worker.env" )
+FP_BEFORE="$(fingerprint "$ROOT")"
+deploy "$R37"
+SPACED_NAMED="env files hold values still at the templates' CHANGE_ME placeholders: alert.env:ALERT_SMTP_PASSWORD platform-backend.env:SMTP_URL platform-worker.env:LOG_LEVEL platform-worker.env:X068_JOINED platform-worker.env:X068_QUOTED."
+spaced_refused() { rc_is 1 && output_has "$SPACED_NAMED" && output_has "Nothing was changed."; }
+spaced_no_value() { not output_has "p-$TOKEN" && not output_has "smtp.example.com" && not output_has "debug-CHANGE_ME"; }
+r35_current_unchanged() { current_is "$R35" && nothing_changed; }
+check "an indented SMTP_URL, 'ALERT_SMTP_PASSWORD = CHANGE_ME', a tab-indented LOG_LEVEL, a continued and a two-line quoted value are refused, each named as file:VARIABLE [FIX-W68-DEPLOYSCRIPT AC6]" \
+  spaced_refused
+check "no value shown, nothing changed, no systemctl call [FIX-W68-DEPLOYSCRIPT AC6]" \
+  all_of spaced_no_value r35_current_unchanged nothing_ran
+for f in platform-backend.env alert.env; do cp -p "$PREFIX/$f.filled" "$ETC/$f"; done
+printf '   # SMTP_URL=smtps://CHANGE_ME_USER:CHANGE_ME_PASSWORD@smtp.example.com:465\n' >>"$ETC/platform-backend.env"
+printf '\t; ALERT_SMTP_PASSWORD=CHANGE_ME\n' >>"$ETC/alert.env"
+( umask 077; printf '  # LOG_LEVEL=debug-CHANGE_ME\n\t# X068_JOINED=CHANGE_ME\n' >"$ETC/platform-worker.env" )
+deploy "$R37"
+r37_live() { rc_is 0 && current_is "$R37" && unit_marker_is r37 && serving "$R37"; }
+check "with CHANGE_ME only in indented comments (# and ;), r37 deploys [FIX-W68-DEPLOYSCRIPT AC6]" r37_live
+rm -f "$ETC/platform-worker.env"
+copies_identical() {
+  local f first=""
+  for f in deploy check-vm provision-vm; do
+    [ -n "$(sed -n '/^placeholder_names() {/,/^}/p' "$DEPLOY/scripts/$f.sh")" ] || return 1
+    [ -n "$first" ] || first="$(sed -n '/^placeholder_names() {/,/^}/p' "$DEPLOY/scripts/$f.sh")"
+    [ "$(sed -n '/^placeholder_names() {/,/^}/p' "$DEPLOY/scripts/$f.sh")" = "$first" ] || return 1
+  done
+}
+check "deploy.sh, check-vm.sh and provision-vm.sh hold the same placeholder_names [FIX-W68-DEPLOYSCRIPT AC6]" copies_identical
 
 # ---- over the whole run -----------------------------------------------------------------------------------------------------
 step "Over the whole run"

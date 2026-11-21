@@ -77,7 +77,9 @@
 #      check-vm.sh reports PASS for every env file, the templates' header comments that name CHANGE_ME included; a value
 #      still holding CHANGE_ME (the template's, one with a real secret beside the placeholder, one pasted into the
 #      optional platform-worker.env) gives one FAIL line per file naming its file:VARIABLE pairs and no value, and a
-#      commented-out line that holds CHANGE_ME passes.
+#      commented-out line that holds CHANGE_ME passes. Since lead decision (37m) ([FIX-W68-DEPLOYSCRIPT AC6]) every
+#      assignment systemd reads counts: an indented one, blanks around '=' and a continued value give FAIL and
+#      provision-vm.sh's warning names them; indented comments (# and ;) pass and raise no warning.
 #   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
 #      the same SHA-256 in both zone folders, leaves every other key file alone, restores a missing copy and refuses a
 #      malformed or lower version; after the runbook's end (MASTER_KEY_CURRENT=local:v2, master-v1.key removed from
@@ -1616,6 +1618,46 @@ else
   fail "a commented-out line and an optional file's comment that hold CHANGE_ME pass, beside real values [FIX-W67-KI004 AC3]"
 fi
 for f in ota-backend.env alert.env platform-worker.env; do cp -p "$PREFIX/$f.orig" "$ETC/$f"; rm -f "$PREFIX/$f.orig"; done
+# Lead decision (37m): every assignment systemd's EnvironmentFile= reads counts, so an indented one, one with blanks
+# around '=' and a value continued on the next line are refused like the others, by check-vm.sh and in
+# provision-vm.sh's warning (the same placeholder_names); indented comments are not.
+step "CHANGE_ME in indented and spaced assignments, and in indented comments (lead decision (37m))"
+for f in alert.env platform-worker.env; do cp -p "$ETC/$f" "$PREFIX/$f.orig"; done
+printf '  ALERT_SMTP_PASSWORD=CHANGE_ME\n' >>"$ETC/alert.env"
+printf 'LOG_LEVEL = debug-CHANGE_ME\n\tX068_TABBED=CHANGE_ME\nX068_JOINED=abc\\\nCHANGE_ME\n' >>"$ETC/platform-worker.env"
+FP_SPACED="$(fingerprint_all "$ETC")"
+if run_check "$OUT/placeholders-spaced.out" --only envfiles; then rc=0; else rc=$?; fi
+if [ "$rc" = 1 ] &&
+  grep -qxF "FAIL /etc/velexis/alert.env $PH_TAIL alert.env:ALERT_SMTP_PASSWORD$PH_FIX" "$OUT/placeholders-spaced.out" &&
+  grep -qxF "FAIL /etc/velexis/platform-worker.env $PH_TAIL platform-worker.env:LOG_LEVEL platform-worker.env:X068_TABBED platform-worker.env:X068_JOINED$PH_FIX" "$OUT/placeholders-spaced.out" &&
+  [ "$(grep -c '^FAIL' "$OUT/placeholders-spaced.out")" = 2 ] &&
+  ! grep -qF 'debug-CHANGE_ME' "$OUT/placeholders-spaced.out" && [ "$(fingerprint_all "$ETC")" = "$FP_SPACED" ]; then
+  pass "an indented assignment, blanks around '=', a tab-indented one and a continued value that hold CHANGE_ME give FAIL, each named, no value printed, no file changed [FIX-W68-DEPLOYSCRIPT AC6]"
+else
+  indent "$OUT/placeholders-spaced.out"
+  fail "indented, spaced and continued assignments that hold CHANGE_ME give FAIL, each named (exit $rc) [FIX-W68-DEPLOYSCRIPT AC6]"
+fi
+SPACED_WARNING="WARNING: fill in the CHANGE_ME values: alert.env:ALERT_SMTP_PASSWORD platform-worker.env:LOG_LEVEL platform-worker.env:X068_TABBED platform-worker.env:X068_JOINED (velexis-deploy refuses a release"
+if provision "$OUT/provision-spaced.log" envfiles && grep -qF "$SPACED_WARNING" "$OUT/provision-spaced.log" &&
+  ! grep -qF 'debug-CHANGE_ME' "$OUT/provision-spaced.log"; then
+  pass "provision-vm.sh --steps envfiles names the same four as file:VARIABLE, never a value [FIX-W68-DEPLOYSCRIPT AC6]"
+else
+  indent "$OUT/provision-spaced.log"
+  fail "provision-vm.sh --steps envfiles names the same four as file:VARIABLE, never a value [FIX-W68-DEPLOYSCRIPT AC6]"
+fi
+for f in alert.env platform-worker.env; do cp -p "$PREFIX/$f.orig" "$ETC/$f"; done
+printf '  # ALERT_SMTP_PASSWORD=CHANGE_ME\n\t; ALERT_SMTP_USER=CHANGE_ME\n' >>"$ETC/alert.env"
+printf '\t# LOG_LEVEL=debug-CHANGE_ME\n' >>"$ETC/platform-worker.env"
+if run_check "$OUT/placeholders-indented-comments.out" --only envfiles &&
+  grep -qx "PASS /etc/velexis/alert.env has no value still at a template's CHANGE_ME placeholder" "$OUT/placeholders-indented-comments.out" &&
+  grep -qx "PASS /etc/velexis/platform-worker.env has no value still at a template's CHANGE_ME placeholder" "$OUT/placeholders-indented-comments.out" &&
+  provision "$OUT/provision-indented-comments.log" envfiles && ! grep -q 'fill in the CHANGE_ME values' "$OUT/provision-indented-comments.log"; then
+  pass "indented comments (# and ;) that hold CHANGE_ME pass check-vm.sh and raise no warning in provision-vm.sh [FIX-W68-DEPLOYSCRIPT AC6]"
+else
+  indent "$OUT/placeholders-indented-comments.out" "$OUT/provision-indented-comments.log"
+  fail "indented comments (# and ;) that hold CHANGE_ME pass check-vm.sh and raise no warning in provision-vm.sh [FIX-W68-DEPLOYSCRIPT AC6]"
+fi
+for f in alert.env platform-worker.env; do cp -p "$PREFIX/$f.orig" "$ETC/$f"; rm -f "$PREFIX/$f.orig"; done
 
 # ---- 5. a master-key rotation (X-040, docs/mvp/runbooks/master-key-rotation.md) ------------------------------
 step "a master-key rotation: NEW_MASTER_KEY=v2, then master-v1.key removed"

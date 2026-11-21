@@ -144,7 +144,7 @@ describe("the baseline migrations", () => {
       ["node", "dist/cli/migrate.js", "platform", "--dir"],
       ["node", "dist/cli/migrate.js", "reference", "--dir"],
     ]);
-    // A missing folder would be an empty set (ADR-0021), so a wrong path would apply nothing without an error.
+    // migrate.js refuses a missing folder (KI-035, which revised ADR-0021's empty set); the paths must still be these.
     const dirs = commands.map((argv) => resolve(PACKAGE_DIR, argv[4] ?? ""));
     expect(dirs).toEqual([
       resolve(REPO, "platform/backend/migrations/platform"),

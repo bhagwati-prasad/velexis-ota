@@ -717,12 +717,15 @@ describe("runMigrations and migrate.js on PostgreSQL", () => {
     ]);
   });
 
-  it("prints a notice, applies nothing and creates no ledger for a missing --dir [X-011 AC7]", async () => {
+  // KI-035 (FIX-W68-DEPLOYSCRIPT): a missing --dir was an empty set (a notice, exit 0); it is now a usage error.
+  it("refuses a missing --dir with exit 1, applies nothing and creates no ledger [X-011 AC7] [FIX-W68-DEPLOYSCRIPT AC1]", async () => {
     const missing = join(await migrations({}), "platform");
     const run = await cli("platform", missing);
-    expect(run.code).toBe(0);
+    expect(run.code).toBe(1);
     expect(run.stdout).toBe("");
-    expect(run.stderr).toContain(`notice: the platform migrations folder ${missing} does not exist`);
+    expect(run.stderr).toContain(
+      `migrate: the platform migrations folder ${missing} does not exist; nothing was applied`,
+    );
     expect(await exists("platform.schema_migrations")).toBe(false);
   });
 

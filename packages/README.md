@@ -183,7 +183,7 @@ const booking = await tenantTx(tenants, "tenant_acme", async (trx) =>
   | `migrate.js tenants --dir <path> [--concurrency 4] [--max-failure-ratio 0.1] [--report file.json]` | Fan out over every tenant schema listed in `platform.tenants` |
   | `migrate.js tenant --schema tenant_<key> --dir <path> [--create]` | One schema (provisioning, tests) |
 
-  Exit codes: `0` ok, `1` error, `2` checksum mismatch, `3` failure ratio exceeded. A `--dir` that does not exist is an empty set (notice, exit 0). The tenant commands create objects with `SET LOCAL ROLE velexis_provisioner`, and the OTA worker calls the same library with `DATABASE_PROVISIONER_URL` ([ADR-0004](../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)).
+  Exit codes: `0` ok, `1` error, `2` checksum mismatch, `3` failure ratio exceeded. A `--dir` that does not exist is a usage error (exit 1, nothing applied; KI-035, until 2026-11-21 an empty set). The tenant commands create objects with `SET LOCAL ROLE velexis_provisioner`, and the OTA worker calls the same library with `DATABASE_PROVISIONER_URL` ([ADR-0004](../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)).
 - `src/generated/{platform,reference,tenant}.ts`: Kysely table types from `kysely-codegen` (`pnpm db:codegen`), committed.
 - `@velexis/db/storage`: `StorageAdapter` (`put`, `get`, `delete`, `signedUrl`) with `LocalDiskStorage` (atomic writes, mode 0600) ([ADR-0017](../docs/mvp/adr/0017-email-documents-storage.md)).
 

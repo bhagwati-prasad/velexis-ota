@@ -230,7 +230,9 @@ describe("migrate.js tenants and tenant without a database", () => {
     expect(MIGRATE_USAGE).toContain("tenant --schema tenant_<key> --dir <path> [--create]");
   });
 
-  it("prints a notice, applies nothing and exits 0 for a --dir that does not exist", async () => {
+  // KI-035 (FIX-W68-DEPLOYSCRIPT): a missing tenant migrations folder was an empty set (a notice, exit 0); it is now
+  // a usage error, like a missing --dir of the platform and reference sets.
+  it("refuses a --dir that does not exist as a usage error: exit 1, nothing applied, no connection [FIX-W68-DEPLOYSCRIPT AC1]", async () => {
     const missing = join(await folder(), "tenant");
     const fanOut = vi.fn(migrateTenants);
     const single = vi.fn(migrateTenantSchema);
@@ -246,9 +248,10 @@ describe("migrate.js tenants and tenant without a database", () => {
         migrateTenants: fanOut,
         migrateTenantSchema: single,
       });
-      expect(code).toBe(0);
+      expect(code).toBe(1);
       expect(err.text).toBe(
-        `migrate: notice: the tenant migrations folder ${missing} does not exist; it is an empty set and nothing was applied\n`,
+        `migrate: the tenant migrations folder ${missing} does not exist; nothing was applied (check --dir)\n\n` +
+          MIGRATE_USAGE,
       );
     }
     expect(stdout.text).toBe("");

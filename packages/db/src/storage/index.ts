@@ -19,13 +19,24 @@ export interface StorageAdapter {
 /** Builds the download URL of `key`, valid until `expiresAt` (the OTA backend signs it, ADR-0017). */
 export type UrlSigner = (key: string, expiresAt: Date) => string;
 
-/** The values of `STORAGE_DRIVER`; apps declare it with `env.enum(STORAGE_DRIVERS)`. */
-export const STORAGE_DRIVERS = ["local", "s3"] as const;
+/**
+ * The values of `STORAGE_DRIVER` that work; apps declare it with `env.enum(STORAGE_DRIVERS)`, so the configuration
+ * check refuses any other value ("STORAGE_DRIVER must be one of local") before a process starts (KI-036). A planned
+ * driver joins this list only together with its adapter.
+ */
+export const STORAGE_DRIVERS = ["local"] as const;
 export type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 
+/**
+ * Drivers that ADR-0017 plans but that have no adapter yet: not in `STORAGE_DRIVERS`, so no configuration selects
+ * one, and `createStorage` refuses them with a clear error should a caller pass one anyway.
+ */
+export const PLANNED_STORAGE_DRIVERS = ["s3"] as const;
+export type PlannedStorageDriver = (typeof PLANNED_STORAGE_DRIVERS)[number];
+
 export interface CreateStorageOptions {
-  /** `STORAGE_DRIVER`. */
-  readonly driver: StorageDriver;
+  /** `STORAGE_DRIVER` (a planned driver is refused). */
+  readonly driver: StorageDriver | PlannedStorageDriver;
   /** `STORAGE_DIR`: required by the `local` driver. */
   readonly dir?: string | undefined;
   /** URL signer for `signedUrl` (see `LocalDiskStorageOptions.signUrl`). */
@@ -33,8 +44,9 @@ export interface CreateStorageOptions {
 }
 
 /**
- * The storage adapter selected by configuration. `local` is the MVP; `s3` throws until an S3 adapter is
- * needed, so the move to object storage stays a configuration change plus that adapter (ADR-0017).
+ * The storage adapter selected by configuration. `local` is the MVP; `s3` (planned, not a `STORAGE_DRIVERS` value, so
+ * the configuration check already refuses it) throws until an S3 adapter is needed, so the move to object storage
+ * stays that adapter plus its entry in `STORAGE_DRIVERS` and a configuration change (ADR-0017).
  */
 export function createStorage(options: CreateStorageOptions): StorageAdapter {
   switch (options.driver) {

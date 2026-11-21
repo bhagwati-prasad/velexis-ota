@@ -1309,6 +1309,66 @@ step_database() {
     runuser -u postgres -- psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse -v db_name="$DB_NAME" -f - >/dev/null
 }
 
+# The same function as deploy.sh's and check-vm.sh's (deploy.test.sh compares the three copies).
+placeholder_names() { # env file -> the names of its variables whose value still holds CHANGE_ME, one per line
+  # Every assignment that systemd's EnvironmentFile= reads, as systemd 255 (Ubuntu 24.04, the VM) parses the file
+  # (parse_env_file_internal of src/basic/env-file.c, ported state for state): blanks before the name and around '='
+  # are allowed, a line whose first non-blank character is # or ; is a comment, a backslash joins the next line to a
+  # value, a quoted value may span lines, and only the names systemd keeps ([A-Za-z_][A-Za-z0-9_]*) count, so an
+  # indented or spaced assignment is refused too and a comment never is (KI-004, lead decision (37m)). The name is
+  # printed once, never the value, which may hold a real secret beside the placeholder; LC_ALL=C reads bytes, so a
+  # value that is not UTF-8 counts too.
+  LC_ALL=C awk '
+    function push() {
+      sub(/[ \t]+$/, "", key)
+      if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && index(value, "CHANGE_ME") && !(key in seen)) { seen[key] = 1; print key }
+      key = ""; value = ""
+    }
+    function blank(c) { return c == " " || c == "\t" || c == "\n" || c == "\r" }
+    function step(c) {
+      if (st == "pre-key") {
+        if (c == "#" || c == ";") st = "comment"
+        else if (!blank(c)) { st = "key"; key = c }
+      } else if (st == "key") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; key = "" }
+        else if (c == "=") { st = "pre-value"; value = "" }
+        else key = key c
+      } else if (st == "pre-value") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; push() }
+        else if (c == "\047") st = "single"
+        else if (c == "\"") st = "double"
+        else if (c == "\\") st = "escape"
+        else if (!blank(c)) { st = "value"; value = value c }
+      } else if (st == "value") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; push() }
+        else if (c == "\\") st = "escape"
+        else value = value c
+      } else if (st == "escape") {
+        st = "value"
+        if (c != "\n" && c != "\r") value = value c
+      } else if (st == "single") {
+        if (c == "\047") st = "pre-value"; else value = value c
+      } else if (st == "double") {
+        if (c == "\"") st = "pre-value"
+        else if (c == "\\") st = "double-escape"
+        else value = value c
+      } else if (st == "double-escape") {
+        st = "double"
+        if (index("\"\\`$", c)) value = value c
+        else if (c != "\n") value = value "\\" c
+      } else if (st == "comment") {
+        if (c == "\\") st = "comment-escape"
+        else if (c == "\n" || c == "\r") st = "pre-key"
+      } else {
+        st = (c == "\n" || c == "\r") ? "pre-key" : "comment"
+      }
+    }
+    BEGIN { st = "pre-key" }
+    { n = length($0); for (i = 1; i <= n; i++) step(substr($0, i, 1)); step("\n") }
+    END { if (st != "pre-key" && st != "key" && st != "comment" && st != "comment-escape") push() }
+  ' "$1"
+}
+
 # ---- envfiles: /etc/velexis/<app>.env from deploy/env templates (never overwritten) ------------------------
 # Every env file is root:root 0600: systemd reads it as root before it starts a unit as the zone's user, so no app
 # user can open any of them (ADR-0026). migrator.env and reference-loader.env are read the same way for the transient
@@ -1338,14 +1398,15 @@ step_envfiles() {
     [ -f "$dest" ] || die "could not install $dest"
   done
   ensure_owner_mode root:root 600 "$ETC"/*.env "$SECRETS_FILE"
-  # Values still at a template's CHANGE_ME placeholder: assignments only, never the templates' comments, named as
-  # file:VARIABLE and never shown, by the same rule as velexis-deploy and check-vm.sh, which refuse them (KI-004).
+  # Values still at a template's CHANGE_ME placeholder: every assignment systemd reads (indented ones included), never
+  # the templates' comments, named as file:VARIABLE and never shown, by the same rule as velexis-deploy and
+  # check-vm.sh, which refuse them (KI-004, lead decision (37m)).
   placeholders=""
   for dest in "$ETC"/*.env; do
     [ -f "$dest" ] || continue
     while IFS= read -r key; do
       placeholders="$placeholders $(basename "$dest"):$key"
-    done < <(LC_ALL=C sed -n -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*CHANGE_ME.*$/\1/p' "$dest")
+    done < <(placeholder_names "$dest")
   done
   [ -z "$placeholders" ] || warn "fill in the CHANGE_ME values:$placeholders (velexis-deploy refuses a release, and check-vm.sh reports FAIL, while one is left; docs/mvp/deployment-single-vm.md §3 step 6)"
 }

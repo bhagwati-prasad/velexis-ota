@@ -855,17 +855,36 @@ describe("the storage settings of both processes (OBE-053, OBE-054)", () => {
     try {
       const worker = loadWorkerConfig({ ...WORKER_ENV, STORAGE_DIR: folder });
       const api = loadApiConfig({ ...API_ENV, STORAGE_DIR: folder });
-      const apiS3 = loadApiConfig({ ...API_ENV, STORAGE_DRIVER: "s3", STORAGE_DIR: folder });
 
       expect([worker.STORAGE_DRIVER, worker.STORAGE_DIR]).toEqual(["local", folder]);
       expect([api.STORAGE_DRIVER, api.STORAGE_DIR]).toEqual(["local", folder]);
-      expect(apiS3.STORAGE_DRIVER).toBe("s3");
     } finally {
       rmSync(folder, { recursive: true, force: true });
     }
   });
 
-  it("refuse a folder that does not exist (the VM's by default) and a driver that is not local or s3", () => {
+  // KI-036 (FIX-W68-DEPLOYSCRIPT): `s3` passed this check (the test above pinned it) and both processes then stopped at
+  // start in createStorage; the configuration check refuses it now, like any other value that is not `local`.
+  it("refuse STORAGE_DRIVER=s3 in the worker and the API: 'must be one of local' [FIX-W68-DEPLOYSCRIPT AC2]", () => {
+    const folder = mkdtempSync(join(tmpdir(), "velexis-ota-storage-"));
+    try {
+      for (const [name, load, env] of [
+        ["worker", loadWorkerConfig, WORKER_ENV],
+        ["api", loadApiConfig, API_ENV],
+      ] as const) {
+        const error = configErrorOf(() => load({ ...env, STORAGE_DRIVER: "s3", STORAGE_DIR: folder }));
+        expect([name, error.problems]).toEqual([
+          name,
+          [{ variable: "STORAGE_DRIVER", reason: "must be one of local" }],
+        ]);
+        expect(error.message).toContain("STORAGE_DRIVER must be one of local");
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("refuse a folder that does not exist (the VM's by default) and a driver that is not local", () => {
     const missing = join(tmpdir(), `velexis-ota-missing-${process.pid}`, "storage");
     const loaders = [
       ["worker", WORKER_ENV, loadWorkerConfig],

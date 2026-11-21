@@ -9,7 +9,9 @@
 #
 # Layout of a release (docs/mvp/deployment-single-vm.md §8). Apps that do not exist yet are skipped, so the
 # same script packs the M0 "hello world" (migrations, the migration CLI, the apps scaffolded so far, the storefront
-# or its placeholder page, deploy/) and the full system.
+# or its placeholder page, deploy/) and the full system. The migration sets are not skipped: with the migration CLI
+# (packages/db) every set folder must exist, or the script fails before it packs anything (KI-035; velexis-deploy
+# refuses such a release too).
 #   RELEASE.json            sha, ref, build time, Node version, list of apps
 #   SHA256SUMS              checksums of every file (verified by deploy.sh before anything runs)
 #   deploy/                 copy of deploy/ (units, Caddyfile, scripts; deploy.sh installs them as root)
@@ -65,21 +67,32 @@ pack_next() {
   APPS+=("$dest")
 }
 
+# The release's migration sets (migrations/<set>/) and their folders in the repository. A missing folder is no empty
+# set: the release would deploy its code against an unmigrated schema, so it fails here, before anything is packed.
+MIGRATION_SETS=(
+  "platform platform/backend/migrations/platform"
+  "reference platform/backend/migrations/reference"
+  "tenant ota/backend/migrations/tenant"
+)
+if has_pkg packages/db; then
+  for entry in "${MIGRATION_SETS[@]}"; do
+    read -r set src <<<"$entry"
+    [ -d "$src" ] || die "$src is missing: a release with the migration CLI (packages/db) needs migrations/$set, and velexis-deploy refuses one without it"
+  done
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
 # ---- Database: migration CLI and migration files --------------------------------------------------------
 if has_pkg packages/db; then deploy_pkg @velexis/db db; fi
-for set in platform reference; do
-  if [ -d "platform/backend/migrations/$set" ]; then
+for entry in "${MIGRATION_SETS[@]}"; do
+  read -r set src <<<"$entry"
+  if [ -d "$src" ]; then
     mkdir -p "$OUT/migrations/$set"
-    cp -a "platform/backend/migrations/$set/." "$OUT/migrations/$set/"
+    cp -a "$src/." "$OUT/migrations/$set/"
   fi
 done
-if [ -d ota/backend/migrations/tenant ]; then
-  mkdir -p "$OUT/migrations/tenant"
-  cp -a ota/backend/migrations/tenant/. "$OUT/migrations/tenant/"
-fi
 if has_pkg tools/reference-data; then deploy_pkg @velexis/reference-data reference-data; fi
 
 # ---- Backends ---------------------------------------------------------------------------------------------

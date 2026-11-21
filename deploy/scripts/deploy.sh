@@ -6,12 +6,15 @@
 # The deploy user may run only this command with sudo (finalised and tested by task X-023):
 #   sudo /usr/local/sbin/velexis-deploy <git-sha>     activate /srv/velexis/incoming/<sha> (uploaded by deploy.yml)
 #   sudo /usr/local/sbin/velexis-deploy --rollback    switch back to the previous release
-#   sudo /usr/local/sbin/velexis-deploy --status      show the active release and the units
+#   sudo /usr/local/sbin/velexis-deploy --status      show the active release and the units (without the deploy
+#                                                     lock, so also while a deploy runs; KI-038)
 #
 # Order (docs/mvp/deployment-single-vm.md §8):
 #   verify the upload (SHA256SUMS lists exactly its files, all intact; RELEASE.json; Node major) -> check that
 #   /etc/velexis/*.env have every variable of the release's env templates and no value still at a template's CHANGE_ME
-#   placeholder (each refused one named as file:VARIABLE, never its value; KI-004) -> snapshot the units, Caddyfile,
+#   placeholder in any assignment systemd reads, indented ones included (each refused one named as file:VARIABLE, never
+#   its value; KI-004, lead decision (37m)) -> a release with the migration CLI must hold migrations/platform,
+#   migrations/reference and migrations/tenant (KI-035) -> snapshot the units, Caddyfile,
 #   the web application firewall's rule files, the Caddy build and the maintenance page root-owned under
 #   /var/lib/velexis/system/<sha>/ -> from the snapshot, stage a changed Caddy build, rule files and Caddyfile and
 #   validate the Caddyfile with the binary the caddy service will run, install the units, then install the root-owned
@@ -25,6 +28,13 @@
 #   its binary changed or its drop-in is not the one it was last started with) -> prune old releases (never the active
 #   one nor the --rollback target). Any failed health check rolls back: the previous release's snapshot (units,
 #   Caddyfile, rule files, Caddy build) is re-installed, then `current` is switched back and the units restart.
+#   A release already on the VM passes the same env-file and migration-set checks before it is activated again (the
+#   Node major is checked on a release's first activation only, ADR-0029 item 10, D12). --rollback and the automatic
+#   rollback first check their target's env files against its env templates the same way and refuse a target that
+#   fails, before anything is staged or switched: --rollback changes nothing, and the automatic rollback leaves the
+#   failed release current and names both releases and the reason (KI-041); a target built on another Node major is
+#   not refused (D12), only noted in the log. A redeploy of the active release that fails its health checks rolls back
+#   nothing and names `velexis-deploy --rollback` with the release before it in deploy-history (KI-042).
 #
 # The Velexis Caddy build (task X-039, docs/mvp/deployment-single-vm.md §6): a release's caddy/bin/caddy (Caddy 2.8.4
 # with the Coraza web application firewall, deploy/caddy/build/build-caddy.sh) is installed root-owned as
@@ -128,6 +138,14 @@ log() { printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" | tee -a "$LOG_
 die() { log "ERROR: $*"; exit 1; }
 
 if [ -z "$R" ]; then [ "$(id -u)" -eq 0 ] || die "run as root (sudo /usr/local/sbin/velexis-deploy)"; fi
+# --status only reads (the `current` link, renamed atomically, and the units' states), so it runs before the deploy
+# lock: during a deploy it shows what is active at that moment, exits 0 and writes nothing to deploy.log (KI-038; the
+# Deploy workflow's smoke check calls it). Every other command takes the lock first.
+if [ "${1:-}" = --status ]; then
+  echo "current: $(readlink -e "$CURRENT" 2>/dev/null || echo none)"
+  for entry in "${UNITS[@]}"; do read -r unit _ _ <<<"$entry"; printf '%-28s %s\n' "$unit" "$("$SYSTEMCTL" is-active "$unit" 2>/dev/null || true)"; done
+  exit 0
+fi
 mkdir -p "$LOG_DIR" "$LIB" "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another deploy is running"
@@ -263,37 +281,127 @@ restart_units() { # release dir; returns 1 on the first unhealthy unit
   done
 }
 
+# The same function as check-vm.sh's and provision-vm.sh's (deploy.test.sh compares the three copies).
 placeholder_names() { # env file -> the names of its variables whose value still holds CHANGE_ME, one per line
-  # Only assignments (NAME=... at the start of a line), never comments. The sed prints the name and never the value,
-  # which may hold a real secret beside the placeholder; LC_ALL=C reads bytes, so a value that is not UTF-8 counts too.
-  LC_ALL=C sed -n -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*CHANGE_ME.*$/\1/p' "$1"
+  # Every assignment that systemd's EnvironmentFile= reads, as systemd 255 (Ubuntu 24.04, the VM) parses the file
+  # (parse_env_file_internal of src/basic/env-file.c, ported state for state): blanks before the name and around '='
+  # are allowed, a line whose first non-blank character is # or ; is a comment, a backslash joins the next line to a
+  # value, a quoted value may span lines, and only the names systemd keeps ([A-Za-z_][A-Za-z0-9_]*) count, so an
+  # indented or spaced assignment is refused too and a comment never is (KI-004, lead decision (37m)). The name is
+  # printed once, never the value, which may hold a real secret beside the placeholder; LC_ALL=C reads bytes, so a
+  # value that is not UTF-8 counts too.
+  LC_ALL=C awk '
+    function push() {
+      sub(/[ \t]+$/, "", key)
+      if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && index(value, "CHANGE_ME") && !(key in seen)) { seen[key] = 1; print key }
+      key = ""; value = ""
+    }
+    function blank(c) { return c == " " || c == "\t" || c == "\n" || c == "\r" }
+    function step(c) {
+      if (st == "pre-key") {
+        if (c == "#" || c == ";") st = "comment"
+        else if (!blank(c)) { st = "key"; key = c }
+      } else if (st == "key") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; key = "" }
+        else if (c == "=") { st = "pre-value"; value = "" }
+        else key = key c
+      } else if (st == "pre-value") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; push() }
+        else if (c == "\047") st = "single"
+        else if (c == "\"") st = "double"
+        else if (c == "\\") st = "escape"
+        else if (!blank(c)) { st = "value"; value = value c }
+      } else if (st == "value") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; push() }
+        else if (c == "\\") st = "escape"
+        else value = value c
+      } else if (st == "escape") {
+        st = "value"
+        if (c != "\n" && c != "\r") value = value c
+      } else if (st == "single") {
+        if (c == "\047") st = "pre-value"; else value = value c
+      } else if (st == "double") {
+        if (c == "\"") st = "pre-value"
+        else if (c == "\\") st = "double-escape"
+        else value = value c
+      } else if (st == "double-escape") {
+        st = "double"
+        if (index("\"\\`$", c)) value = value c
+        else if (c != "\n") value = value "\\" c
+      } else if (st == "comment") {
+        if (c == "\\") st = "comment-escape"
+        else if (c == "\n" || c == "\r") st = "pre-key"
+      } else {
+        st = (c == "\n" || c == "\r") ? "pre-key" : "comment"
+      }
+    }
+    BEGIN { st = "pre-key" }
+    { n = length($0); for (i = 1; i <= n; i++) step(substr($0, i, 1)); step("\n") }
+    END { if (st != "pre-key" && st != "key" && st != "comment" && st != "comment-escape") push() }
+  ' "$1"
 }
 
-check_env_files() { # dir with the release's env/*.env.example: every template variable must exist on the VM, and no
-  # value may still hold a template's CHANGE_ME placeholder (KI-004)
-  local tpl dest keys key missing="" placeholders=""
+ENV_MISSING=""
+ENV_PLACEHOLDERS=""
+env_problems() { # dir with a release's env/*.env.example -> ENV_MISSING and ENV_PLACEHOLDERS, " file:VARIABLE" lists
+  # Every template variable must exist on the VM (the existence check stays ^KEY=, as written by provision-vm.sh), and
+  # no value may still hold a template's CHANGE_ME placeholder (KI-004): such a value (smtps://CHANGE_ME_USER:...@
+  # smtp.example.com:465, CHANGE_ME_ops@example.com) is a valid URL or address, so the apps would start and fail only
+  # when they send mail or alerts. Every variable of every destination file counts, an optional file's included (a
+  # placeholder pasted into another variable is the same mistake); each is named as file:VARIABLE, never with its value.
+  local tpl dest keys key
+  ENV_MISSING=""
+  ENV_PLACEHOLDERS=""
   for tpl in "$1"/*.env.example; do
     [ -f "$tpl" ] || continue
     keys="$(grep -oE '^[A-Z][A-Z0-9_]*=' "$tpl" | tr -d '=' || true)"
     [ -n "$keys" ] || continue                     # templates with only comments describe optional files
     dest="$ETC/$(basename "$tpl" .example)"
-    if [ ! -f "$dest" ]; then missing="$missing $(basename "$dest")"; continue; fi
+    if [ ! -f "$dest" ]; then ENV_MISSING="$ENV_MISSING $(basename "$dest")"; continue; fi
     for key in $keys; do
-      grep -qE "^${key}=" "$dest" || missing="$missing $(basename "$dest"):$key"
+      grep -qE "^${key}=" "$dest" || ENV_MISSING="$ENV_MISSING $(basename "$dest"):$key"
     done
   done
-  [ -z "$missing" ] || die "env files lack variables of this release's templates:$missing. Add them to /etc/velexis (empty is allowed), then deploy again. Nothing was changed."
-  # A value still at a template's CHANGE_ME placeholder (smtps://CHANGE_ME_USER:...@smtp.example.com:465,
-  # CHANGE_ME_ops@example.com) is a valid URL or address, so the apps would start and fail only when they send mail or
-  # alerts. Every variable of every destination file counts, an optional file's included (a placeholder pasted into
-  # another variable is the same mistake); each is named as file:VARIABLE, never with its value.
   for tpl in "$1"/*.env.example; do
     [ -f "$tpl" ] || continue
     dest="$ETC/$(basename "$tpl" .example)"
     [ -f "$dest" ] || continue
-    for key in $(placeholder_names "$dest"); do placeholders="$placeholders $(basename "$dest"):$key"; done
+    for key in $(placeholder_names "$dest"); do ENV_PLACEHOLDERS="$ENV_PLACEHOLDERS $(basename "$dest"):$key"; done
   done
-  [ -z "$placeholders" ] || die "env files hold values still at the templates' CHANGE_ME placeholders:$placeholders. Fill them in in /etc/velexis (docs/mvp/deployment-single-vm.md §3 step 6), then deploy again. Nothing was changed."
+}
+
+check_env_files() { # dir with the release's env/*.env.example: refused (nothing changed) while env_problems finds one
+  env_problems "$1"
+  [ -z "$ENV_MISSING" ] || die "env files lack variables of this release's templates:$ENV_MISSING. Add them to /etc/velexis (empty is allowed), then deploy again. Nothing was changed."
+  [ -z "$ENV_PLACEHOLDERS" ] || die "env files hold values still at the templates' CHANGE_ME placeholders:$ENV_PLACEHOLDERS. Fill them in in /etc/velexis (docs/mvp/deployment-single-vm.md §3 step 6), then deploy again. Nothing was changed."
+}
+
+release_node_major() { # RELEASE.json -> the Node major its release was built with ("v24"); nothing when it names none
+  node -e 'const m = require(process.argv[1]); if (typeof m.node === "string") console.log(m.node.split(".")[0])' "$1" \
+    2>/dev/null || true
+}
+
+vm_node_major() { node -p 'process.version.split(".")[0]'; }
+
+check_node_major() { # RELEASE.json: refused unless its release was built with the VM's Node major (ADR-0029)
+  local built
+  built="$(release_node_major "$1")"
+  [ "$built" = "$(vm_node_major)" ] || die "release built with Node ${built:-(none named in RELEASE.json)}, VM runs $(node --version)"
+}
+
+check_migration_sets() { # release dir: one with the migration CLI must hold all three sets (KI-035)
+  # A missing folder is no empty set: deploying code without its migrations would run it against an unmigrated schema.
+  # A set folder that is a symbolic link counts as missing: SHA256SUMS lists regular files only, so the SQL behind the
+  # link would run unverified. units-smoke.sh (X-033 AC4) requires every code line of this script that names the CLI's file to be an `if [ -f`
+  # test or a run_transient call, so the test keeps that form and the message says "the migration CLI".
+  local set
+  if [ -f "$1/db/dist/cli/migrate.js" ]; then
+    for set in platform reference tenant; do
+      if [ ! -d "$1/migrations/$set" ] || [ -L "$1/migrations/$set" ]; then
+        die "release lacks migrations/$set (a release with the migration CLI needs migrations/platform, migrations/reference and migrations/tenant). Nothing was changed."
+      fi
+    done
+  fi
 }
 
 verify_upload() { # dir: SHA256SUMS lists exactly the regular files of the folder (but itself), all intact
@@ -499,9 +607,40 @@ previous_sha() { # last activated sha different from the current one
   awk -v cur="${cur:-none}" '$2 != cur { sha = $2 } END { if (sha) print sha }' "$HISTORY"
 }
 
-rollback_to() { # sha
-  local rel="$RELEASES/$1"
+rollback_refusal() { # sha -> nothing when that release's env templates are satisfied, else why not (KI-041)
+  # The env-file checks a new upload passes: every variable of the release's env templates exists in /etc/velexis and
+  # none still holds a CHANGE_ME placeholder (KI-004); each refused variable is named as file:VARIABLE, never with its
+  # value. The Node major is not a reason: a rollback to a release built on another major is not checked and works,
+  # because every native module is N-API (ADR-0029 item 10, decision D12); rollback_to only notes it.
+  local why=""
+  env_problems "$RELEASES/$1/deploy/env"
+  [ -z "$ENV_MISSING" ] ||
+    why="env files lack variables of release $1's templates:$ENV_MISSING (add them to /etc/velexis, empty is allowed)"
+  [ -z "$ENV_PLACEHOLDERS" ] ||
+    why="${why:+$why; }env files hold values still at the templates' CHANGE_ME placeholders:$ENV_PLACEHOLDERS (fill them in in /etc/velexis, docs/mvp/deployment-single-vm.md §3 step 6)"
+  printf '%s' "$why"
+}
+
+rollback_to() { # sha manual|automatic
+  local rel="$RELEASES/$1" why built
   [ -d "$rel" ] || die "release $1 is not on this VM"
+  # The target's env-file checks come before anything is staged or switched (KI-041): a release whose units would stop
+  # at their configuration check is refused instead of switched to. --rollback then changes nothing. The automatic
+  # rollback of a deploy whose units failed their health checks leaves the failed release current: switching to a
+  # target that fails its checks would restart every unit into a release that cannot start, turning one unhealthy unit
+  # (the units after it still run the previous release's processes) into a full outage, and lose the failed release's
+  # state for the investigation.
+  why="$(rollback_refusal "$1")"
+  if [ -n "$why" ]; then
+    if [ "$2" = automatic ]; then
+      drop_staged_caddy
+      die "deploy of $SHA failed health checks, and the automatic rollback to $1 was refused before anything was switched back: $why. $SHA stays current (the units restarted so far run it, the first unhealthy one is down); fix that, then run: sudo velexis-deploy --rollback (to $1), or deploy a release that works"
+    fi
+    die "rollback to $1 refused: $why. Nothing was changed."
+  fi
+  built="$(release_node_major "$rel/RELEASE.json")"
+  [ "$built" = "$(vm_node_major)" ] ||
+    log "note: release $1 was built with Node ${built:-(none named in its RELEASE.json)} and the VM runs $(node --version); a rollback does not refuse that (ADR-0029 item 10, D12: every native module is N-API)"
   log "ROLLBACK to $1"
   # The target runs under its own units and Caddyfile (sandboxing, ExecStart, payment-page CSP), not the newer ones.
   # Root-owned scripts stay at the newest version: they are backward compatible by design (ADR-0023).
@@ -526,14 +665,10 @@ rollback_to() { # sha
 # without the record such a drop-in waited for Caddy's next start.
 DROPIN_AT_START="$(file_sha "$CADDY_DROPIN")"
 case "${1:-}" in
-  --status)
-    echo "current: $(readlink -e "$CURRENT" 2>/dev/null || echo none)"
-    for entry in "${UNITS[@]}"; do read -r unit _ _ <<<"$entry"; printf '%-28s %s\n' "$unit" "$("$SYSTEMCTL" is-active "$unit" 2>/dev/null || true)"; done
-    exit 0 ;;
   --rollback)
     prev="$(previous_sha)"
     [ -n "$prev" ] || die "no previous release recorded in $HISTORY"
-    rollback_to "$prev"
+    rollback_to "$prev" manual
     exit 0 ;;
   "" | -*) die "usage: velexis-deploy <git-sha> | --rollback | --status" ;;
 esac
@@ -551,9 +686,9 @@ if [ ! -d "$REL" ]; then
   verify_upload "$SRC"
   node -e 'const m=require(process.argv[1]); if(m.sha!==process.argv[2]) process.exit(1)' "$SRC/RELEASE.json" "$SHA" \
     || die "RELEASE.json does not match $SHA"
-  BUILT_NODE="$(node -p 'require(process.argv[1]).node.split(".")[0]' "$SRC/RELEASE.json")"
-  [ "$BUILT_NODE" = "$(node -p 'process.version.split(".")[0]')" ] || die "release built with Node $BUILT_NODE, VM runs $(node --version)"
+  check_node_major "$SRC/RELEASE.json"
   check_env_files "$SRC/deploy/env"
+  check_migration_sets "$SRC"
 
   # Everything root will use (scripts, units, Caddyfile, maintenance page) is taken from the uploaded copy
   # BEFORE the folder is handed over, so neither the deploy user nor an app process can change it (ADR-0023).
@@ -587,7 +722,10 @@ if [ ! -d "$REL" ]; then
   chmod o+x "$REL"
   if [ -d "$REL/storefront" ]; then chmod -R o+rX "$REL/storefront"; fi   # Caddy (user caddy) serves these files
 else
+  # The env files and the migration sets are checked again; the Node major only on a release's first activation
+  # (ADR-0029 item 10, D12).
   check_env_files "$REL/deploy/env"
+  check_migration_sets "$REL"
   if [ -d "$SYSTEM_SNAPSHOTS/$SHA" ]; then
     log "release $SHA is already on the VM: units and Caddyfile from its snapshot, root scripts stay as installed"
     stage_system_files "$SYSTEM_SNAPSHOTS/$SHA"
@@ -613,21 +751,18 @@ if [ -f "$REL/db/dist/cli/migrate.js" ]; then
   [[ "$FAILURE_RATIO" =~ ^(0(\.[0-9]+)?|1(\.0+)?)$ ]] \
     || die "MIGRATE_TENANT_MAX_FAILURE_RATIO in migrator.env is not a number from 0 to 1"
   rm -f "$MIGRATE_STATE/migrate-$SHA.json"
+  # check_migration_sets made sure that all three sets exist (KI-035); migrate.js refuses a missing --dir too.
   (
     for set in platform reference; do
-      if [ -d "$REL/migrations/$set" ]; then
-        log "migrate $set"
-        run_transient /etc/velexis/migrator.env "$REL/db" node dist/cli/migrate.js "$set" --dir "$REL/migrations/$set" \
-          || exit 1
-      fi
+      log "migrate $set"
+      run_transient /etc/velexis/migrator.env "$REL/db" node dist/cli/migrate.js "$set" --dir "$REL/migrations/$set" \
+        || exit 1
     done
-    if [ -d "$REL/migrations/tenant" ]; then
-      log "migrate tenants (fan-out, concurrency $CONCURRENCY)"
-      run_transient /etc/velexis/migrator.env "$REL/db" \
-        node dist/cli/migrate.js tenants --dir "$REL/migrations/tenant" \
-        --concurrency "$CONCURRENCY" --max-failure-ratio "$FAILURE_RATIO" \
-        --report "$MIGRATE_STATE/migrate-$SHA.json" || exit 1
-    fi
+    log "migrate tenants (fan-out, concurrency $CONCURRENCY)"
+    run_transient /etc/velexis/migrator.env "$REL/db" \
+      node dist/cli/migrate.js tenants --dir "$REL/migrations/tenant" \
+      --concurrency "$CONCURRENCY" --max-failure-ratio "$FAILURE_RATIO" \
+      --report "$MIGRATE_STATE/migrate-$SHA.json" || exit 1
   ) || {
     keep_migrate_report
     restore_running_system_files
@@ -658,8 +793,16 @@ fi
 switch_current "$REL"
 if ! restart_units "$REL"; then
   if [ -n "$PREV_SHA" ] && [ "$PREV_SHA" != "$SHA" ]; then
-    rollback_to "$PREV_SHA"
+    rollback_to "$PREV_SHA" automatic
     die "deploy of $SHA failed health checks; rolled back to $PREV_SHA"
+  fi
+  if [ "$PREV_SHA" = "$SHA" ]; then
+    # A redeploy of the active release (KI-042): the active release itself failed to restart. There is no automatic
+    # rollback to another release here; --rollback goes back to the one before it in the history, if there is one.
+    prev="$(previous_sha)"
+    [ -z "$prev" ] ||
+      die "deploy of $SHA failed health checks; $SHA was already the active release, so nothing was rolled back and it stays current. To go back to the release before it ($prev in $HISTORY), run: sudo velexis-deploy --rollback"
+    die "deploy of $SHA failed health checks; $SHA was already the active release and $HISTORY names no release before it, so there is nothing to roll back to"
   fi
   die "deploy of $SHA failed health checks; no other release was active, so there is nothing to roll back to"
 fi

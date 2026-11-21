@@ -70,7 +70,7 @@ export interface MigrationFiles {
   readonly set: MigrationSet;
   /** Absolute path of the folder. */
   readonly dir: string;
-  /** False when the folder does not exist: an empty set (ADR-0021), nothing to apply. */
+  /** False when the folder does not exist (no files): migrate.js refuses it (KI-035), the runners apply nothing. */
   readonly exists: boolean;
   /** Numbered files in apply order (by name, which is by number). */
   readonly numbered: readonly MigrationFile[];
@@ -223,8 +223,10 @@ function statementStart(statement: string): string {
  * - a numbered file must not contain transaction control (BEGIN, COMMIT, ...): the runner owns the transaction;
  * - any other `.sql` name, invalid UTF-8 or a byte order mark is a problem; other files are ignored.
  *
- * The checksum is the SHA-256 of the raw bytes. A folder that does not exist is an empty set
- * (`exists: false`). All problems are thrown together as `MigrationFilesError`.
+ * The checksum is the SHA-256 of the raw bytes. A folder that does not exist gives `exists: false` and no files; the
+ * caller decides what that means: `migrate.js` refuses it as a usage error (exit 1, KI-035) and the OTA worker as
+ * INVALID_MIGRATION_FILES, while the library runners return `dirExists: false` without connecting. All problems are
+ * thrown together as `MigrationFilesError`.
  */
 export async function readMigrationFiles(dir: string, set: MigrationSet): Promise<MigrationFiles> {
   if (!(MIGRATION_SETS as readonly unknown[]).includes(set)) {

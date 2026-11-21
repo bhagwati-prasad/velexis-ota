@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform/DevOps engineer (foundation plan). Decided during planning; revisit when a managed database or a second cluster changes how migrations are run, or when more than one repeatable file per set is needed.
-**Revisions:** 2026-10-12 (planning review): explicit `accounts` column list without secrets or hashes; tenant objects are created as `velexis_provisioner`; a missing `--dir` is an empty set.
+**Revisions:** 2026-10-12 (planning review): explicit `accounts` column list without secrets or hashes; tenant objects are created as `velexis_provisioner`; a missing `--dir` is an empty set. 2026-11-21 (KI-035, lead decision (37) of 2026-11-21, approved by the owner; FIX-W68-DEPLOYSCRIPT): a missing `--dir` is a usage error (exit `1`) instead of an empty set (dated note below).
 
 ## Context
 
@@ -28,6 +28,7 @@
 - The DSN comes from `DATABASE_MIGRATOR_URL` only (role `velexis_migrator`). There is no `--url` flag, so DSNs never appear in process lists.
 - The tenant commands run every schema transaction with `SET LOCAL ROLE velexis_provisioner`, so tenant schemas and their objects are always owned by the provisioner role, whoever calls ([ADR-0004](0004-postgresql-schema-per-tenant.md)). The OTA worker calls the library with its own `DATABASE_PROVISIONER_URL`.
 - A `--dir` that does not exist is an empty set: a notice on stderr, nothing applied, exit `0`. CI runs `pnpm db:migrate` before the platform plan has created every folder.
+  - *Note (2026-11-21, KI-035, approved by the owner; FIX-W68-DEPLOYSCRIPT):* every folder exists now, so the reason for the empty set is gone, and it hid mistakes: a typo in `--dir`, or a release packed without `migrations/`, applied nothing and exited `0`, and the deploy went on against an unmigrated schema. `migrate.js` now refuses a `--dir` that does not exist as a usage error (the message names the set and the folder, then the usage; nothing applied, no connection, exit `1`) for every command; no caller needed the old behaviour, so there is no `--allow-missing` flag. The library functions still return `dirExists: false` without connecting, and their callers decide (the OTA worker refuses it). `velexis-deploy` refuses a release with the CLI but without one of the three set folders, and `pack-release.sh` fails on a missing one ([`deployment-single-vm.md`](../deployment-single-vm.md) §8, [`packages/db/README.md`](../../../packages/db/README.md)).
 - Exit codes: `0` success, `1` error, `2` checksum mismatch of an applied file, `3` tenant failure ratio exceeded. Output is one JSON line per file to stdout; `--report` writes the per-tenant summary.
 - `pnpm db:migrate` and `pnpm db:migrate:tenants` call it with the repository paths; `velexis-deploy` calls it with the release paths; the OTA worker (provisioner DSN) and `@velexis/testing` call the same library functions (`runMigrations`, `migrateTenants`, `migrateTenantSchema`).
 

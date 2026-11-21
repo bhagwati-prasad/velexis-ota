@@ -1474,15 +1474,21 @@ describe("migrateTenants and migrate.js tenants on PostgreSQL", () => {
     ]);
   });
 
-  it("prints a notice, connects to nothing and writes no report for a missing --dir", async () => {
+  // KI-035 (FIX-W68-DEPLOYSCRIPT): migrate.js tenants exited 0 for a missing --dir (an empty set); it refuses it now
+  // with exit 1. The library functions still return dirExists: false without connecting, and their callers decide.
+  it("refuses a missing --dir with exit 1, connects to nothing and writes no report [FIX-W68-DEPLOYSCRIPT AC1]", async () => {
     const missing = join(await scratchFolder(), "tenant");
     const reportPath = join(await scratchFolder(), "report.json");
+    let stderr = "";
     const run = await runMigrateCli(["tenants", "--dir", missing, "--report", reportPath], {
       stdout: { write: () => true },
-      stderr: { write: () => true },
+      stderr: { write: (chunk: string) => (stderr += chunk) },
       env: { APP_ENV: "production" },
     });
-    expect(run).toBe(0);
+    expect(run).toBe(1);
+    expect(stderr).toContain(
+      `migrate: the tenant migrations folder ${missing} does not exist; nothing was applied`,
+    );
     await expect(readFile(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
     const result = await migrateTenants({ dir: missing, url: "postgres://nobody@127.0.0.1:1/none" });
     expect(result).toEqual({ dir: missing, dirExists: false, report: null, failureRatio: 0, exitCode: 0 });

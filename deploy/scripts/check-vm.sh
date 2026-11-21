@@ -69,7 +69,8 @@
 #             scripts (velexis-deploy, -backup, -restore, -alert, -run and -healthcheck), the sudoers rule
 #   envfiles  every /etc/velexis/<app>.env has every variable of its deploy/env/<app>.env.example template (an empty
 #             value is fine; missing ones are listed by name) and no value still at a template's CHANGE_ME placeholder
-#             (any assignment whose value holds CHANGE_ME, never a comment, named as <app>.env:VARIABLE; KI-004);
+#             (any assignment systemd reads whose value holds CHANGE_ME, indented ones included, never a comment, named
+#             as <app>.env:VARIABLE; KI-004, lead decision (37m));
 #             caddy.env and ota-backend.env hold the same edge secret, ota-backend.env and ota-admin.env the same
 #             service key (compared, never printed)
 #
@@ -886,10 +887,64 @@ same_value() { # key file-a file-b: compares the two values without printing the
   if [ -n "$a" ] && [ "$a" = "$b" ]; then pass "$1 is the same in $2 and $3"; else fail "$1 is the same, and not empty, in $2 and $3"; fi
 }
 
+# The same function as deploy.sh's and provision-vm.sh's (deploy.test.sh compares the three copies).
 placeholder_names() { # env file -> the names of its variables whose value still holds CHANGE_ME, one per line
-  # Only assignments (NAME=... at the start of a line), never comments; the name is printed, never the value. The same
-  # rule as deploy.sh's check_env_files (KI-004), byte-wise (LC_ALL=C), so a value that is not UTF-8 counts too.
-  LC_ALL=C sed -n -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*CHANGE_ME.*$/\1/p' "$1"
+  # Every assignment that systemd's EnvironmentFile= reads, as systemd 255 (Ubuntu 24.04, the VM) parses the file
+  # (parse_env_file_internal of src/basic/env-file.c, ported state for state): blanks before the name and around '='
+  # are allowed, a line whose first non-blank character is # or ; is a comment, a backslash joins the next line to a
+  # value, a quoted value may span lines, and only the names systemd keeps ([A-Za-z_][A-Za-z0-9_]*) count, so an
+  # indented or spaced assignment is refused too and a comment never is (KI-004, lead decision (37m)). The name is
+  # printed once, never the value, which may hold a real secret beside the placeholder; LC_ALL=C reads bytes, so a
+  # value that is not UTF-8 counts too.
+  LC_ALL=C awk '
+    function push() {
+      sub(/[ \t]+$/, "", key)
+      if (key ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && index(value, "CHANGE_ME") && !(key in seen)) { seen[key] = 1; print key }
+      key = ""; value = ""
+    }
+    function blank(c) { return c == " " || c == "\t" || c == "\n" || c == "\r" }
+    function step(c) {
+      if (st == "pre-key") {
+        if (c == "#" || c == ";") st = "comment"
+        else if (!blank(c)) { st = "key"; key = c }
+      } else if (st == "key") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; key = "" }
+        else if (c == "=") { st = "pre-value"; value = "" }
+        else key = key c
+      } else if (st == "pre-value") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; push() }
+        else if (c == "\047") st = "single"
+        else if (c == "\"") st = "double"
+        else if (c == "\\") st = "escape"
+        else if (!blank(c)) { st = "value"; value = value c }
+      } else if (st == "value") {
+        if (c == "\n" || c == "\r") { st = "pre-key"; push() }
+        else if (c == "\\") st = "escape"
+        else value = value c
+      } else if (st == "escape") {
+        st = "value"
+        if (c != "\n" && c != "\r") value = value c
+      } else if (st == "single") {
+        if (c == "\047") st = "pre-value"; else value = value c
+      } else if (st == "double") {
+        if (c == "\"") st = "pre-value"
+        else if (c == "\\") st = "double-escape"
+        else value = value c
+      } else if (st == "double-escape") {
+        st = "double"
+        if (index("\"\\`$", c)) value = value c
+        else if (c != "\n") value = value "\\" c
+      } else if (st == "comment") {
+        if (c == "\\") st = "comment-escape"
+        else if (c == "\n" || c == "\r") st = "pre-key"
+      } else {
+        st = (c == "\n" || c == "\r") ? "pre-key" : "comment"
+      }
+    }
+    BEGIN { st = "pre-key" }
+    { n = length($0); for (i = 1; i <= n; i++) step(substr($0, i, 1)); step("\n") }
+    END { if (st != "pre-key" && st != "key" && st != "comment" && st != "comment-escape") push() }
+  ' "$1"
 }
 
 group_envfiles() {

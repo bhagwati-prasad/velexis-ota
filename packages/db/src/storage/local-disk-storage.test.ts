@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStorage, STORAGE_DRIVERS, type StorageAdapter } from "./index.js";
+import { createStorage, PLANNED_STORAGE_DRIVERS, STORAGE_DRIVERS, type StorageAdapter } from "./index.js";
 import { assertStorageKey, LocalDiskStorage, StorageKeyError } from "./local-disk-storage.js";
 
 let dir: string;
@@ -185,11 +185,16 @@ describe("createStorage", () => {
     expect(() => createStorage({ driver: "local" })).toThrow(/needs dir/);
   });
 
-  it('throws "not implemented" for the s3 driver', () => {
-    expect(() => createStorage({ driver: "s3" })).toThrow(/not implemented/);
+  it('throws "not implemented" for the planned s3 driver [FIX-W68-DEPLOYSCRIPT AC2]', () => {
+    expect(() => createStorage({ driver: "s3" })).toThrow(
+      "createStorage: the s3 storage driver is not implemented yet (ADR-0017)",
+    );
   });
 
-  it("lists the drivers of STORAGE_DRIVER", () => {
-    expect(STORAGE_DRIVERS).toEqual(["local", "s3"]);
+  // KI-036 (FIX-W68-DEPLOYSCRIPT): STORAGE_DRIVERS listed "s3" too, so STORAGE_DRIVER=s3 passed the configuration check
+  // and the processes stopped at start instead; only the drivers with an adapter are values now.
+  it("lists only the drivers with an adapter as values of STORAGE_DRIVER, s3 as planned [FIX-W68-DEPLOYSCRIPT AC2]", () => {
+    expect(STORAGE_DRIVERS).toEqual(["local"]);
+    expect(PLANNED_STORAGE_DRIVERS).toEqual(["s3"]);
   });
 });

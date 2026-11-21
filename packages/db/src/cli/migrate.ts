@@ -44,7 +44,7 @@ Commands:
 
 The DSN comes from DATABASE_MIGRATOR_URL only (role velexis_migrator); there is no --url flag.
 Tenant objects are created as velexis_provisioner (SET LOCAL ROLE), whoever connects.
-A --dir that does not exist is an empty set: a notice on stderr, nothing applied, exit code 0.
+A --dir that does not exist is a usage error: exit code 1, nothing applied, no connection (no empty set).
 stdout: one JSON line per file applied, failed or changed. Nothing when everything is up to date.
 Exit codes: 0 success, 1 error, 2 checksum mismatch of an applied file, 3 tenant failure ratio exceeded.
 `;
@@ -273,14 +273,16 @@ export async function runMigrateCli(
   const set: MigrationSet = isSharedMigrationSet(invocation.command) ? invocation.command : "tenant";
 
   try {
-    // Validate the folder before reading the configuration: a missing folder needs no database at all.
+    // Validate the folder before reading the configuration: a missing folder needs no database at all. It is a usage
+    // error, not an empty set (KI-035): a typo in --dir, or a release packed without migrations/, would otherwise
+    // deploy code against an unmigrated schema with exit code 0. Every caller passes a folder that exists.
     const files = await readMigrationFiles(invocation.dir, set);
     if (!files.exists) {
       stderr.write(
-        `migrate: notice: the ${set} migrations folder ${files.dir} does not exist; ` +
-          "it is an empty set and nothing was applied\n",
+        `migrate: the ${set} migrations folder ${files.dir} does not exist; nothing was applied (check --dir)\n\n` +
+          MIGRATE_USAGE,
       );
-      return MIGRATE_EXIT_CODES.ok;
+      return MIGRATE_EXIT_CODES.error;
     }
     const url = migratorUrl(io.env);
 

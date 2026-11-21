@@ -339,25 +339,31 @@ describe("migrate.js without a database", () => {
     stderr = new Buffered();
   });
 
-  it("prints a notice on stderr, applies nothing and exits 0 for a --dir that does not exist [X-011 AC7]", async () => {
+  // KI-035 (lead decision (37), approved by the owner; FIX-W68-DEPLOYSCRIPT): a --dir that does not exist was an empty
+  // set (a notice, exit 0, X-011 AC7); it is now a usage error, so a typo or a release without migrations/ fails.
+  it("refuses a --dir that does not exist as a usage error: exit 1, nothing applied, no connection [X-011 AC7] [FIX-W68-DEPLOYSCRIPT AC1]", async () => {
     const missing = join(await folder(), "platform");
     const run = vi.fn(runMigrations);
-    // No DATABASE_MIGRATOR_URL at all: a missing folder needs neither the configuration nor a connection.
-    const code = await runMigrateCli(["platform", "--dir", missing], {
-      stdout,
-      stderr,
-      env: { APP_ENV: "production" },
-      runMigrations: run,
-    });
-    expect(code).toBe(0);
-    expect(stderr.text).toBe(
-      `migrate: notice: the platform migrations folder ${missing} does not exist; it is an empty set and nothing was applied\n`,
-    );
+    // No DATABASE_MIGRATOR_URL at all: a missing folder is refused before the configuration or a connection.
+    for (const set of ["platform", "reference"] as const) {
+      const err = new Buffered();
+      const code = await runMigrateCli([set, "--dir", missing], {
+        stdout,
+        stderr: err,
+        env: { APP_ENV: "production" },
+        runMigrations: run,
+      });
+      expect(code).toBe(1);
+      expect(err.text).toBe(
+        `migrate: the ${set} migrations folder ${missing} does not exist; nothing was applied (check --dir)\n\n` +
+          MIGRATE_USAGE,
+      );
+    }
     expect(stdout.text).toBe("");
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("resolves a relative --dir against the current folder [X-011 AC7]", async () => {
+  it("resolves a relative --dir against the current folder [X-011 AC7] [FIX-W68-DEPLOYSCRIPT AC1]", async () => {
     const cwd = await folder();
     const code = await runMigrateCli(["reference", "--dir", "../migrations/reference"], {
       stdout,
@@ -365,8 +371,10 @@ describe("migrate.js without a database", () => {
       cwd,
       env: { APP_ENV: "production" },
     });
-    expect(code).toBe(0);
-    expect(stderr.text).toContain(`folder ${join(cwd, "..", "migrations", "reference")} does not exist`);
+    expect(code).toBe(1);
+    expect(stderr.text).toContain(
+      `migrate: the reference migrations folder ${join(cwd, "..", "migrations", "reference")} does not exist;`,
+    );
     expect(stdout.text).toBe("");
   });
 

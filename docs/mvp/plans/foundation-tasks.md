@@ -365,6 +365,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - A repeatable file is applied once, re-applied after an edit, and a repeatable file containing `CREATE TABLE` is rejected.
   - Two concurrent runs on the same set do not apply a file twice.
   - `migrate.js platform --dir <missing folder>` prints a notice on stderr, applies nothing and exits 0 (unit test in `files.test.ts`).
+    - **Note (2026-11-21, KI-035, approved by the owner; FIX-W68-DEPLOYSCRIPT):** this criterion and step 5's empty set are superseded: every set folder exists now, so `migrate.js` refuses a `--dir` that does not exist as a usage error (exit 1, nothing applied, no connection) for every command, and the test tagged with this criterion in `files.test.ts` pins that refusal ([ADR-0021](../adr/0021-migration-cli-and-repeatable-grants.md)'s dated revision).
 - **Verify:** `pnpm --filter @velexis/db build && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int`
 
 ### X-012 · Add the baseline migrations and the OTA read grants ✅
