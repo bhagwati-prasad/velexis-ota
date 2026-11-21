@@ -39,9 +39,9 @@ import { DocumentUrlSigner, documentUrlKeyProvider } from "./signed-url";
 
 /**
  * The StorageAdapter of both processes (ADR-0017): `local` under STORAGE_DIR. Nothing is read or written at start-up;
- * `s3` throws here, so neither process starts with a driver that does not exist yet. No URL signer: the API signs the
- * file endpoint's URLs with DocumentUrlSigner and the injected clock (the adapter's `signedUrl` reads the system clock
- * and could not report the expiry it signed), and the worker signs none.
+ * the configuration check refuses any driver but `local` (KI-036), and createStorage still refuses a planned one. No
+ * URL signer: the API signs the file endpoint's URLs with DocumentUrlSigner and the injected clock (the adapter's
+ * `signedUrl` reads the system clock and could not report the expiry it signed), and the worker signs none.
  */
 export const documentStorageProvider: FactoryProvider<StorageAdapter> = {
   provide: DOCUMENT_STORAGE,

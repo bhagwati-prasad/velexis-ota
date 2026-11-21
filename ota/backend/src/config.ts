@@ -178,8 +178,9 @@ const sharedSchema = {
   // keeps the objects as files under STORAGE_DIR, an existing folder (checked here; `.local/storage` locally, which
   // `pnpm dev:keys` creates). The worker's documents module writes the rendered PDFs there (`tenant_<key>/documents/…`)
   // and reads the storefront's square logo from it (`tenant_<key>/assets/…`); the API's reads the PDFs it serves at
-  // their signed URLs (`GET /v1/files/…`, OBE-054). `s3` passes this check, but the adapter refuses it until an S3
-  // adapter exists, so neither process starts with it. Both units read ota-backend.env, which holds them.
+  // their signed URLs (`GET /v1/files/…`, OBE-054). This check refuses any driver but `local`: STORAGE_DRIVERS lists
+  // only it, and `s3` is a planned driver without an adapter (KI-036). Both units read ota-backend.env, which holds
+  // them.
   STORAGE_DRIVER: env.enum(STORAGE_DRIVERS, { default: "local" }),
   STORAGE_DIR: env.dir({ default: DEFAULT_STORAGE_DIR }),
   // Velexis ops, one plain address (EMAIL_ADDRESS): the last recipient of an OTA's staff alerts, after the OTA's

@@ -11,9 +11,9 @@
 //   1. The request (`refuseClosureRequest`, before anything is read): `order_found` needs `recordLocator`, `not_booked`
 //      needs a `note` and takes no record locator, and a note never holds a card number (`holdsCardNumber` of
 //      @velexis/logger, the detector every console free-text field shares since FIX-W67-KI001: 12 to 19 digits, grouped
-//      or not and wherever they stand among other digits, that pass the Luhn check): `400 VALIDATION_FAILED` at
-//      `/recordLocator` or `/note`, plain pointers into the body as the document's own validation answers them (lead
-//      decision (20l) of 2026-11-13). The note stays this check's alone (common/http/card-free-text.ts leaves it out),
+//      or not and wherever they stand among other digits, that start with 2 to 6 and pass the Luhn check):
+//      `400 VALIDATION_FAILED` at `/recordLocator` or `/note`, plain pointers into the body as the document's own
+//      validation answers them (lead decision (20l) of 2026-11-13). The note stays this check's alone (common/http/card-free-text.ts leaves it out),
 //      so a refused closure still names every problem of its request in one answer.
 //   2. T1 (`check`): the booking of the request's environment, its `If-Match` (`412 PRECONDITION_FAILED`), the review
 //      (`pending` with `reconcile_outcome = manual_review`, else `409 CONFLICT`, `details.reason = not_in_review`), and
