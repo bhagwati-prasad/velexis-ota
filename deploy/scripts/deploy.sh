@@ -10,8 +10,9 @@
 #
 # Order (docs/mvp/deployment-single-vm.md §8):
 #   verify the upload (SHA256SUMS lists exactly its files, all intact; RELEASE.json; Node major) -> check that
-#   /etc/velexis/*.env have every variable of the release's env templates -> snapshot the units, Caddyfile, the web
-#   application firewall's rule files, the Caddy build and the maintenance page root-owned under
+#   /etc/velexis/*.env have every variable of the release's env templates and no value still at a template's CHANGE_ME
+#   placeholder (each refused one named as file:VARIABLE, never its value; KI-004) -> snapshot the units, Caddyfile,
+#   the web application firewall's rule files, the Caddy build and the maintenance page root-owned under
 #   /var/lib/velexis/system/<sha>/ -> from the snapshot, stage a changed Caddy build, rule files and Caddyfile and
 #   validate the Caddyfile with the binary the caddy service will run, install the units, then install the root-owned
 #   scripts (velexis-deploy, -backup, -restore, -alert, -run, -healthcheck, -shiplogs and -logreview;
@@ -262,8 +263,15 @@ restart_units() { # release dir; returns 1 on the first unhealthy unit
   done
 }
 
-check_env_files() { # dir with the release's env/*.env.example: every template variable must exist on the VM
-  local tpl dest keys key missing=""
+placeholder_names() { # env file -> the names of its variables whose value still holds CHANGE_ME, one per line
+  # Only assignments (NAME=... at the start of a line), never comments. The sed prints the name and never the value,
+  # which may hold a real secret beside the placeholder; LC_ALL=C reads bytes, so a value that is not UTF-8 counts too.
+  LC_ALL=C sed -n -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*CHANGE_ME.*$/\1/p' "$1"
+}
+
+check_env_files() { # dir with the release's env/*.env.example: every template variable must exist on the VM, and no
+  # value may still hold a template's CHANGE_ME placeholder (KI-004)
+  local tpl dest keys key missing="" placeholders=""
   for tpl in "$1"/*.env.example; do
     [ -f "$tpl" ] || continue
     keys="$(grep -oE '^[A-Z][A-Z0-9_]*=' "$tpl" | tr -d '=' || true)"
@@ -275,6 +283,17 @@ check_env_files() { # dir with the release's env/*.env.example: every template v
     done
   done
   [ -z "$missing" ] || die "env files lack variables of this release's templates:$missing. Add them to /etc/velexis (empty is allowed), then deploy again. Nothing was changed."
+  # A value still at a template's CHANGE_ME placeholder (smtps://CHANGE_ME_USER:...@smtp.example.com:465,
+  # CHANGE_ME_ops@example.com) is a valid URL or address, so the apps would start and fail only when they send mail or
+  # alerts. Every variable of every destination file counts, an optional file's included (a placeholder pasted into
+  # another variable is the same mistake); each is named as file:VARIABLE, never with its value.
+  for tpl in "$1"/*.env.example; do
+    [ -f "$tpl" ] || continue
+    dest="$ETC/$(basename "$tpl" .example)"
+    [ -f "$dest" ] || continue
+    for key in $(placeholder_names "$dest"); do placeholders="$placeholders $(basename "$dest"):$key"; done
+  done
+  [ -z "$placeholders" ] || die "env files hold values still at the templates' CHANGE_ME placeholders:$placeholders. Fill them in in /etc/velexis (docs/mvp/deployment-single-vm.md §3 step 6), then deploy again. Nothing was changed."
 }
 
 verify_upload() { # dir: SHA256SUMS lists exactly the regular files of the folder (but itself), all intact

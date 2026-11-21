@@ -3,7 +3,8 @@
 # check-vm.test.sh — tests deploy/scripts/check-vm.sh and the env file checks of provision-vm.sh (task X-020), the
 # master-key rotation of provision-vm.sh's step keys (task X-040), the SSH second factor of its step ssh (X-037) and
 # its lockout guard, and check-vm.sh's check of AIDE's daily timer (lead decisions (13k) and (13j) of 2026-11-10), and
-# the guard's check of the SSH source address against SSH_ALLOW_FROM (lead decision (15d) of 2026-11-11).
+# the guard's check of the SSH source address against SSH_ALLOW_FROM (lead decision (15d) of 2026-11-11), and the
+# envfiles group's refusal of values still at the templates' CHANGE_ME placeholders (KI-004).
 #
 #   sudo bash deploy/scripts/test/check-vm.test.sh
 #
@@ -39,7 +40,7 @@
 # after that re-baseline (lead decision (23b) of 2026-11-15) in [FIX-W54-SHARED 23b], and auditd's watches of AIDE's
 # own baseline (task X-045, lead decision (24c) of 2026-11-15) in [X-045 AC2], and the step caddy's reload of auditd's
 # rules (lead decision (25h) of 2026-11-16) in [FIX-W56-SHARED 25h], and the Node.js major (task X-047) in [X-047 AC3]
-# and [X-047 AC4].
+# and [X-047 AC4], and the CHANGE_ME placeholders (KI-004) in [FIX-W67-KI004 AC2] and [FIX-W67-KI004 AC3].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -70,7 +71,13 @@
 #      /var/lib/velexis/provision before augenrules --load and puts the two watches last (read from provision-vm.sh;
 #      its lines that make the folders run as they are on a new root).
 #   4. With a variable removed from a test copy of an env file, check-vm.sh reports FAIL naming the variable, and
-#      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3).
+#      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3). The CHANGE_ME
+#      placeholders (KI-004): provision-vm.sh's first run names each template value still to fill in as file:VARIABLE
+#      (the templates' comments not); the healthy VM of step 2 has them filled in, as the developer does, and
+#      check-vm.sh reports PASS for every env file, the templates' header comments that name CHANGE_ME included; a value
+#      still holding CHANGE_ME (the template's, one with a real secret beside the placeholder, one pasted into the
+#      optional platform-worker.env) gives one FAIL line per file naming its file:VARIABLE pairs and no value, and a
+#      commented-out line that holds CHANGE_ME passes.
 #   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
 #      the same SHA-256 in both zone folders, leaves every other key file alone, restores a missing copy and refuses a
 #      malformed or lower version; after the runbook's end (MASTER_KEY_CURRENT=local:v2, master-v1.key removed from
@@ -249,6 +256,13 @@ DEPLOY_HOME="/home/$DEPLOY_TEST_USER"
 provision "$OUT/provision-1.log" users,keys,envfiles || { indent "$OUT/provision-1.log"; die "provision-vm.sh failed"; }
 sed "s#$PREFIX#<prefix>#g" "$OUT/provision-1.log"
 DEPLOY_HOME="$(getent passwd "$DEPLOY_TEST_USER" | cut -d: -f6)"
+# The templates' CHANGE_ME values (KI-004), named by variable; their header comments that name CHANGE_ME are not.
+CHANGE_ME_WARNING="WARNING: fill in the CHANGE_ME values: alert.env:ALERT_SMTP_USER alert.env:ALERT_SMTP_PASSWORD backup.env:RCLONE_REMOTE ota-backend.env:SMTP_URL ota-backend.env:OPS_ALERT_EMAIL platform-backend.env:SMTP_URL platform-backend.env:OPS_ALERT_EMAIL (velexis-deploy refuses a release, and check-vm.sh reports FAIL, while one is left;"
+if grep -qF "$CHANGE_ME_WARNING" "$OUT/provision-1.log" && ! grep -q 'CHANGE_ME_USER\|CHANGE_ME_ops' "$OUT/provision-1.log"; then
+  pass "provision-vm.sh --steps envfiles names every template value still to fill in as file:VARIABLE, never a value, and says that velexis-deploy and check-vm.sh refuse them [FIX-W67-KI004 AC2]"
+else
+  fail "provision-vm.sh --steps envfiles names every template value still to fill in as file:VARIABLE, never a value, and says that velexis-deploy and check-vm.sh refuse them [FIX-W67-KI004 AC2]"
+fi
 FP1="$(fingerprint "$ETC" "$DEPLOY_HOME/.ssh")"
 provision "$OUT/provision-2.log" users,keys,envfiles || { indent "$OUT/provision-2.log"; die "the second provision-vm.sh run failed"; }
 FP2="$(fingerprint "$ETC" "$DEPLOY_HOME/.ssh")"
@@ -797,10 +811,11 @@ healthy
 # ---- the outbound allow-list (X-041): the step egress, once, as harden runs it on a new VM -------------------------
 # What the VM gives the step: its resolvers, chrony's sources, the apt sources the step packages wrote, the mail relay
 # in the env files and the bucket's endpoint in rclone.conf. Hosts answer with documentation addresses.
-EGRESS_SECRETS="$PREFIX/egress-secrets" # the SMTP password and the bucket key of the test; step 7 searches for them
+EGRESS_SECRETS="$PREFIX/egress-secrets" # the SMTP passwords and the bucket key of the test; step 7 searches for them
 SMTP_SECRET="$(openssl rand -hex 16)"
 BUCKET_SECRET="$(openssl rand -hex 20)"
-( umask 077; printf '%s\n' "$SMTP_SECRET" "$BUCKET_SECRET" >"$EGRESS_SECRETS" )
+ALERT_SMTP_SECRET="$(openssl rand -hex 16)" # alert.env's SMTP password (KI-004: no value stays at CHANGE_ME)
+( umask 077; printf '%s\n' "$SMTP_SECRET" "$BUCKET_SECRET" "$ALERT_SMTP_SECRET" >"$EGRESS_SECRETS" )
 install -d -m 0755 "$ROOT/run/systemd/resolve" "$ROOT/etc/apt/sources.list.d"
 printf 'nameserver 192.0.2.53\nnameserver 2001:db8::53\nsearch .\n' >"$ROOT/run/systemd/resolve/resolv.conf"
 printf '^,*,192.0.2.124,2,6,377,32,0.000012,0.000010,0.001\n^,+,2001:db8::124,2,6,377,30,0.000020,0.000018,0.002\n#,-,PPS0,0,4,0,-,0,0,0\n' >"$FAKE/chronyc-sources"
@@ -832,6 +847,14 @@ for f in platform-backend.env ota-backend.env; do
   sed -i -E "s#^SMTP_URL=.*#SMTP_URL=smtps://vxmail:${SMTP_SECRET}@smtp.mail.example.net:465#" "$ETC/$f"
 done
 sed -i -E 's#^ALERT_SMTP_URL=.*#ALERT_SMTP_URL=smtps://smtp.mail.example.net:465#' "$ETC/alert.env"
+# The other values the developer fills in after provisioning (docs/mvp/deployment-single-vm.md §3 step 6): check-vm.sh
+# reports FAIL for a value still at a template's CHANGE_ME placeholder (KI-004).
+sed -i -E 's#^OPS_ALERT_EMAIL=.*#OPS_ALERT_EMAIL=ops@mail.example.net#' "$ETC/platform-backend.env" "$ETC/ota-backend.env"
+sed -i -E "s#^ALERT_SMTP_USER=.*#ALERT_SMTP_USER=vxalerts#; s#^ALERT_SMTP_PASSWORD=.*#ALERT_SMTP_PASSWORD=${ALERT_SMTP_SECRET}#" "$ETC/alert.env"
+sed -i -E 's#^RCLONE_REMOTE=.*#RCLONE_REMOTE=offsite:velexis-backups-vmtest#' "$ETC/backup.env"
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME' "$ETC"/*.env; then
+  die "a template has a CHANGE_ME value that check-vm.test.sh does not fill in: $(grep -lE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME' "$ETC"/*.env | xargs -n 1 basename | paste -sd' ' -)"
+fi
 ( umask 077; printf '[offsite]\ntype = s3\nprovider = Other\naccess_key_id = vxbackup\nsecret_access_key = %s\nendpoint = https://s3.backup.example.net\nregion = eu-1\nno_check_bucket = true\n' "$BUCKET_SECRET" >"$ETC/backup/rclone.conf" )
 cat >"$FAKE/getent-hosts" <<'EOF'
 ntp.ubuntu.com 192.0.2.123
@@ -993,6 +1016,17 @@ if [ "$covered" = 1 ]; then
   pass "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
 else
   fail "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
+fi
+# KI-004: every env file of the VM has its PASS line, also ota-backend.env and platform-backend.env, whose header
+# comments (from their templates) name CHANGE_ME.
+n_env="$(find "$ETC" -maxdepth 1 -name '*.env' -type f | wc -l)"
+n_pass="$(grep -c "^PASS /etc/velexis/[a-z-]*\.env has no value still at a template's CHANGE_ME placeholder$" "$OUT/healthy.out" || true)"
+if [ "$n_env" -ge 11 ] && [ "$n_pass" = "$n_env" ] && grep -q '^#.*CHANGE_ME' "$ETC/ota-backend.env" &&
+  grep -q '^#.*CHANGE_ME' "$ETC/platform-backend.env" &&
+  grep -qx "PASS /etc/velexis/platform-backend.env has no value still at a template's CHANGE_ME placeholder" "$OUT/healthy.out"; then
+  pass "with the CHANGE_ME values filled in, every env file ($n_pass) has a PASS line, the templates' header comments that name CHANGE_ME included [FIX-W67-KI004 AC3]"
+else
+  fail "with the CHANGE_ME values filled in, every env file ($n_env) has a PASS line (found $n_pass) [FIX-W67-KI004 AC3]"
 fi
 if [ "$BEFORE" = "$AFTER" ] && [ ! -e "$FAKE/violations" ]; then
   pass "check-vm.sh changed no file and asked no tool to change anything (read-only) [X-020]"
@@ -1539,6 +1573,49 @@ else
   indent "$OUT/restored.out"
   fail "with the variables back, check-vm.sh --only envfiles,files passes again [X-020 AC3]"
 fi
+
+# Values still at the templates' CHANGE_ME placeholders (KI-004): the template's own values in ota-backend.env, its SMTP
+# URL with the real password beside the placeholder (never to be printed), alert.env's password at the template's value,
+# and a placeholder pasted into a variable of the optional platform-worker.env (its template names no variable).
+step "values still at the templates' CHANGE_ME placeholders (KI-004)"
+for f in ota-backend.env alert.env platform-worker.env; do cp -p "$ETC/$f" "$PREFIX/$f.orig"; done
+sed -i -E "s#^SMTP_URL=.*#SMTP_URL=smtps://CHANGE_ME_USER:${SMTP_SECRET}@smtp.example.com:465#; s#^OPS_ALERT_EMAIL=.*#OPS_ALERT_EMAIL=CHANGE_ME_ops@example.com#" "$ETC/ota-backend.env"
+sed -i -E 's#^ALERT_SMTP_PASSWORD=.*#ALERT_SMTP_PASSWORD=CHANGE_ME#' "$ETC/alert.env"
+printf 'LOG_LEVEL=debug-CHANGE_ME\n' >>"$ETC/platform-worker.env"
+FP_PLACEHOLDERS="$(fingerprint_all "$ETC")"
+if run_check "$OUT/placeholders.out" --only envfiles; then rc=0; else rc=$?; fi
+PH_TAIL="has no value still at a template's CHANGE_ME placeholder (found:"
+PH_FIX="; fill them in, docs/mvp/deployment-single-vm.md §3 step 6)"
+if [ "$rc" = 1 ] &&
+  grep -qxF "FAIL /etc/velexis/ota-backend.env $PH_TAIL ota-backend.env:SMTP_URL ota-backend.env:OPS_ALERT_EMAIL$PH_FIX" "$OUT/placeholders.out" &&
+  grep -qxF "FAIL /etc/velexis/alert.env $PH_TAIL alert.env:ALERT_SMTP_PASSWORD$PH_FIX" "$OUT/placeholders.out" &&
+  grep -qxF "FAIL /etc/velexis/platform-worker.env $PH_TAIL platform-worker.env:LOG_LEVEL$PH_FIX" "$OUT/placeholders.out" &&
+  [ "$(grep -c '^FAIL' "$OUT/placeholders.out")" = 3 ] &&
+  grep -qx "PASS /etc/velexis/platform-backend.env has no value still at a template's CHANGE_ME placeholder" "$OUT/placeholders.out"; then
+  pass "check-vm.sh --only envfiles exits 1 with one FAIL line per file, naming ota-backend.env:SMTP_URL and :OPS_ALERT_EMAIL, alert.env:ALERT_SMTP_PASSWORD and platform-worker.env:LOG_LEVEL; the other files pass [FIX-W67-KI004 AC2]"
+else
+  indent "$OUT/placeholders.out"
+  fail "check-vm.sh --only envfiles exits 1 with one FAIL line per file naming its CHANGE_ME variables (exit $rc) [FIX-W67-KI004 AC2]"
+fi
+if ! grep -qF -e "$SMTP_SECRET" -e 'CHANGE_ME_USER' -e 'CHANGE_ME_ops' -e 'smtp.example.com' -e 'debug-CHANGE_ME' "$OUT/placeholders.out" &&
+  [ "$(fingerprint_all "$ETC")" = "$FP_PLACEHOLDERS" ]; then
+  pass "it prints no value (neither the password beside the placeholder nor the placeholder values) and changes no file [FIX-W67-KI004 AC2]"
+else
+  fail "it prints no value (neither the password beside the placeholder nor the placeholder values) and changes no file [FIX-W67-KI004 AC2]"
+fi
+# Filled in again, with the placeholder only in a commented-out line and in the optional file's comment.
+for f in ota-backend.env alert.env platform-worker.env; do cp -p "$PREFIX/$f.orig" "$ETC/$f"; done
+printf '# OPS_ALERT_EMAIL=CHANGE_ME_ops@example.com\n' >>"$ETC/ota-backend.env"
+printf '# LOG_LEVEL=debug-CHANGE_ME\n' >>"$ETC/platform-worker.env"
+if run_check "$OUT/placeholders-commented.out" --only envfiles &&
+  grep -qx "PASS /etc/velexis/ota-backend.env has no value still at a template's CHANGE_ME placeholder" "$OUT/placeholders-commented.out" &&
+  grep -qx "PASS /etc/velexis/platform-worker.env has no value still at a template's CHANGE_ME placeholder" "$OUT/placeholders-commented.out"; then
+  pass "a commented-out line and an optional file's comment that hold CHANGE_ME pass, beside real values: check-vm.sh --only envfiles exits 0 [FIX-W67-KI004 AC3]"
+else
+  indent "$OUT/placeholders-commented.out"
+  fail "a commented-out line and an optional file's comment that hold CHANGE_ME pass, beside real values [FIX-W67-KI004 AC3]"
+fi
+for f in ota-backend.env alert.env platform-worker.env; do cp -p "$PREFIX/$f.orig" "$ETC/$f"; rm -f "$PREFIX/$f.orig"; done
 
 # ---- 5. a master-key rotation (X-040, docs/mvp/runbooks/master-key-rotation.md) ------------------------------
 step "a master-key rotation: NEW_MASTER_KEY=v2, then master-v1.key removed"

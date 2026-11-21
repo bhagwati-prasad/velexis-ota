@@ -1316,7 +1316,7 @@ step_database() {
 step_envfiles() {
   log "Environment files in $ETC (existing files are kept)"
   load_or_create_secrets
-  local tpl name dest tmp missing
+  local tpl name dest tmp missing placeholders key
   for tpl in "$DEPLOY_DIR"/env/*.env.example; do
     name="$(basename "$tpl" .example)"
     dest="$ETC/$name"
@@ -1338,9 +1338,16 @@ step_envfiles() {
     [ -f "$dest" ] || die "could not install $dest"
   done
   ensure_owner_mode root:root 600 "$ETC"/*.env "$SECRETS_FILE"
-  if grep -l 'CHANGE_ME' "$ETC"/*.env >/dev/null 2>&1; then
-    warn "fill in the CHANGE_ME values: $(grep -l 'CHANGE_ME' "$ETC"/*.env | tr '\n' ' ')"
-  fi
+  # Values still at a template's CHANGE_ME placeholder: assignments only, never the templates' comments, named as
+  # file:VARIABLE and never shown, by the same rule as velexis-deploy and check-vm.sh, which refuse them (KI-004).
+  placeholders=""
+  for dest in "$ETC"/*.env; do
+    [ -f "$dest" ] || continue
+    while IFS= read -r key; do
+      placeholders="$placeholders $(basename "$dest"):$key"
+    done < <(LC_ALL=C sed -n -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*CHANGE_ME.*$/\1/p' "$dest")
+  done
+  [ -z "$placeholders" ] || warn "fill in the CHANGE_ME values:$placeholders (velexis-deploy refuses a release, and check-vm.sh reports FAIL, while one is left; docs/mvp/deployment-single-vm.md §3 step 6)"
 }
 
 # ---- scripts: root-owned scripts, systemd units, timers ---------------------------------------------------
@@ -1467,7 +1474,8 @@ EOF
   fi
   cat <<EOF
 Next steps (docs/mvp/deployment-single-vm.md §3):
-  1. Fill the CHANGE_ME values in /etc/velexis/*.env (SMTP, Stripe when needed, real host names).
+  1. Fill the CHANGE_ME values in /etc/velexis/*.env (SMTP, Stripe when needed, real host names):
+     velexis-deploy refuses a release, and check-vm.sh reports FAIL, while one is left.
   2. Put the age PUBLIC keys in /etc/velexis/backup/data-recipients.txt and config-recipients.txt,
      and the rclone remote in /etc/velexis/backup/rclone.conf. Then: systemctl start velexis-backup
      (the outbound allow-list takes the SMTP and bucket hosts from these files within 2 minutes:

@@ -9,9 +9,10 @@
 # It prints one PASS or FAIL line per item and a total, and exits 0 when every item passes, 1 when one fails and 2
 # on a usage error. It changes nothing and writes no file: it reads files and asks systemctl, ufw, nft (list only), sshd,
 # swapon, sysctl, timedatectl, ss, psql (as postgres), redis-cli, caddy (as caddy) and auditctl (-l only). It never prints a value of an env
-# file, a key file or .provision-secrets: env files are compared with their templates by variable name only, key
-# copies with cmp, the Redis password reaches redis-cli through its environment, and caddy's messages are shown only
-# with every value of caddy.env replaced by <redacted> (bash's own errors about a malformed caddy.env line are dropped).
+# file, a key file or .provision-secrets: env files are compared with their templates by variable name only (a value
+# still at a CHANGE_ME placeholder is named by its variable), key copies with cmp, the Redis password reaches redis-cli
+# through its environment, and caddy's messages are shown only with every value of caddy.env replaced by <redacted>
+# (bash's own errors about a malformed caddy.env line are dropped).
 # Of an admin's TOTP secret file it reads only the owner, the mode and the line " TOTP_AUTH", never the secret.
 #
 # Groups and their items (docs/mvp/deployment-single-vm.md §2 to §7):
@@ -67,8 +68,10 @@
 #             current and maintenance, /var/lib/velexis and its storage, the backup and log folders, the root-owned
 #             scripts (velexis-deploy, -backup, -restore, -alert, -run and -healthcheck), the sudoers rule
 #   envfiles  every /etc/velexis/<app>.env has every variable of its deploy/env/<app>.env.example template (an empty
-#             value is fine; missing ones are listed by name); caddy.env and ota-backend.env hold the same edge
-#             secret, ota-backend.env and ota-admin.env the same service key (compared, never printed)
+#             value is fine; missing ones are listed by name) and no value still at a template's CHANGE_ME placeholder
+#             (any assignment whose value holds CHANGE_ME, never a comment, named as <app>.env:VARIABLE; KI-004);
+#             caddy.env and ota-backend.env hold the same edge secret, ota-backend.env and ota-admin.env the same
+#             service key (compared, never printed)
 #
 # Options: --only <group,...>; --templates <folder> (the env templates; default: env/ of this script's deploy/ folder).
 # Environment: DEPLOY_USER (deploy), DB_NAME (velexis), PG_MAJOR (16) and NODE_MAJOR: the values and defaults of
@@ -883,8 +886,14 @@ same_value() { # key file-a file-b: compares the two values without printing the
   if [ -n "$a" ] && [ "$a" = "$b" ]; then pass "$1 is the same in $2 and $3"; else fail "$1 is the same, and not empty, in $2 and $3"; fi
 }
 
+placeholder_names() { # env file -> the names of its variables whose value still holds CHANGE_ME, one per line
+  # Only assignments (NAME=... at the start of a line), never comments; the name is printed, never the value. The same
+  # rule as deploy.sh's check_env_files (KI-004), byte-wise (LC_ALL=C), so a value that is not UTF-8 counts too.
+  LC_ALL=C sed -n -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*CHANGE_ME.*$/\1/p' "$1"
+}
+
 group_envfiles() {
-  local tpl name dest keys key missing n=0
+  local tpl name dest keys key missing placeholders n=0
   for tpl in "$TEMPLATES"/*.env.example; do
     [ -f "$tpl" ] || continue
     n=$((n + 1))
@@ -901,6 +910,15 @@ group_envfiles() {
       pass "$(show "$dest") has every variable of $name.example ($(printf '%s\n' "$keys" | grep -c .))"
     else
       fail "$(show "$dest") lacks variables of $name.example:$missing"
+    fi
+    # A value still at a template's CHANGE_ME placeholder is a valid URL or address, so the apps start and fail only
+    # when they send mail or alerts; velexis-deploy refuses a release while one is left (KI-004).
+    placeholders=""
+    for key in $(placeholder_names "$dest"); do placeholders="$placeholders $name:$key"; done
+    if [ -z "$placeholders" ]; then
+      pass "$(show "$dest") has no value still at a template's CHANGE_ME placeholder"
+    else
+      fail "$(show "$dest") has no value still at a template's CHANGE_ME placeholder (found:$placeholders; fill them in, docs/mvp/deployment-single-vm.md §3 step 6)"
     fi
   done
   if [ "$n" = 0 ]; then fail "env templates found in $TEMPLATES"; return; fi

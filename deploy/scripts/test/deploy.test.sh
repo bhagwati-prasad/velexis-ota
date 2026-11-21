@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =====================================================================================================
 # deploy.test.sh — tests deploy/scripts/deploy.sh (velexis-deploy) without root, systemd or a VM (task X-023; the
-# tenant migration report step of OBE-007).
+# tenant migration report step of OBE-007; the refusal of values still at the templates' CHANGE_ME placeholders,
+# KI-004).
 #
 #   bash deploy/scripts/test/deploy.test.sh
 #
@@ -11,7 +12,8 @@
 #
 # deploy.sh runs exactly as it is, with the test overrides of its header:
 #   VELEXIS_ROOT   a temporary folder laid out like a provisioned VM: /etc/velexis/*.env made from the deploy/env
-#                  templates (a template with only comments gets no file, as on the VM), the provisioned Caddyfile
+#                  templates (a template with only comments gets no file, as on the VM) with their CHANGE_ME values
+#                  filled in as the developer does after provisioning, the provisioned Caddyfile
 #                  and maintenance page, /srv/velexis/{incoming,releases}, /var/lib/velexis, /usr/local/sbin, ...
 #   SYSTEMCTL      fake-systemctl.sh: starts and stops fake-app.mjs processes that answer /health/ready on each
 #                  unit's port, healthy or not depending on the flag file FAKE_UNHEALTHY in their release
@@ -91,6 +93,11 @@
 #       compares with the drop-in installed when it began (no restart for an unchanged one, one for a new one, none for
 #       an unhealthy release's automatic rollback, [FIX-W53-SHARED 22a]) and writes the record; --rollback records the
 #       drop-in it restarted Caddy with;
+#   17. values still at the templates' CHANGE_ME placeholders (KI-004, every check ends with [FIX-W67-KI004 AC1] or
+#       [FIX-W67-KI004 AC3]): an env file whose value still holds CHANGE_ME (a template's value, a real secret pasted
+#       beside the placeholder, an optional file's variable) -> refusal before anything changes, every file:VARIABLE
+#       named and no value printed, also for a release already on the VM; with the values filled in, a commented line
+#       that holds CHANGE_ME (the templates' own header comments included) deploys;
 #   and over the whole run: no DSN or secret of the env files in any output, command line or log, no unit used
 #   without a daemon-reload after its file changed, and no call that fake-systemctl.sh does not know.
 #
@@ -212,6 +219,18 @@ set_env migrator.env MIGRATE_TENANT_CONCURRENCY 2
 set_env migrator.env MIGRATE_TENANT_MAX_FAILURE_RATIO 0.25
 set_env reference-loader.env DATABASE_URL "postgres://velexis_platform_app:r-$TOKEN@127.0.0.1:9/velexis"
 set_env caddy.env VELEXIS_EDGE_SECRET "edge-$TOKEN"
+# The values the developer fills in after provisioning (docs/mvp/deployment-single-vm.md §3 step 6): velexis-deploy
+# refuses a release while a value still holds a template's CHANGE_ME placeholder (KI-004). The secrets carry the token.
+set_env platform-backend.env SMTP_URL "smtps://vxmail:s-$TOKEN@smtp.mail.example.net:465"
+set_env platform-backend.env OPS_ALERT_EMAIL ops@mail.example.net
+set_env ota-backend.env SMTP_URL "smtps://vxmail:s-$TOKEN@smtp.mail.example.net:465"
+set_env ota-backend.env OPS_ALERT_EMAIL ops@mail.example.net
+set_env alert.env ALERT_SMTP_USER vxalerts
+set_env alert.env ALERT_SMTP_PASSWORD "a-$TOKEN"
+set_env backup.env RCLONE_REMOTE offsite:velexis-backups-vmtest
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME' "$ETC"/*.env; then
+  die "a template has a CHANGE_ME value that deploy.test.sh does not fill in: $(grep -lE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE_ME' "$ETC"/*.env | xargs -n 1 basename | paste -sd' ' -)"
+fi
 
 # ---- fakes ----------------------------------------------------------------------------------------------------
 ln -s "$NODE" "$FAKEBIN/node"
@@ -1468,6 +1487,53 @@ rollback_recorded() {
 }
 check "--rollback to r27 restarts Caddy once with r27's drop-in, after the daemon-reload and the units, and records it [FIX-W53-SHARED 22b]" \
   all_of rollback_recorded reloaded_before_caddy_restart restarted_after_units
+
+# ---- 17. values still at the templates' CHANGE_ME placeholders (KI-004) -----------------------------------------
+step "17. Env values still at the templates' CHANGE_ME placeholders: refused before anything changes, named, never shown"
+# r30 has r27's Caddy build and drop-in, so its deploy restarts no Caddy: only the env files differ between the runs.
+make_release r30 unit=r30 caddy=r30 caddy-bin=b4 dropin=r27
+R30="$BUILT"
+upload "$R30"
+cp -p "$ETC/platform-backend.env" "$PREFIX/platform-backend.env.filled"
+cp -p "$ETC/alert.env" "$PREFIX/alert.env.filled"
+# A template's value again, the same with a real secret pasted beside the placeholder (never to be printed), and a
+# placeholder pasted into a variable of the optional platform-worker.env (its template names no variable), followed by
+# a byte that is not UTF-8 (the check reads bytes, also under the VM's C.UTF-8 locale).
+set_env alert.env ALERT_SMTP_PASSWORD CHANGE_ME
+set_env platform-backend.env SMTP_URL "smtps://CHANGE_ME_USER:p-$TOKEN@smtp.example.com:465"
+( umask 077; printf '# operator overrides\nLOG_LEVEL=debug-CHANGE_ME-\377\n' >"$ETC/platform-worker.env" )
+FP_BEFORE="$(fingerprint "$ROOT")"
+deploy "$R30"
+PLACEHOLDERS_NAMED="env files hold values still at the templates' CHANGE_ME placeholders: alert.env:ALERT_SMTP_PASSWORD platform-backend.env:SMTP_URL platform-worker.env:LOG_LEVEL."
+placeholders_refused() { rc_is 1 && output_has "$PLACEHOLDERS_NAMED" && output_has "Nothing was changed."; }
+no_value_shown() {
+  not output_has "p-$TOKEN" && not output_has "smtp.example.com" && not output_has "CHANGE_ME_USER" &&
+    not output_has "debug-CHANGE_ME" && not grep -qF "p-$TOKEN" "$LOGS/deploy.log"
+}
+r27_untouched() { current_is "$R27" && nothing_changed; }
+r30_waits() { [ -d "$SRV/incoming/$R30" ] && [ ! -e "$SRV/releases/$R30" ] && [ ! -e "$LIB/system/$R30" ]; }
+check "refused, exit 1, naming alert.env:ALERT_SMTP_PASSWORD, platform-backend.env:SMTP_URL and platform-worker.env:LOG_LEVEL, with 'Nothing was changed.' [FIX-W67-KI004 AC1]" \
+  placeholders_refused
+check "no value is shown: neither the pasted secret nor the placeholder values reach the output or the deploy log [FIX-W67-KI004 AC1]" \
+  no_value_shown
+check "nothing changed before the refusal: current is r27, no snapshot, unit, Caddyfile, root script or release; the upload waits in incoming/ [FIX-W67-KI004 AC1]" \
+  all_of r27_untouched nothing_ran r30_waits
+# The same files refuse a release that is already on the VM (deploy.sh's other branch), before its snapshot is staged.
+deploy "$R27"
+check "re-deploying r27, already on the VM, is refused the same way, changing nothing [FIX-W67-KI004 AC1]" \
+  all_of placeholders_refused no_value_shown r27_untouched nothing_ran
+# Filled in again, with the placeholder only in comments: a commented-out line, the optional file's comment and the
+# templates' own header comments ("CHANGE_ME values are filled in by the developer").
+cp -p "$PREFIX/platform-backend.env.filled" "$ETC/platform-backend.env"
+cp -p "$PREFIX/alert.env.filled" "$ETC/alert.env"
+printf '# SMTP_URL=smtps://CHANGE_ME_USER:CHANGE_ME_PASSWORD@smtp.example.com:465\n' >>"$ETC/platform-backend.env"
+( umask 077; printf '# operator overrides\n# LOG_LEVEL=debug-CHANGE_ME\n' >"$ETC/platform-worker.env" )
+header_comments_hold_it() { grep -q '^#.*CHANGE_ME' "$ETC/ota-backend.env" && grep -q '^#.*CHANGE_ME' "$ETC/platform-backend.env"; }
+deploy "$R30"
+r30_live() { rc_is 0 && current_is "$R30" && unit_marker_is r30 && caddy_marker_is r30 && serving "$R30"; }
+check "with real values and CHANGE_ME only in comments (a commented-out line, the optional file, the templates' header comments), r30 deploys [FIX-W67-KI004 AC3]" \
+  all_of header_comments_hold_it r30_live
+rm -f "$ETC/platform-worker.env"
 
 # ---- over the whole run -----------------------------------------------------------------------------------------------------
 step "Over the whole run"

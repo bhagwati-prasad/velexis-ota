@@ -60,7 +60,7 @@ sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/scratch-deploy.pub ADMIN_USER=ubuntu SSH_ALLOW_
 sudo bash /tmp/deploy/scripts/check-vm.sh | tee ~/check-vm.txt
 ```
 
-`SSH_ALLOW_FROM` limits SSH to your address: the VM will hold personal data. `check-vm.sh` shows `PASS` except for the admin's SSH second factor and the `deploy` user's methods (no factor is enrolled on a scratch VM; [`ssh-access.md`](ssh-access.md)) and the SMTP and bucket lines of the outbound list, which stay without an address on a scratch VM.
+`SSH_ALLOW_FROM` limits SSH to your address: the VM will hold personal data. `check-vm.sh` shows `PASS` except for the admin's SSH second factor and the `deploy` user's methods (no factor is enrolled on a scratch VM; [`ssh-access.md`](ssh-access.md)) and the SMTP and bucket lines of the outbound list, which stay without an address on a scratch VM, and the env files whose values still hold the templates' `CHANGE_ME` placeholders (`alert.env`, `backup.env`, `ota-backend.env`, `platform-backend.env`; KI-004): step 3 replaces all of them but `backup.env` with production's and gives `backup.env` a remote without `CHANGE_ME`.
 
 ### Step 2. Isolate the scratch VM
 
@@ -131,12 +131,13 @@ velexis-restore fetch daily/<date> /root/restore/set          # "checksums match
 grep -E '^[a-z_]+=' /root/restore/set/MANIFEST.txt               # created_at, host, release, figures: note them
 ```
 
-**The configuration.** Keep the scratch VM's own `backup.env` and `backup/` (no production bucket key, no recipients: its backup cannot run), and take everything else of the set's `/etc/velexis`: the master keys and the pepper (which must match the restored data), the JWT and document keys, the env files and `.provision-secrets`.
+**The configuration.** Keep the scratch VM's own `backup.env` and `backup/` (no production bucket key, no recipients: its backup cannot run), and take everything else of the set's `/etc/velexis`: the master keys and the pepper (which must match the restored data), the JWT and document keys, the env files and `.provision-secrets`. The scratch VM's own `backup.env` still holds the template's `RCLONE_REMOTE=offsite:velexis-backups-CHANGE_ME`, and `velexis-deploy` refuses a release (step 5) while a value of an env file holds `CHANGE_ME` (KI-004): the `sed` gives it a remote that names no bucket of production, so its backup still cannot run and the allow-list still has no address for it.
 
 ```bash
 velexis-restore config /root/restore/set --identity /root/restore/velexis-config.key
 cp -a /etc/velexis /root/restore/etc-velexis.scratch
 rsync -a --exclude=/backup/ --exclude=/backup.env /root/velexis-config.restore/velexis/ /etc/velexis/
+sed -i -E 's#^RCLONE_REMOTE=.*CHANGE_ME.*#RCLONE_REMOTE=offsite:scratch-no-bucket#' /etc/velexis/backup.env
 ```
 
 **AIDE's baseline of production** (X-045). The same `config` command unpacks it beside the configuration, in `/root/velexis-config.restore/aide-baseline/` (`aide.db`, `aide.db.sha256`, `aide-rebaseline`), and checks it: note its lines, `aide-baseline/aide.db: SHA-256 …, as aide-baseline/aide.db.sha256 says` and `… has the SHA-256 of the record's last 'rebaselined' line (…): the database that re-baseline installed` (or `manual`), in the drill log. The `rsync` above copies only `velexis/`, so the scratch VM keeps the AIDE database its own provisioning made; production's is a baseline of production's files only. A `WARNING` line (a database that does not match its `aide.db.sha256`, or differs from the record's last line) is a finding of the drill: tell the developer, who checks production's `aide.db` and record ([§12](../deployment-single-vm.md#aides-one-time-re-baseline-and-re-baselining-by-hand) of the guide).
@@ -389,6 +390,7 @@ What can run without a VM was rehearsed on a development machine (4 CPUs shared 
 | The single-tenant restore of §4 (as `velexis_test_admin` instead of `postgres`, the migration CLI with the migrator's DSN instead of `systemd-run`) | every step under 2 s (restore into the scratch database 1.7 s, copy 0.6 s, migration 0.3 s); afterwards the live schema equals the set's (definitions, grants, every row), `tenant_<key>_old` keeps the row written after the backup, the other tenant is untouched, `velexis_ota_app` can use the restored schema |
 | The env file edits of step 3, run on a fake `/etc/velexis` rendered from `deploy/env/*.env.example` with production-like values, checked with the backends' own configuration code (`APP_ENV=production`) | accepted by the platform API and worker and the OTA API and worker; `velexis-alert` accepts the black hole and then cannot connect. The edits the guide asked for before X-031 (the black hole in both backends' files, test-mode values in every Stripe variable) were refused: the platform's Amadeus URLs and test-mode key, the OTA's `_LIVE` keys |
 | The copy of the restored configuration of step 3 (`rsync` with the two excludes) on a fake `/etc/velexis` | the restored keys and env files in place, the scratch VM's `backup.env` and `backup/` kept, modes kept |
+| Step 3's `sed` of the scratch VM's own `backup.env` (2026-11-21, KI-004), on a fake `/etc/velexis` rendered from `deploy/env/*.env.example` with the other files' `CHANGE_ME` values filled in, then `check-vm.sh --only envfiles` | before it, one `FAIL` naming `backup.env:RCLONE_REMOTE`; after it, `RCLONE_REMOTE=offsite:scratch-no-bucket` and a `PASS` line for every env file (exit 0), so `velexis-deploy` of step 5 is not refused by the same rule |
 | `systemctl mask` against a unit file in `/etc/systemd/system`, with systemd 255 (Ubuntu 24.04's) offline (`systemctl --root`) | refused ("already exists"); `--runtime` creates a link that `is-enabled` ignores (`disabled`); a `/dev/null` link in `/etc/systemd/system.control` gives `masked`, and `enable` is then refused. GNU `install`, which `velexis-deploy` uses, replaces a `/dev/null` link with the unit file |
 
 ## 8. What X-031 found and changed
