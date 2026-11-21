@@ -1319,6 +1319,51 @@ describe("checkout page: steps and data", () => {
     expect(field("remarks.0.text").hasAttribute("aria-invalid")).toBe(false);
   });
 
+  it("[FIX-W68-CARDTEXT AC3] 400 card_data marks the special request it was typed in with the storefront's message", async () => {
+    const fake = fakeApi({
+      setRemarks: async () =>
+        Promise.reject(
+          apiError(ValidationError, "VALIDATION_FAILED", 400, {
+            fieldErrors: [
+              {
+                path: "/remarks/1/text",
+                code: "card_data",
+                message: "A remark never holds a card number: remove it.",
+              },
+            ],
+          }),
+        ),
+    });
+    // One stored request ("WINDOW SEAT") and the empty field after it, where the card number is typed.
+    const stored = {
+      id: "crm_01JCHECKOUTREMARK001",
+      kind: "general",
+      subType: "GENERAL_MISCELLANEOUS",
+      text: "WINDOW SEAT",
+      travelerIds: [],
+      source: "customer",
+      createdAt: fromNow(-30),
+    };
+    fake.api.current = checkout({ progress: COMPLETE, remarks: [stored] });
+    const { client } = await openCheckout({ fake, query: `id=${CHECKOUT_ID}&step=extras` });
+    type("remarks.1.text", "Pay with 4111 1111 1111 1111");
+    await submit("extras");
+
+    expect(client.checkout.setRemarks).toHaveBeenCalledTimes(1);
+    const typed = field("remarks.1.text");
+    expect(typed.getAttribute("aria-invalid")).toBe("true");
+    expect(field("remarks.0.text").hasAttribute("aria-invalid")).toBe(false);
+    const message = document.getElementById(
+      /** @type {string} */ ((typed.getAttribute("aria-describedby") ?? "").split(" ").pop()),
+    );
+    expect(text(message)).toBe("Remove the card number: card details never go in this field");
+    const summary = /** @type {HTMLElement} */ (stepForm("extras").querySelector("[data-error-summary]"));
+    expect(text(summary)).toContain("Remove the card number: card details never go in this field");
+    expect(text(summary)).not.toContain("4111");
+    // The step stays open: nothing was saved.
+    expect(shownStep()).toEqual(["extras"]);
+  });
+
   it("[OFE-011] a price change at createPayment shows the new total to check before continuing", async () => {
     const fake = fakeApi({
       createPayment: vi.fn().mockRejectedValueOnce(

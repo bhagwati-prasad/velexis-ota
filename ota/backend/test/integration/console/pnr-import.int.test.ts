@@ -1156,6 +1156,47 @@ describe("console.bookings.import", () => {
     expect(await bookingsOf("tenant_alpha", order.recordLocator)).toHaveLength(1);
   });
 
+  it("[FIX-W68-CARDTEXT AC6] refuses a card number in a tag before the key, Amadeus and any row", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });
+    stub.clearRequests();
+    const key = randomUUID();
+    const body = {
+      reference: order.recordLocator,
+      pricing: { mode: "net" },
+      tags: ["vip", "card 4111 1111 1111 1111"],
+      reason: "Attach terminal booking",
+    };
+
+    const refused = await agent.import(body, key);
+
+    expect(answer(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleImportBooking", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      { path: "/tags/1", code: "card_data", message: "A tag never holds a card number: remove it." },
+    ]);
+    expect(refused.text).not.toContain("4111");
+    expect(stub.requests()).toEqual([]);
+    expect(await bookingsOf("tenant_alpha", order.recordLocator)).toEqual([]);
+    const stored = await inTenant("tenant_alpha", async (trx) => ({
+      keys: await trx.selectFrom("idempotency_keys").select("key").where("key", "=", key).execute(),
+      text: JSON.stringify([
+        await trx.selectFrom("staff_actions").selectAll().execute(),
+        await trx.selectFrom("bookings").selectAll().execute(),
+        await trx.selectFrom("idempotency_keys").selectAll().execute(),
+        await trx.selectFrom("supplier_requests").selectAll().execute(),
+      ]),
+    }));
+    expect(stored.keys).toEqual([]);
+    expect(stored.text).not.toContain("4111 1111");
+
+    // The key was never claimed: the same key without the card number imports the order with its tags.
+    const imported = await agent.import({ ...body, tags: ["vip", "group"] }, key);
+    expect(answer(imported)).toEqual([201, undefined]);
+    const [row] = await bookingsOf("tenant_alpha", order.recordLocator);
+    expect(row?.tags).toEqual(["vip", "group"]);
+  });
+
   it("refuses the import to a viewer, whose role lacks bookings:write", async () => {
     const viewer = await staffSession(alphaId, "viewer");
     const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });

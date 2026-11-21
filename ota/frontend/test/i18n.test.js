@@ -48,6 +48,15 @@ describe("fieldErrorMessage", () => {
     expect(fieldErrorMessage({ code: undefined })).toBe("Check this field");
   });
 
+  it("[FIX-W68-CARDTEXT AC3] has a message for the API's card_data code that never repeats the text", () => {
+    const message = fieldErrorMessage({
+      code: "card_data",
+      message: "A comment never holds a card number: remove it.",
+    });
+    expect(message).toBe("Remove the card number: card details never go in this field");
+    expect(message).not.toMatch(/[0-9]/);
+  });
+
   it("[OFE-002 AC1] has a message for every TravelerFieldErrorCode of the OTA API", () => {
     // The enum of components.schemas.TravelerFieldErrorCode (ota/backend/openapi), checked by name here so that a new
     // code shows up in review with its English text.

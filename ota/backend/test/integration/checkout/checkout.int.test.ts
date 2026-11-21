@@ -1320,3 +1320,76 @@ describe("a console checkout of a customer's priced offer (FIX-W30-OTA)", () => 
     expect(await checkoutsOf(pricedOffer.id)).toEqual([]);
   });
 });
+
+describe("a card number in the customer's free text of a checkout (FIX-W68-CARDTEXT, lead decision (37c))", () => {
+  it("[FIX-W68-CARDTEXT AC6] refuses a special request and an emergency contact's text on the storefront with 400 card_data, writing nothing", async () => {
+    const customer = await newCustomer();
+    const pricedOffer = await newPricedOffer(() => edgeWrite(customer.token));
+    const created = await create(edgeWrite(customer.token), { pricedOfferId: pricedOffer.id });
+    expect(created.status).toBe(201);
+    const opened = created.body as CheckoutBody;
+    stub.clearRequests();
+    const emergencyContact = { addresseeName: "ERIK BERG", countryCode: "SE", number: "701234567" };
+
+    const remarks = await put(edgeWrite(customer.token), opened.id, "remarks", {
+      remarks: [buildRemarkInput(), { text: "PAY WITH 4111 1111 1111 1111", travelerIds: ["1"] }],
+    });
+    expect(remarks.status).toBe(400);
+    expectResponseToMatch("setCheckoutRemarks", remarks);
+    expect((remarks.body as ErrorBody).error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      fieldErrors: [
+        {
+          path: "/remarks/1/text",
+          code: "card_data",
+          message: "A remark never holds a card number: remove it.",
+        },
+      ],
+    });
+    expect(remarks.text).not.toContain("4111");
+
+    const travelers = await put(edgeWrite(customer.token), opened.id, "travelers", {
+      travelers: [
+        buildTravelerInput({ emergencyContact: { ...emergencyContact, text: "Card 4111-1111-1111-1111" } }),
+      ],
+    });
+    expect(travelers.status).toBe(400);
+    expectResponseToMatch("setCheckoutTravelers", travelers);
+    expect((travelers.body as ErrorBody).error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      fieldErrors: [
+        {
+          path: "/travelers/0/emergencyContact/text",
+          code: "card_data",
+          message: "An emergency contact's text never holds a card number: remove it.",
+        },
+      ],
+    });
+    expect(travelers.text).not.toContain("4111");
+
+    // Nothing was written: the checkout keeps its version and has no request, no row holds the text, no supplier call.
+    const unchanged = await get(edgeRead(customer.token), opened.id);
+    expect(unchanged.body).toMatchObject({ version: opened.version, remarks: [] });
+    const stored = await tenantTx(tenantDb, "tenant_alpha", async (trx) =>
+      JSON.stringify([
+        await trx.selectFrom("checkouts").selectAll().where("id", "=", opened.id).execute(),
+        await trx.selectFrom("checkout_remarks").selectAll().where("checkout_id", "=", opened.id).execute(),
+        await trx.selectFrom("checkout_travelers").selectAll().where("checkout_id", "=", opened.id).execute(),
+      ]),
+    );
+    expect(stored).not.toContain("4111 1111");
+    expect(stored).not.toContain("4111-1111");
+    expect(stub.requests()).toEqual([]);
+
+    // The same requests without the card number are saved.
+    const savedRemarks = await put(edgeWrite(customer.token), opened.id, "remarks", {
+      remarks: [buildRemarkInput(), { text: "VEGETARIAN MEAL", travelerIds: ["1"] }],
+    });
+    expect(savedRemarks.status).toBe(200);
+    expect((savedRemarks.body as CheckoutBody).remarks).toHaveLength(2);
+    const savedTravelers = await put(edgeWrite(customer.token), opened.id, "travelers", {
+      travelers: [buildTravelerInput({ emergencyContact: { ...emergencyContact, text: "HUSBAND" } })],
+    });
+    expect(savedTravelers.status).toBe(200);
+  });
+});

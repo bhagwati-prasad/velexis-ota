@@ -538,6 +538,70 @@ describe("createMarkupRule", () => {
   });
 });
 
+describe("a markup rule's notes for staff (FIX-W68-CARDTEXT, lead decision (37c))", () => {
+  it("[FIX-W68-CARDTEXT AC4] refuses a card number in the notes for staff at the field, with the API's words, before any call", async () => {
+    signedIn("owner");
+    const key = randomUUID();
+
+    const created = await run(
+      createMarkupRule,
+      newMarkupForm(key, { description: "Paid by 4111 1111 1111 1111", priority: "100001" }),
+    );
+    // The card refusal and the form's other problems in one answer; the key kept for the corrected form.
+    expect(created).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: {
+        description: "A note never holds a card number: remove it.",
+        priority: "Enter a whole number from 0 to 100,000.",
+      },
+    });
+    expect(JSON.stringify(created)).not.toMatch(/4111/);
+    expect(created.nextActionKey).toBeUndefined();
+
+    const updated = await run(
+      updateMarkupRule,
+      markupEditForm(markupRule(), { description: "Card 4111-1111-1111-1111" }),
+    );
+    expect(updated).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: { description: "A note never holds a card number: remove it." },
+    });
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[FIX-W68-CARDTEXT AC4] leaves rule names and a fee rule's label unchecked, as the API does", async () => {
+    signedIn("owner");
+    api.on(`POST ${FEES}`, () => ruleAnswer(feeRule()));
+    const state = await run(
+      createFeeRule,
+      newFeeForm(randomUUID(), { name: "Fee 4111 1111 1111 1111", label: "Fee 4111 1111 1111 1111" }),
+    );
+    expect(state).toMatchObject({ ok: true });
+  });
+
+  it("[FIX-W68-CARDTEXT AC4] shows the API's card_data refusal of the notes for staff at the field", async () => {
+    signedIn("owner");
+    api.on(`POST ${MARKUPS}`, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [
+          {
+            path: "/description",
+            code: "card_data",
+            message: "A note never holds a card number: remove it.",
+          },
+        ],
+      }),
+    );
+    expect(await run(createMarkupRule, newMarkupForm(randomUUID()))).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: { description: "A note never holds a card number: remove it." },
+    });
+  });
+});
+
 describe("updateMarkupRule", () => {
   it("[OAD-013 AC2] sends only the changed fields, with If-Match = the displayed version", async () => {
     signedIn("owner");

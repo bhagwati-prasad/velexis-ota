@@ -723,6 +723,9 @@ export const STRINGS = Object.freeze({
   "field.additionalProperties": "This field is not allowed",
   "field.luhn": "Check the card number",
   "field.expired": "The card has expired",
+  // `card_data`: a cancellation comment, a special request or another free text that holds a card number
+  // (FIX-W68-CARDTEXT, lead decision (37c)); the API refuses it before anything is stored or sent.
+  "field.card_data": "Remove the card number: card details never go in this field",
   // TravelerFieldErrorCode: business rules of TRAVELER_DATA_INVALID, CONTACT_DATA_INVALID and CHECKOUT_INCOMPLETE.
   "field.REQUIRED": "Fill in this field",
   "field.INVALID_FORMAT": "Enter a value in the right format",

@@ -61,6 +61,7 @@ sequenceDiagram
 | Situation | Backend | Traveller sees |
 |---|---|---|
 | Data invalid against requirements | `422 TRAVELER_DATA_INVALID` / `CONTACT_DATA_INVALID` with `fieldErrors` | Field errors, focus on the error summary |
+| A special request or an emergency contact's text holds a card number (FIX-W68-CARDTEXT, lead decision (37c)) | `400 VALIDATION_FAILED`, field code `card_data` at `/remarks/<index>/text` or `/travelers/<index>/emergencyContact/text`, refused in the request validation before anything is stored or sent to Amadeus; the error never repeats the text ([`card-free-text.ts`](../../backend/src/common/http/card-free-text.ts)) | "Remove the card number: card details never go in this field" at the special request it was typed in, focus on the error summary (the storefront collects no emergency contact; a storefront of its own shows the field error at its own field) |
 | Stripe unreachable at payment creation | `502 PAYMENT_PROVIDER_ERROR`, nothing charged | Retry |
 | 3-D Secure failed or card declined | Stripe.js error; payment stays `requires_payment_method` | Try another card |
 | `complete` before authorisation | `402 PAYMENT_REQUIRED` | Payment step again |

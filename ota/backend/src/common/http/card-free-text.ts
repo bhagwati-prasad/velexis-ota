@@ -1,38 +1,44 @@
-// The console's free text never holds a card number (FIX-W67-KI001, known issue KI-001; ADR-0011, OADR-0004, lead
-// decision (36) of 2026-11-21). A staff member may paste what a traveller says or writes into a note, a reason or a
-// remark, and the API stores that text in the tenant's tables (booking_events, staff_actions, bookings.cancel_reason,
-// refunds.reason_note, the order snapshot) and forwards a remark to Amadeus: a card number there would reach the
-// database, its backups and the supplier. So every staff free-text field of the console operations below refuses one,
-// with the detector of @velexis/logger (`holdsCardNumber`: 12 to 19 digits, grouped by single spaces or dashes or not,
-// wherever they stand among other digits, that start with 2 to 6 and pass the Luhn check).
+// Free text never holds a card number (FIX-W67-KI001, known issue KI-001, and its follow-up FIX-W68-CARDTEXT; ADR-0011,
+// OADR-0004, lead decisions (36) and (37c) of 2026-11-21). A staff member may paste what a traveller says or writes into
+// a note, a reason, a remark or a tag, and a customer may type their card number into a cancellation comment, a special
+// request or an emergency contact's text; the API stores that text in the tenant's tables (booking_events,
+// staff_actions, bookings.cancel_reason, refunds.reason_note, checkout_remarks, booking_remarks, saved travellers,
+// bookings.tags, markup_rules.description, the order snapshot) and forwards a remark or an emergency contact to Amadeus:
+// a card number there would reach the database, its backups and the supplier. So every free-text field that the OTA
+// stores or forwards, in the console, customer and both-scope operations below, refuses one, with the detector of
+// @velexis/logger (`holdsCardNumber`: 12 to 19 digits, grouped by single spaces or dashes or not, wherever they stand
+// among other digits, that start with 2 to 6 and pass the Luhn check).
 //
 // The check runs in the request validation layer (openapi-validation.interceptor.ts), after the document's own
 // validation of the request and before the idempotency interceptor and the handler: a refused request claims no
-// `Idempotency-Key`, calls no supplier and writes no booking event, staff note, cancel reason, refund or use-case audit
-// row. The audit interceptor (staff-actions.writer.ts), which wraps request validation, records the refusal as every
-// refused console call: one `failed` row with its action and target only, never the body, the reason or the value. The
-// answer is `400 VALIDATION_FAILED` with one field error per offending field of the whole request, `{ path, code:
-// "card_data", message }`, where the path is the plain pointer into the body (`/text`, `/reason`,
-// `/remarks/general/0/text`) as the document's own validation answers a body field, or `/query/<name>` for a query
-// parameter; the message names the kind of text and never the value, which is not echoed in an error, a log line or an
-// audit record.
+// `Idempotency-Key`, calls no supplier and writes no booking event, staff note, cancel reason, refund, remark, tag,
+// traveller, rule or use-case audit row. For a console call, the audit interceptor (staff-actions.writer.ts), which wraps
+// request validation, records the refusal as every refused console call: one `failed` row with its action and target
+// only, never the body, the reason or the value. The answer is `400 VALIDATION_FAILED` with one field error per
+// offending field of the whole request, `{ path, code: "card_data", message }`, where the path is the plain pointer into
+// the body (`/text`, `/comment`, `/remarks/0/text`, `/tags/1`) as the document's own validation answers a body field, or
+// `/query/<name>` for a query parameter; the message names the kind of text and never the value, which is not echoed in
+// an error, a log line or an audit record. A customer's refusal says nothing else about the check: the same envelope as
+// any other field error, with the message of its kind.
 //
-// `CARD_FREE_TEXT_FIELDS` is the list of the fields checked here: every string of a console operation's request that
-// is staff free text the OTA stores or forwards. card-free-text.test.ts walks every console operation of the document
-// and fails for a string field (without `enum`, `format`, `const` or `pattern`) that is neither listed here nor
-// classified there as no free text (ids, codes, personal data with a defined meaning, supplier data, settings content),
-// so a new free-text field cannot be added to the document without a decision. One field is checked elsewhere: the
-// review closure's note (console.bookings.closeReview `/note`), by `refuseClosureRequest` in
-// console/review-closure.service.ts together with its outcome rules, so that a refused closure still names every
-// problem of its request in one answer (OBE-099, unchanged). The operations that the API does not serve yet (`deferred` in
-// pending-operations.ts: console.bookings.create and the four raw Amadeus writes) are listed too: their routes answer
-// `501` before anything is read, and the check applies as soon as an implementation binds them to the document.
+// `CARD_FREE_TEXT_FIELDS` is the list of the fields checked here: every string of a non-internal operation's request
+// that is free text the OTA stores or forwards. card-free-text.test.ts walks every console, customer and both-scope
+// operation of the document (bodies and query parameters) and fails for a string field (without `enum`, `format` or
+// `const`, and without a `pattern` that refuses a run of 12 digits) that is neither listed here nor classified there as
+// no free text (ids, codes, constrained values, credentials, personal data with a defined meaning, supplier data,
+// settings and public content, metadata, text that is never kept), so a new free-text field cannot be added to the
+// document without a decision. One field is checked elsewhere: the review closure's note
+// (console.bookings.closeReview `/note`), by `refuseClosureRequest` in console/review-closure.service.ts together with
+// its outcome rules, so that a refused closure still names every problem of its request in one answer (OBE-099,
+// unchanged). The operations that the API does not serve yet (`deferred` in pending-operations.ts:
+// console.bookings.create and the four raw Amadeus writes) are listed too: their routes answer `501` before anything is
+// read, and the check applies as soon as an implementation binds them to the document.
 import type { OtaOperationId } from "@velexis/api-types/operations";
 import { AppError, type FieldError } from "@velexis/errors";
 import { holdsCardNumber } from "@velexis/logger";
 
 /** The kind of a free-text field, which names it in the refusal's message. */
-export type FreeTextKind = "note" | "reason" | "remark";
+export type FreeTextKind = "note" | "reason" | "remark" | "comment" | "emergencyContact" | "tag" | "label";
 
 /** One free-text field of an operation's request. */
 export interface FreeTextField {
@@ -52,32 +58,43 @@ export const CARD_DATA_MESSAGES: Readonly<Record<FreeTextKind, string>> = Object
   note: "A note never holds a card number: remove it.",
   reason: "A reason never holds a card number: remove it.",
   remark: "A remark never holds a card number: remove it.",
+  comment: "A comment never holds a card number: remove it.",
+  emergencyContact: "An emergency contact's text never holds a card number: remove it.",
+  tag: "A tag never holds a card number: remove it.",
+  label: "A label never holds a card number: remove it.",
 });
 
 const note = (pointer: string): FreeTextField => ({ pointer, kind: "note" });
 const reason = (pointer: string): FreeTextField => ({ pointer, kind: "reason" });
 const remark = (pointer: string): FreeTextField => ({ pointer, kind: "remark" });
+const comment = (pointer: string): FreeTextField => ({ pointer, kind: "comment" });
+const emergencyContact = (pointer: string): FreeTextField => ({ pointer, kind: "emergencyContact" });
+const tag = (pointer: string): FreeTextField => ({ pointer, kind: "tag" });
+const label = (pointer: string): FreeTextField => ({ pointer, kind: "label" });
 
 /** The free text of a console booking's Amadeus elements: remarks, queue process texts, emergency contacts. */
 const BOOKING_ELEMENT_TEXTS: readonly FreeTextField[] = [
   remark("/remarks/general/*/text"),
   remark("/remarks/airline/*/text"),
   remark("/automatedProcess/*/text"),
-  remark("/travelers/*/emergencyContact/text"),
+  emergencyContact("/travelers/*/emergencyContact/text"),
 ];
 
+/** A traveller's emergency contact text in a list of travellers (forwarded to Amadeus, kept in the order snapshot). */
+const TRAVELERS_EMERGENCY_TEXT = emergencyContact("/travelers/*/emergencyContact/text");
+
 /**
- * The staff free-text fields of the console operations, by operation (see the file header). The review closure's
- * `/note` is `refuseClosureRequest`'s (review-closure.service.ts).
+ * The free-text fields of the non-internal operations, by operation (see the file header): the console's staff text,
+ * then the text customers type. The review closure's `/note` is `refuseClosureRequest`'s (review-closure.service.ts).
  */
 export const CARD_FREE_TEXT_FIELDS: Readonly<Partial<Record<OtaOperationId, readonly FreeTextField[]>>> =
   Object.freeze({
     consoleAddBookingNote: [note("/text")],
-    consoleImportBooking: [note("/note"), reason("/reason")],
+    consoleImportBooking: [note("/note"), reason("/reason"), tag("/tags/*")],
     consoleCancelBooking: [reason("/reason")],
     consoleIssueBooking: [reason("/reason")],
-    consolePatchBooking: [...BOOKING_ELEMENT_TEXTS, reason("/reason")],
-    consoleCreateBooking: [...BOOKING_ELEMENT_TEXTS, note("/note"), reason("/reason")],
+    consolePatchBooking: [...BOOKING_ELEMENT_TEXTS, tag("/tags/*"), reason("/reason")],
+    consoleCreateBooking: [...BOOKING_ELEMENT_TEXTS, tag("/tags/*"), note("/note"), reason("/reason")],
     consoleCapturePayment: [reason("/reason")],
     consoleRefundPayment: [reason("/reasonNote")],
     consoleAmadeusSearchFlightOffers: [reason("/reason")],
@@ -88,6 +105,18 @@ export const CARD_FREE_TEXT_FIELDS: Readonly<Partial<Record<OtaOperationId, read
     consoleAmadeusIssueFlightOrder: [reason("/reason")],
     consoleAmadeusPatchFlightOrder: [reason("/reason")],
     consoleAmadeusCancelFlightOrder: [reason("/query/reason")],
+    // A markup rule's "Notes for staff" (markup_rules.description); its name and a fee rule's name and label are
+    // settings content (lead decision (37c)).
+    consoleCreateMarkupRule: [note("/description")],
+    consoleUpdateMarkupRule: [note("/description")],
+    // The customer's (and an API key's, in the both scope) free text.
+    cancelBooking: [comment("/comment")],
+    setCheckoutRemarks: [remark("/remarks/*/text")],
+    setCheckoutTravelers: [TRAVELERS_EMERGENCY_TEXT],
+    priceFlightOffers: [TRAVELERS_EMERGENCY_TEXT],
+    updateBooking: [remark("/remarks/*/text"), TRAVELERS_EMERGENCY_TEXT],
+    createSavedTraveler: [label("/label"), emergencyContact("/emergencyContact/text")],
+    updateSavedTraveler: [label("/label"), emergencyContact("/emergencyContact/text")],
   });
 
 /** The validated parts of a request the check reads. */
@@ -171,7 +200,8 @@ export function cardDataErrors(
 
 /**
  * Refuses a request whose free text holds a card number: `400 VALIDATION_FAILED` with every such field (see the file
- * header). Called by the request validation layer after the document's validation passed, before anything else runs.
+ * header). Called by the request validation layer after the document's validation passed, before anything else runs,
+ * for every operation (one without a listed field passes at once).
  */
 export function refuseCardData(operationId: string, input: FreeTextInput): void {
   const fieldErrors = cardDataErrors(operationId, input);

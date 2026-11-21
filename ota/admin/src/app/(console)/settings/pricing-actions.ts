@@ -14,8 +14,9 @@
 // Each starts with `requireStaff("settings:write")` (owners and admins; an agent's, a finance member's or a viewer's
 // forged POST gets "You do not have permission to do this (settings:write)" before any call; the API decides and
 // audits all the same), then validates the form with the Zod mirror of `MarkupRuleInput` / `FeeRuleInput`
-// (pricing-rules.ts `ruleFormSchema`; a hidden field that does not parse: "This form is out of date"), then makes one
-// SDK call.
+// (pricing-rules.ts `ruleFormSchema`; a hidden field that does not parse: "This form is out of date") and a markup
+// rule's notes for staff with the card check of lib/card-text.ts (FIX-W68-CARDTEXT: "A note never holds a card number:
+// remove it." at the field, before any call), then makes one SDK call.
 //
 // - **Create** sends the form's values with the documented defaults filled in by the form (no `null` field), under the
 //   idempotency key the page rendered with the form: a double submit or a retry after a timeout replays the same
@@ -39,9 +40,10 @@
 import type { StaffPermission } from "@velexis/ota-sdk";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import type { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { fromZod, withNextActionKey, type ActionState } from "@/lib/action-state";
+import { CARD_TEXT_MESSAGES, withoutCardNumber } from "@/lib/card-text";
 import { fromVelexisError, isVelexisErrorLike, type VelexisErrorLike } from "@/lib/errors";
 import { requireStaff, type StaffContext } from "@/lib/session";
 
@@ -65,6 +67,7 @@ import {
   withoutDefaultRuleFields,
   type PricingRule,
   type RuleActionState,
+  type RuleFormInput,
   type RuleKind,
 } from "./pricing-rules";
 
@@ -113,6 +116,32 @@ function staleForm(): ActionState {
 /** The state of a form that failed its schema. */
 function invalid(error: ZodError): ActionState {
   return fromZod(error);
+}
+
+/**
+ * A markup rule's notes for staff (`description`, `markup_rules.description`) never hold a card number (lib/card-text.ts,
+ * FIX-W68-CARDTEXT, lead decision (37c)). The check runs here, on the server, beside the form's schema: pricing-rules.ts
+ * is shared with the client form, which never loads the detector. Rule names and a fee rule's label are settings
+ * content and stay unchecked, as the API leaves them.
+ */
+const MarkupCardText = z.object({
+  [RULE_FIELDS.description]: z.string().refine(withoutCardNumber, CARD_TEXT_MESSAGES.note).optional(),
+});
+
+/**
+ * The form parsed by its schema (`schemaInput`, the default rule's fixed values filled in) and, for a markup rule, the
+ * card check of the notes for staff the form sent (`input`): a description that holds one is refused at its field with
+ * the API's words before any call, and one submission still names every other problem of the form.
+ */
+function parseRuleForm(kind: RuleKind, input: RuleFormInput, schemaInput: RuleFormInput = input) {
+  const parsed = ruleFormSchema(kind).safeParse(schemaInput);
+  const card = kind === "markup" ? MarkupCardText.safeParse(input) : undefined;
+  if (card === undefined || card.success) {
+    return parsed;
+  }
+  // The card refusal first: the description's message is the API's words, whatever else its schema says of it.
+  const issues = [...card.error.issues, ...(parsed.success ? [] : parsed.error.issues)];
+  return { success: false as const, error: new ZodError(issues) };
 }
 
 /** The staff context of an action, or the state of its refusal (a missing permission, an ended or refused session). */
@@ -189,7 +218,7 @@ async function createRule(kind: RuleKind, form: FormData): Promise<RuleActionSta
   if (key === undefined) {
     return staleForm();
   }
-  const parsed = ruleFormSchema(kind).safeParse(ruleFormInput(kind, form));
+  const parsed = parseRuleForm(kind, ruleFormInput(kind, form));
   if (!parsed.success) {
     return invalid(parsed.error);
   }
@@ -247,7 +276,9 @@ async function updateRule(kind: RuleKind, form: FormData): Promise<RuleActionSta
   // The default rule's form has no inputs for what stays fixed: those values are the rendered rule's, never sent.
   const defaultRule = isDefaultRuleForm(kind, form);
   const input = ruleFormInput(kind, form);
-  const parsed = ruleFormSchema(kind).safeParse(
+  const parsed = parseRuleForm(
+    kind,
+    input,
     defaultRule ? withDefaultRuleValues(input, original, timeZone) : input,
   );
   if (!parsed.success) {

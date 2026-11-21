@@ -1442,6 +1442,41 @@ describe("booking page: cancellation", () => {
     expect($("[data-cancellation-block]").hidden).toBe(false);
   });
 
+  it("[FIX-W68-CARDTEXT AC3] 400 card_data marks the comment with the storefront's message and cancels nothing", async () => {
+    const { client } = await openBooking({
+      fake: fakeApi({
+        cancel: [
+          apiError(ValidationError, "VALIDATION_FAILED", 400, {
+            fieldErrors: [
+              {
+                path: "/comment",
+                code: "card_data",
+                message: "A comment never holds a card number: remove it.",
+              },
+            ],
+          }),
+        ],
+      }),
+    });
+    await openCancel();
+    await confirmCancel("change_of_plans", "Refund to 4111 1111 1111 1111");
+
+    expect(client.bookings.cancel).toHaveBeenCalledTimes(1);
+    const comment = field("comment");
+    expect(comment.getAttribute("aria-invalid")).toBe("true");
+    const message = document.getElementById(
+      /** @type {string} */ ((comment.getAttribute("aria-describedby") ?? "").split(" ").pop()),
+    );
+    expect(text(message)).toBe("Remove the card number: card details never go in this field");
+    const summary = $("dialog[data-cancel-dialog] [data-error-summary]");
+    expect(document.activeElement).toBe(summary);
+    expect(text(summary)).toContain("Remove the card number: card details never go in this field");
+    expect(text(cancelDialog())).not.toContain("4111");
+    // The form stays for a corrected comment; the booking is unchanged.
+    expect(/** @type {HTMLFormElement} */ ($("form[data-cancel-form]")).hidden).toBe(false);
+    expect(text($("[data-booking-status]"))).toBe("Ticketed");
+  });
+
   it("[OFE-015] a Retry after 503 sends the same request with the same key", async () => {
     const { client } = await openBooking({
       fake: fakeApi({

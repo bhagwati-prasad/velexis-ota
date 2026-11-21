@@ -3383,3 +3383,64 @@ describe("a second cancellation while another one's DELETE is in flight (FIX-W32
     },
   );
 });
+
+describe("a cancellation comment that holds a card number (FIX-W68-CARDTEXT, lead decision (37c))", () => {
+  it("[FIX-W68-CARDTEXT AC6] refuses it with 400 card_data before the key, Amadeus, Stripe and any row; the same key then cancels", async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "edge", customerToken: customer.token };
+    const booking = await seedBooking("cancel.card", { customerId: customer.id });
+    await seedPayment(booking.id, "captured");
+    const quoted = await quote(booking.id, credential);
+    expect(answer(quoted)).toEqual([200, undefined]);
+    stub.clearRequests();
+    stripe.reset();
+    const before = await bookingRow(booking.id);
+    const key = idempotencyKey();
+
+    const refused = await cancel(
+      booking.id,
+      credential,
+      '"1"',
+      cancellation(quoted.body.estimatedRefund, { comment: "Refund to my card 4111 1111 1111 1111 please" }),
+      key,
+    );
+
+    expect(answer(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("cancelBooking", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      { path: "/comment", code: "card_data", message: "A comment never holds a card number: remove it." },
+    ]);
+    expect(refused.text).not.toContain("4111");
+    // No Amadeus DELETE, no Stripe call, the booking as it was, no refund, no event, and no idempotency record.
+    expect(stub.requests()).toEqual([]);
+    expect(stripe.requests).toEqual([]);
+    expect(await bookingRow(booking.id)).toEqual(before);
+    expect(await refundsOf(booking.id)).toEqual([]);
+    expect((await eventsOf(booking.id)).filter((event) => event.type.startsWith("booking.cancel"))).toEqual(
+      [],
+    );
+    const stored = await inTenant(async (trx) => ({
+      keys: await trx.selectFrom("idempotency_keys").select("key").where("key", "=", key).execute(),
+      text: JSON.stringify([
+        await trx.selectFrom("bookings").selectAll().where("id", "=", booking.id).execute(),
+        await trx.selectFrom("booking_events").selectAll().where("booking_id", "=", booking.id).execute(),
+        await trx.selectFrom("idempotency_keys").selectAll().execute(),
+        await trx.selectFrom("notifications").selectAll().where("booking_id", "=", booking.id).execute(),
+      ]),
+    }));
+    expect(stored.keys).toEqual([]);
+    expect(stored.text).not.toContain("4111 1111");
+    expect(stored.text).not.toContain("411111111111");
+
+    // The key was never claimed: the same key without the card number cancels the booking, comment kept.
+    const cancelled = await cancel(
+      booking.id,
+      credential,
+      '"1"',
+      cancellation(quoted.body.estimatedRefund, { comment: "Refund to my card please" }),
+      key,
+    );
+    expect(answer(cancelled)).toEqual([200, undefined]);
+    expect(cancelled.body.cancellation).toMatchObject({ comment: "Refund to my card please" });
+  });
+});

@@ -723,6 +723,49 @@ describe("console.settings.markupRules", () => {
     ]);
   });
 
+  it("[FIX-W68-CARDTEXT AC6] refuses a card number in a rule's notes for staff before the key and any row; names stay unchecked", async () => {
+    const owner = await signIn(alphaId, "owner");
+    const key = randomUUID();
+    const body = markupBody({ name: "Card notes", description: "Paid by 4111 1111 1111 1111 at the desk." });
+
+    const refused = await owner.post(MARKUP, body, key);
+
+    expect(answer(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("consoleCreateMarkupRule", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      { path: "/description", code: "card_data", message: "A note never holds a card number: remove it." },
+    ]);
+    expect(refused.text).not.toContain("4111");
+    const stored = await tenantTx(tenantDb, "tenant_alpha", async (trx) => ({
+      rules: await trx.selectFrom("markup_rules").select("id").where("name", "=", "Card notes").execute(),
+      keys: await trx.selectFrom("idempotency_keys").select("key").where("key", "=", key).execute(),
+      text: JSON.stringify([
+        await trx.selectFrom("markup_rules").selectAll().execute(),
+        await trx.selectFrom("staff_actions").selectAll().execute(),
+        await trx.selectFrom("idempotency_keys").selectAll().execute(),
+      ]),
+    }));
+    expect(stored.rules).toEqual([]);
+    expect(stored.keys).toEqual([]);
+    expect(stored.text).not.toContain("4111 1111");
+
+    // An update is refused the same way, and leaves the rule as it was.
+    const created = await owner.post(MARKUP, { ...body, description: "Paid at the desk." }, key);
+    expect(answer(created)).toEqual([201, undefined]);
+    const id = String(created.body.id);
+    const patched = await owner.patch(`${MARKUP}/${id}`, { description: "Card 4111-1111-1111-1111" }, '"1"');
+    expect(answer(patched)).toEqual([400, "VALIDATION_FAILED"]);
+    expect(patched.body.error.fieldErrors).toEqual([
+      { path: "/description", code: "card_data", message: "A note never holds a card number: remove it." },
+    ]);
+    const after = await owner.get(`${MARKUP}/${id}`);
+    expect([after.body.description, after.body.version]).toEqual(["Paid at the desk.", 1]);
+
+    // A rule's name is settings content (lead decision (37c)): not checked.
+    const named = await owner.post(MARKUP, markupBody({ name: "Rule 4111 1111 1111 1111" }));
+    expect(answer(named)).toEqual([201, undefined]);
+  });
+
   it("refuses rules the schema allows but OADR-0005 does not with 400 VALIDATION_FAILED", async () => {
     const owner = await signIn(alphaId, "owner");
 

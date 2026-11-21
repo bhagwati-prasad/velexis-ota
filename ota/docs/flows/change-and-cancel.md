@@ -105,8 +105,9 @@ sequenceDiagram
 |---|---|
 | Stale ETag | `412 PRECONDITION_FAILED` |
 | Amadeus 2552 | `409 VERSION_CONFLICT`; nothing changes locally |
-| Traveller changes (`travelers[…]`) | `403 FEATURE_DISABLED` (`details.feature = "travelerChanges"`); nothing is read or sent |
+| Traveller changes (`travelers[…]`) | `403 FEATURE_DISABLED` (`details.feature = "travelerChanges"`); nothing is read or sent (a body whose emergency contact text holds a card number gets the request validation's `400 card_data` below first, FIX-W68-CARDTEXT) |
 | Contact data invalid | `422 CONTACT_DATA_INVALID` with `fieldErrors` |
+| A cancellation comment, a special request or an emergency contact's text holds a card number (FIX-W68-CARDTEXT, lead decision (37c)) | `400 VALIDATION_FAILED`, field code `card_data` at `/comment`, `/remarks/<index>/text` or `/travelers/<index>/emergencyContact/text`, refused in the request validation before the idempotency key, the claim, Amadeus, Stripe and any write; the text is never repeated, and the same key works for the corrected cancellation. The storefront shows "Remove the card number: card details never go in this field" at the cancellation's message (it sends no remarks or travellers in `bookings.update`) |
 | Timeout on PATCH | `504 SUPPLIER_TIMEOUT`; the order is read back first and what Amadeus applied is recorded (new `ETag`, events, confirmations), so a retry with the old `If-Match` answers `412` |
 | Amadeus `5xx` or a cut connection on PATCH (outcome unknown, [OADR-0003](../adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) point 9) | `502 SUPPLIER_ERROR` or `503 SUPPLIER_UNAVAILABLE`; the order is read back and recorded as after a timeout |
 | Quote changed | `409 REFUND_AMOUNT_CHANGED` with `details.expectedRefund` and `details.newRefund` (also for a request without `expectedRefund`, with `details.expectedRefund: null`: money moves only for an amount the customer saw; lead decision (8) of 2026-10-23, second batch) |

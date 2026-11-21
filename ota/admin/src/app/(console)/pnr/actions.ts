@@ -205,11 +205,15 @@ const checkedBy =
     }
   };
 
-/** The tags (`tags`: at most 10, each of at most 40 characters), the longer list refused before any tag is checked. */
+/**
+ * The tags (`tags`: at most 10, each of at most 40 characters and never a card number, lib/card-text.ts,
+ * FIX-W68-CARDTEXT), the longer list refused before any tag is checked.
+ */
 const TagList = z
   .array(z.string())
   .max(TAGS_MAX, STRINGS.tooManyTags)
-  .refine((tags) => tags.every((tag) => [...tag].length <= TAG_MAX_LENGTH), STRINGS.tagTooLong);
+  .refine((tags) => tags.every((tag) => [...tag].length <= TAG_MAX_LENGTH), STRINGS.tagTooLong)
+  .refine((tags) => tags.every(withoutCardNumber), CARD_TEXT_MESSAGES.tag);
 
 // The fields come from `importFormInput` (a text, or no key), so a schema's `error` is the message of a missing field.
 

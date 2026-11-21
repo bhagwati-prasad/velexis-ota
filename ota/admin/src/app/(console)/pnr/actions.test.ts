@@ -583,6 +583,37 @@ describe("importBooking", () => {
   });
 });
 
+describe("importBooking: a card number in a tag (FIX-W68-CARDTEXT, lead decision (37c))", () => {
+  it("[FIX-W68-CARDTEXT AC4] refuses a card number in a tag at the tags field, with the API's words, before any call", async () => {
+    signedIn("agent");
+    const state = await run(importForm(randomUUID(), { tags: "vip, 4111 1111 1111 1111" }));
+    expect(state).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: { tags: "A tag never holds a card number: remove it." },
+    });
+    expect(JSON.stringify(state)).not.toMatch(/4111/);
+    expect(state.nextActionKey).toBeUndefined();
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[FIX-W68-CARDTEXT AC4] shows the API's card_data refusal of a tag at the tags field", async () => {
+    signedIn("agent");
+    api.on(IMPORT, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [
+          { path: "/tags/1", code: "card_data", message: "A tag never holds a card number: remove it." },
+        ],
+      }),
+    );
+    expect(await run(importForm(randomUUID(), { tags: "vip, group" }))).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: { tags: "A tag never holds a card number: remove it." },
+    });
+  });
+});
+
 // ---- searchCustomers ------------------------------------------------------------------------------------------------
 
 describe("searchCustomers", () => {

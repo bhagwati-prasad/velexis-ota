@@ -50,6 +50,8 @@ MarkupRuleInput:       # create: name, scope, calculation and its values require
 
 List: `?active=true|false`, ordered by `priority, id`, cursor pagination. Rules: the default rule (`isDefault`) cannot be deleted or have its scope narrowed (`409 CONFLICT`, `details.reason = "default_rule"`), and since 2026-10-30 (lead decision (2e), FIX-W34-OTA; [OADR-0005](adr/0005-markup-and-fee-engine.md) point 3 revised) an update that sets `isActive: false`, an `activeFrom` or `activeUntil` other than `null`, or a `priority` other than 1000 is the same `409`: it always matches; deleting a rule keeps history (bookings and priced offers keep amounts, `markup_rule_id` becomes `NULL`). Changes apply to the next search; cached offers keep their prices until they expire ([OADR-0005](adr/0005-markup-and-fee-engine.md)). Errors: `400 VALIDATION_FAILED`, `409 CONFLICT`, `412`.
 
+- *Note (2026-11-21, lead decision (37c), approved by the owner; FIX-W68-CARDTEXT):* a rule's `description` (the admin's "Notes for staff") never holds a card number: one answers `400 VALIDATION_FAILED` with the field code `card_data` at `/description`, before anything is stored, as the console's other free text since FIX-W67-KI001; a rule's `name` and a fee rule's `label` are settings content and stay unchecked. The console's booking tags (`/tags/<index>` of the import, create and patch) are refused the same way.
+
 ### 2.2 Fee rules (`fee_rules`)
 
 Same five operations under `/v1/console/settings/fee-rules[/{feeRuleId}]`, operation ids `consoleListFeeRules`, `consoleCreateFeeRule`, `consoleGetFeeRule`, `consoleUpdateFeeRule`, `consoleDeleteFeeRule`, SDK `console.settings.feeRules.{list,create,get,update,delete}`.

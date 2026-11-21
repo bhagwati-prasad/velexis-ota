@@ -6,9 +6,9 @@
 // The interceptor runs them for each request whose handler carries `@OpenApiOperation(...)` and answers
 // `400 VALIDATION_FAILED` with `fieldErrors` holding JSON pointers and Ajv keywords, never the rejected values (a body
 // may hold a password or a card number). A request that passes is then refused, still before the idempotency
-// interceptor and the handler, when a console free-text field holds a card number (card-free-text.ts, field code
-// `card_data`; FIX-W67-KI001). Responses are not validated at run time; the tests do that
-// (`expectResponseToMatch` of @velexis/testing).
+// interceptor and the handler, when a free-text field of a console, customer or both-scope operation holds a card number
+// (card-free-text.ts, field code `card_data`; FIX-W67-KI001, FIX-W68-CARDTEXT). Responses are not validated at run
+// time; the tests do that (`expectResponseToMatch` of @velexis/testing).
 //
 // The schemas are OpenAPI 3.1, so JSON Schema 2020-12: Ajv 2020 with ajv-formats, in strict mode for unknown keywords
 // (a misspelt keyword in the document fails the start-up instead of being ignored), with the OpenAPI annotations and
@@ -632,8 +632,8 @@ export class OpenApiValidationInterceptor implements NestInterceptor {
       body: req.body,
       bodySent: requestHasBody(req.headers),
     });
-    // A console free text never holds a card number (card-free-text.ts, FIX-W67-KI001): refused here, before the
-    // idempotency interceptor claims a key and before the handler reads or writes anything.
+    // A free text never holds a card number (card-free-text.ts, FIX-W67-KI001, FIX-W68-CARDTEXT): refused here, before
+    // the idempotency interceptor claims a key and before the handler reads or writes anything.
     refuseCardData(operationId, { body: parts.body, query: parts.query });
     req[VALIDATED_INPUT] = {
       operationId,

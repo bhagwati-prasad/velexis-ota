@@ -5,9 +5,10 @@
 //
 //   sign up → verify the address through the Mailpit link → sign out and sign in → two trips booked for the customer
 //   through the API with the airline card (no Stripe), one moved into the past → the upcoming, past and cancelled tabs
-//   → change the contact details → cancel with the refund preview → the cancelled tab → the e-mails of the change and
-//   the cancellation → the access cookie ends and the next page refreshes the session silently → an expired token in
-//   the access cookie is refreshed the same way
+//   → change the contact details → a card number in the cancellation's message refused at its field (FIX-W68-CARDTEXT)
+//   → cancel with the refund preview → the cancelled tab → the e-mails of the change and the cancellation → the access
+//   cookie ends and the next page refreshes the session silently → an expired token in the access cookie is refreshed
+//   the same way
 //
 // The OTA backend has neither a test clock nor a configurable token lifetime, so the 15 minutes are made on the
 // cookies: the access cookie is removed from the browser, as the browser removes it when its Max-Age of 900 s ends,
@@ -426,7 +427,21 @@ test.describe("the account and bookings journey", () => {
     expect(back).toBe(paid);
     await guards.checkA11y(page);
 
+    // A card number in the message to the OTA is refused at its field before anything is stored or sent: the API's
+    // `card_data` in the storefront's words, and nothing cancelled (FIX-W68-CARDTEXT, lead decision (37c)).
     await dialog.getByRole("combobox", { name: "Why do you cancel?" }).selectOption("change_of_plans");
+    const comment = dialog.getByRole("textbox", { name: "Message to us (optional)" });
+    await comment.fill("Please refund to my card 4111 1111 1111 1111");
+    await dialog.getByRole("button", { name: `Cancel and get ${back} back`, exact: true }).click();
+    await expect(comment).toHaveAttribute("aria-invalid", "true");
+    await expect(comment).toHaveAccessibleDescription(
+      /Remove the card number: card details never go in this field/,
+    );
+    await expect(dialog.getByText("Your booking is cancelled", { exact: true })).toBeHidden();
+    expect((await bookingRecord(upcoming.bookingId)).amadeus).toEqual(["PATCH 200"]);
+    await guards.checkA11y(page);
+    await comment.fill("");
+
     await dialog.getByRole("button", { name: `Cancel and get ${back} back`, exact: true }).click();
     await expect(dialog.getByText("Your booking is cancelled", { exact: true })).toBeVisible();
     await guards.checkA11y(page);
