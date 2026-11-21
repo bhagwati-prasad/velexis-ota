@@ -429,7 +429,7 @@ See [`.env.example`](.env.example). On the VM they come from `/etc/velexis/platf
 | `PLATFORM_BFF_KEY` | at least 32 characters of `A–Z a–z 0–9 _ -`; the same value as the platform API and the platform admin. `provision-vm.sh` generates it (64 hex characters) in place of the template's `@@PLATFORM_BFF_KEY@@`, which is refused as a value. A secret: never logged, only sent to `PLATFORM_API_URL` as `X-Velexis-Bff-Key` ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)). | required |
 | `PUBLIC_PORTAL_URL`, `PUBLIC_OTA_ADMIN_URL` | absolute `http:` or `https:` URL; `https:` when `APP_ENV=production` | required |
 | `STOREFRONT_BASE_DOMAIN` | lower-case DNS name with at least two labels (`ota.example.com`) | required |
-| `SENTRY_DSN` | `https:` URL; unset or empty switches error tracking off | optional |
+| `SENTRY_DSN` | `https:` URL or empty; validated only: no client sends errors yet (M6, KI-043), so leave it empty | optional |
 
 - `getConfig()` validates the process environment on first use and caches the frozen result. Outside production it first fills unset variables from `platform/frontend/.env.local`, then from the root `.env.local` (`loadDevEnvFiles`), so the root file made from the root `.env.example` is enough for `pnpm dev`.
 - Call it inside request handling (route handlers, server components, server actions), never at module scope: `next build` imports modules without the runtime environment. An invalid environment therefore fails the first request that needs it, and `/health/ready` is such a request, so `deploy.sh` does not take a release live with a broken `/etc/velexis/platform-frontend.env`. The error is a `ConfigError` that names each variable and the reason, never a value.

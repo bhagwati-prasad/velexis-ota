@@ -63,6 +63,12 @@
 #   - the portal and both admin hosts reach their app (3000, 3001, 3002) with the security headers, while /health/*
 #     on them (/health/live included, and the variants //, upper case, %2F and ../) answers 404 without reaching the
 #     app, as on the API hosts (ADR-0016; lead decision (19i) of 2026-11-12, each line ends with [FIX-W50-SHARED 19i]);
+#   - Referrer-Policy is Caddy's default only (KI-037; each line ends with [FIX-W68-OPS AC1]): on the portal, both admin
+#     hosts and both API hosts an app's own policy (the portal's no-referrer and strict-origin, the admins' same-origin,
+#     the APIs' no-referrer; echo-upstream.mjs sends the one a path /referrer-policy/<policy> names) reaches the client
+#     once and unchanged, with HSTS, X-Frame-Options DENY and no Server header still set, while an answer without one
+#     (an app's, Caddy's own 404, the maintenance page, the SERVICE_UNAVAILABLE envelope, a WAF refusal) gets
+#     strict-origin-when-cross-origin once;
 #   - with the upstream stopped, platform.localhost and both admin hosts serve the maintenance page with 503, and
 #     the API hosts (and the storefront /api) the JSON SERVICE_UNAVAILABLE envelope with the request id;
 #   - the admin API answers only on the unix socket: `caddy reload --config <test copy>` succeeds through it
@@ -498,6 +504,18 @@ json() { # dotted path -> the JSON text of that value in the response body ('' i
 }
 uuid_id() { grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' <<<"$(json error.requestId)"; }
 handshake_ok() { fetch "$1" / && [ "$CURL_RC" -eq 0 ]; }
+# KI-037: the (security_headers) snippet sets Referrer-Policy only where the answer has none (Caddy's `?` default).
+DEFAULT_REFERRER=strict-origin-when-cross-origin
+referrer_is() { # label policy -> the last response carries exactly one Referrer-Policy, and it is this one
+  same "$1 [FIX-W68-OPS AC1]" "$(header_count Referrer-Policy) $(header Referrer-Policy)" "1 $2"
+}
+own_referrer_checks() { # host port policy -> the app's own Referrer-Policy survives Caddy, with the other security headers
+  fetch "$1" "/referrer-policy/$3"
+  same "$1/referrer-policy/$3 reaches the app on $2 [FIX-W68-OPS AC1]" "$STATUS $(json port)" "200 $2"
+  referrer_is "$1: the app's own Referrer-Policy $3 reaches the client unchanged" "$3"
+  same "$1: with the app's own Referrer-Policy, HSTS, X-Frame-Options DENY and no Server header are still set [FIX-W68-OPS AC1]" \
+    "$(header Strict-Transport-Security) $(header X-Frame-Options) $(header_count Server)" "max-age=31536000 DENY 0"
+}
 # Up to 100 s per host: Caddy cleans its new, empty storage while it obtains the first certificates, and the cleaning
 # can delete a site's folder that is still empty before the key is saved there ("saving assets: open .../<host>.key: no
 # such file or directory", seen in CI run 43314299874). Caddy then obtains that certificate again 60 s later.
@@ -749,6 +767,10 @@ for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do
   same "a client's X-Velexis-Edge is removed [X-022 AC1]" "$(json headers.x-velexis-edge)" ""
   same "a client's X-Velexis-Host is removed [X-022 AC1]" "$(json headers.x-velexis-host)" ""
   same "$host has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
+  referrer_is "$host/health/live (no Referrer-Policy from the app) gets Caddy's default" "$DEFAULT_REFERRER"
+  # helmet's own value: the platform API's helmet() sends no-referrer (the OTA API's HELMET_OPTIONS send Caddy's value,
+  # so a different one shows that it is kept).
+  own_referrer_checks "$host" "$port" no-referrer
 done
 
 # ---- 6a. request body limits of the API hosts (lead decision (2c) of 2026-10-30) ---------------------------------
@@ -810,6 +832,13 @@ NEXT_HOSTS=("$PLATFORM 3000" "admin.$PLATFORM 3001" "admin.$STOREFRONT 3002")
 # WAF of these hosts only detects, so each answers Caddy's 404 and never reaches the app.
 NEXT_PRIVATE=(/health/live /health/ready /health/ready/ /health/ //health/live /Health/Live /health%2Flive
   /health/x/../live /x/../health/ready)
+app_referrer_policies() { # host -> the Referrer-Policy values its app sends (next.config.ts of each app; KI-037)
+  case "$1" in
+    "$PLATFORM") echo "no-referrer strict-origin" ;; # the portal's token pages and its console hand-off page
+    "admin.$PLATFORM") echo same-origin ;;            # the platform admin, on every answer
+    *) echo same-origin ;; # the OTA admin sends Caddy's own value; a different one shows that it is kept
+  esac
+}
 for app in "${NEXT_HOSTS[@]}"; do
   read -r host port <<<"$app"
   step "Next.js host $host (upstream $port)"
@@ -818,6 +847,8 @@ for app in "${NEXT_HOSTS[@]}"; do
   same "$host has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
   same "$host sends X-Frame-Options DENY" "$(header X-Frame-Options)" DENY
   same "$host hides the Server header" "$(header_count Server)" 0
+  referrer_is "$host/hello (no Referrer-Policy from the app) gets Caddy's default" "$DEFAULT_REFERRER"
+  for policy in $(app_referrer_policies "$host"); do own_referrer_checks "$host" "$port" "$policy"; done
   for path in "${NEXT_PRIVATE[@]}"; do
     fetch "$host" "$path" --path-as-is
     same "$host$path answers 404 [FIX-W50-SHARED 19i]" "$STATUS" 404
@@ -826,6 +857,7 @@ for app in "${NEXT_HOSTS[@]}"; do
   fetch "$host" /health/live
   same "the 404 of $host/health/live has HSTS and X-Frame-Options DENY and hides the Server header [FIX-W50-SHARED 19i]" \
     "$(header Strict-Transport-Security) $(header X-Frame-Options) $(header_count Server)" "max-age=31536000 DENY 0"
+  referrer_is "Caddy's own 404 of $host/health/live gets Caddy's default Referrer-Policy" "$DEFAULT_REFERRER"
   for path in / /healthy "/sign-in?next=/health/live"; do
     fetch "$host" "$path"
     same "$host$path still reaches the app on $port [FIX-W50-SHARED 19i]" "$STATUS $(json port) $(json url)" \
@@ -1044,6 +1076,7 @@ for payload in "$SQLI 942100" "$XSS 941100"; do
   fetch "api.$STOREFRONT" "/x?$query&waf=$mark-api"
   refused_json "api.$STOREFRONT/x with CRS $rule's payload in the query"
   same "api.$STOREFRONT/x: X-Frame-Options DENY on the refusal [X-039 AC2]" "$(header X-Frame-Options)" DENY
+  referrer_is "api.$STOREFRONT/x: the refusal gets Caddy's default Referrer-Policy" "$DEFAULT_REFERRER"
   check "api.$STOREFRONT/x: the refusal is in the WAF log with rule $rule [X-039 AC2]" retry 20 waf_logged "$mark-api" "$rule"
 done
 printf '{"name":"x%s OR 1=1--"}' "'" >"$TMP/sqli.json"
@@ -1376,6 +1409,7 @@ for app in "${NEXT_HOSTS[@]}"; do
   same "$host: the maintenance page sends Retry-After 30" "$(header Retry-After)" 30
   same "$host: the maintenance page has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
   same "$host: the maintenance page hides the Server header" "$(header_count Server)" 0
+  referrer_is "$host: the maintenance page gets Caddy's default Referrer-Policy" "$DEFAULT_REFERRER"
   fetch "$host" /health/live
   same "with its app stopped, $host/health/live still answers Caddy's own 404, not the maintenance page [FIX-W50-SHARED 19i]" \
     "$STATUS" 404
@@ -1390,6 +1424,7 @@ envelope_checks() { # label: the last response is the SERVICE_UNAVAILABLE envelo
   same "$1 is Cache-Control no-store" "$(header Cache-Control)" no-store
   same "$1 has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
   same "$1 hides the Server header" "$(header_count Server)" 0
+  referrer_is "$1 gets Caddy's default Referrer-Policy" "$DEFAULT_REFERRER"
 }
 fetch "api.$PLATFORM" /v1/anything -H "X-Request-Id: $REQUEST_ID"
 envelope_checks "api.$PLATFORM"

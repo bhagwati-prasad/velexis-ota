@@ -22,8 +22,12 @@
 #                         redis-cli in its environment, never on a command line; no answer within 10 s fails).
 #   backup-age            the backup marker (BACKUP_MARKER_FILE of backup.env) is at most 26 hours old.
 #   tls-<host>            the certificate this VM's Caddy serves for each of the five named hosts (PLATFORM_BASE_DOMAIN,
-#                         admin., api. of it, admin. and api. of STOREFRONT_BASE_DOMAIN; caddy.env) expires in more than
-#                         14 days (openssl s_client to 127.0.0.1:443 with the host as SNI).
+#                         admin., api. of it, admin. and api. of STOREFRONT_BASE_DOMAIN; caddy.env) and for the storefront
+#                         of the payment page check (HEALTHCHECK_STOREFRONT_HOST below, the demo OTA's by default: an
+#                         on-demand certificate, KI-039) expires in more than 14 days (openssl s_client to 127.0.0.1:443
+#                         with the host as SNI). The other storefronts' on-demand certificates are not checked: Caddy's
+#                         store (/var/lib/caddy, the caddy user's 0700 folders) cannot be read by this unit, whose root
+#                         has no capability (velexis-healthcheck.service).
 #   payment-page-<page>   once a day (ADR-0011 §C, PCI DSS 6.4.3 and 11.6.1): both payment pages of the demo storefront,
 #                         /checkout/pay-card.html and /checkout/pay-airline.html, fetched from this VM's Caddy, against
 #                         storefront/payment-page-inventory.json of the current release (OFE-023, format version 1 of
@@ -45,8 +49,8 @@
 #
 # Settings: /etc/velexis/healthcheck.env (optional, root 0600; deploy/env/healthcheck.env.example), read without
 # sourcing it: HEALTHCHECK_STOREFRONT_HOST (default demo.<STOREFRONT_BASE_DOMAIN>), the storefront of the payment page
-# check, and HEALTHCHECK_PAGES (`payment`, the default: the two payment pages; `all`: every page of the inventory,
-# OADR-0017 point 8). SMTP settings stay in alert.env, which only velexis-alert reads.
+# check and of its own tls-<host> row, and HEALTHCHECK_PAGES (`payment`, the default: the two payment pages; `all`:
+# every page of the inventory, OADR-0017 point 8). SMTP settings stay in alert.env, which only velexis-alert reads.
 #
 # Tests only (deploy/scripts/test/healthcheck.test.sh). With VELEXIS_ROOT=<absolute folder> the paths of this script
 # (/etc/velexis, /srv/velexis, /var/lib/velexis and the deploy lock in /run) move under that folder, it runs without
@@ -104,7 +108,7 @@ FAILED_JOBS_MAX=20
 QUEUE_AGE_MAX=600
 TLS_MIN_SECONDS=$((14 * 86400))
 # Time limits, so that a service that accepts connections but never answers cannot hold the run past the unit's
-# TimeoutStartSec (4 min): 7 health ports x 5 s, Redis 10 s, 5 TLS hosts x 15 s and the storefront 20 s at most, as a
+# TimeoutStartSec (4 min): 7 health ports x 5 s, Redis 10 s, 6 TLS hosts x 15 s and the storefront 20 s at most, as a
 # storefront that gives no answer is asked nothing more in that run.
 REDIS_TIMEOUT=10
 
@@ -375,20 +379,28 @@ check_backup() {
   end_check
 }
 
-# ---- 3. TLS expiry of the five named hosts ---------------------------------------------------------------------
+# ---- 3. TLS expiry of the five named hosts and the storefront host ----------------------------------------------
 PLATFORM_DOMAIN="$(env_value "$ETC/caddy.env" PLATFORM_BASE_DOMAIN)"
 STOREFRONT_DOMAIN="$(env_value "$ETC/caddy.env" STOREFRONT_BASE_DOMAIN)"
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-platform.example.com}" # the Caddyfile's defaults
 STOREFRONT_DOMAIN="${STOREFRONT_DOMAIN:-ota.example.com}"
+# The storefront of the payment page check, whose on-demand certificate also gets a tls- row (KI-039).
+STOREFRONT_HOST="$(env_value "$ETC/healthcheck.env" HEALTHCHECK_STOREFRONT_HOST)"
+STOREFRONT_HOST="${STOREFRONT_HOST:-demo.$STOREFRONT_DOMAIN}"
 
 check_tls() {
-  local host pem end
-  for host in "$PLATFORM_DOMAIN" "admin.$PLATFORM_DOMAIN" "api.$PLATFORM_DOMAIN" "admin.$STOREFRONT_DOMAIN" \
-    "api.$STOREFRONT_DOMAIN"; do
+  local entry from host pem end seen=" "
+  for entry in "caddy.env|$PLATFORM_DOMAIN" "caddy.env|admin.$PLATFORM_DOMAIN" "caddy.env|api.$PLATFORM_DOMAIN" \
+    "caddy.env|admin.$STOREFRONT_DOMAIN" "caddy.env|api.$STOREFRONT_DOMAIN" "HEALTHCHECK_STOREFRONT_HOST|$STOREFRONT_HOST"; do
+    from="${entry%%|*}"
+    host="${entry#*|}"
     if ! [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]]; then
-      warn "caddy.env names a host that is not a host name: $(clean "$host"); its TLS check is skipped"
+      warn "$from names a host that is not a host name: $(clean "$host"); its TLS check is skipped"
       continue
     fi
+    # A storefront host that is also a named host is checked once.
+    case "$seen" in *" $host "*) continue ;; esac
+    seen="$seen$host "
     begin_check "tls-$host" "TLS certificate of $host"
     pem="$(timeout 15 openssl s_client -connect "$TLS_CONNECT" -servername "$host" </dev/null 2>/dev/null |
       openssl x509 2>/dev/null || true)"
@@ -572,8 +584,7 @@ check_payment_pages() {
     return 0
   fi
 
-  host="$(env_value "$ETC/healthcheck.env" HEALTHCHECK_STOREFRONT_HOST)"
-  host="${host:-demo.$STOREFRONT_DOMAIN}"
+  host="$STOREFRONT_HOST"
   scope="$(env_value "$ETC/healthcheck.env" HEALTHCHECK_PAGES)"
   case "${scope:-payment}" in
     payment | all) scope="${scope:-payment}" ;;

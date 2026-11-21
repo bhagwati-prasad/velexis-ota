@@ -502,10 +502,10 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `AIRLINE_CARD_ENABLED` | | | | ✓ | | | Global kill switch, `false` by default ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md)) |
 | `MAX_TENANTS_PER_ACCOUNT` | ✓ | | | | | | OTAs that are not `failed` one account may own, default `3` (`422 UNPROCESSABLE`, `details.reason = "tenant_limit"` beyond it) |
 | `FEATURE_STRIPE_BILLING`, `FEATURE_OWN_STRIPE`, `FEATURE_SETTLEMENTS`, `FEATURE_OWN_AMADEUS`, `FEATURE_CUSTOM_DOMAINS`, `FEATURE_LIVE_SWITCH` | ✓ | | | | | | Milestone switches, `false` by default and until M5 ([PADR-0015](../../platform/docs/adr/0015-milestone-feature-switches.md)): an operation with `x-feature` answers `403 FEATURE_DISABLED` while its switch is off, and the worker skips that feature's schedulers. The portal and the admin read them from `GET /v1/me`, never from their own environment |
-| `STORAGE_DRIVER`, `STORAGE_DIR` | reserved | | | ✓ | | | `local`, `/var/lib/velexis/storage`. Not read by the platform in the MVP (CSV exports are streamed). |
+| `STORAGE_DRIVER`, `STORAGE_DIR` | | | | ✓ | | | `local`, `/var/lib/velexis/storage`. The platform stores no files (CSV exports are streamed); its env templates no longer list them (KI-044). |
 | `DOCUMENT_URL_KEY_FILE` | | | | ✓ | | | Signed document URLs, OTA backend only ([ADR-0010](adr/0010-secrets-envelope-encryption.md)) |
 | `ACME_EMAIL` | | | | | | ✓ | Let's Encrypt account e-mail |
-| `SENTRY_DSN` | optional | optional | optional | optional | optional | | Off when empty ([ADR-0016](adr/0016-observability.md)) |
+| `SENTRY_DSN` | | optional | optional | | optional | | Error tracking is not implemented yet ([ADR-0016](adr/0016-observability.md), M6): the three Next.js apps only validate it (a URL, `https:` for the portal and the platform admin, or empty), no client sends errors, and neither backend reads it (KI-043) |
 
 The storefront has **no runtime environment**. It is static, and everything tenant-specific comes from `storefront.get`. Shared Amadeus credentials are **not** environment variables: they are stored encrypted in `platform.amadeus_accounts` and managed in the platform admin ([ADR-0012](adr/0012-amadeus-account-model.md)).
 

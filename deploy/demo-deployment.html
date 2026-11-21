@@ -2679,7 +2679,9 @@ FEATURE_LIVE_SWITCH=false
 # Platform backend: OTAs that are not failed one account may own (PF-10 AC4).
 MAX_TENANTS_PER_ACCOUNT=3
 
-# ---- Optional error tracking (off when empty; ADR-0016) -----------------------------------------------
+# ---- Error tracking: not implemented yet (ADR-0016) --------------------------------------------------
+# Only the three Next.js apps validate it (a URL, https: for the portal and the platform admin, or empty for off); no
+# client sends errors anywhere until M6, and neither backend reads it (KI-043). Leave it empty.
 SENTRY_DSN=
 </script>
     <!-- prettier-ignore -->
@@ -2706,7 +2708,8 @@ PUBLIC_PORTAL_URL=http://localhost:3000
 PUBLIC_OTA_ADMIN_URL=http://localhost:3002
 STOREFRONT_BASE_DOMAIN=ota.example.com
 
-# Error tracking is off when empty
+# Error tracking: not implemented yet. The app only validates the value (an https: URL, or empty for off); no client
+# sends errors anywhere until M6 (ADR-0016, KI-043). Leave it empty.
 SENTRY_DSN=
 </script>
     <!-- prettier-ignore -->
@@ -2733,7 +2736,8 @@ PUBLIC_PLATFORM_ADMIN_URL=http://localhost:3001
 # Admins enable MFA in the portal before their first admin sign-in
 PUBLIC_PORTAL_URL=http://localhost:3000
 
-# Error tracking is off when empty
+# Error tracking: not implemented yet. The app only validates the value (an https: URL, or empty for off); no client
+# sends errors anywhere until M6 (ADR-0016, KI-043). Leave it empty.
 SENTRY_DSN=
 </script>
     <!-- prettier-ignore -->
@@ -2831,9 +2835,6 @@ STORAGE_DIR=.local/storage
 # --- Tests ------------------------------------------------------------------------------------------
 TEST_DATABASE_ADMIN_URL=postgres://velexis_test_admin:dev_test_admin@127.0.0.1:5432/postgres
 MAILPIT_API_URL=http://127.0.0.1:8025
-
-# --- Optional error tracking (off when empty; ADR-0016) -----------------------------------------------
-SENTRY_DSN=
 </script>
     <!-- prettier-ignore -->
     <script type="text/plain" id="src-env-ota-admin">
@@ -2866,7 +2867,8 @@ OTA_API_URL=http://127.0.0.1:4000
 # [A-Za-z0-9_] (src/config.ts).
 OTA_ADMIN_SERVICE_KEY=sk_dev_ota_admin_service_key_change_me
 
-# Optional error tracking; off when empty (ADR-0016).
+# Error tracking: not implemented yet. The app only validates the value (an absolute URL, or empty for off); no
+# client sends errors anywhere until M6 (ADR-0016, KI-043). Leave it empty.
 SENTRY_DSN=
 </script>
     <!-- prettier-ignore -->

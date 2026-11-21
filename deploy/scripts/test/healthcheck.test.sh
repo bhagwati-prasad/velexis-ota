@@ -47,7 +47,11 @@
 #       platform worker's queues are read alike (FIX-W46-PLATFORM);
 #    6. Redis memory above 70 % of maxmemory (the password only in redis-cli's environment), a backup marker older than
 #       26 hours, and a certificate that expires within 14 days alert once each and recover once; a Redis that never
-#       answers alerts once redis-cli's 10 s are up, and the checks after it still run;
+#       answers alerts once redis-cli's 10 s are up, and the checks after it still run; the storefront of
+#       HEALTHCHECK_STOREFRONT_HOST has a tls- row of its own (KI-039, [FIX-W68-OPS AC2]): its certificate expiring
+#       within 14 days alerts once and recovers once, without the setting the row is demo.<STOREFRONT_BASE_DOMAIN>,
+#       another host gets its own row, a named host is checked once, and a value that is not a host name is skipped
+#       with a warning;
 #    7. an alert that velexis-alert cannot send keeps the state and fails the run (exit 1); the next run sends it once;
 #    8. a missing inventory skips the payment page check with a warning (no alert, states kept); one of an unknown
 #       version alerts; with HEALTHCHECK_PAGES=all every page of the inventory is checked (a header changed on / only);
@@ -252,7 +256,8 @@ make_cert() { # name days
   mv "$STATE/tls/$1.key.tmp" "$STATE/tls/$1.key"
   mv "$STATE/tls/$1.crt.tmp" "$STATE/tls/$1.crt"
 }
-TLS_HOSTS=(platform.example.com admin.platform.example.com api.platform.example.com admin.ota.example.com api.ota.example.com)
+TLS_HOSTS=(platform.example.com admin.platform.example.com api.platform.example.com admin.ota.example.com api.ota.example.com
+  demo.ota.example.com)
 for h in default "${TLS_HOSTS[@]}"; do make_cert "$h" 90; done
 
 # ---- the fakes on PATH -------------------------------------------------------------------------------------------
@@ -583,14 +588,14 @@ ALL_IDS=(ready-velexis-platform-worker ready-velexis-ota-worker ready-velexis-pl
   ready-velexis-portal ready-velexis-platform-admin ready-velexis-ota-admin failed-jobs-velexis-platform-worker
   queue-age-velexis-platform-worker failed-jobs-velexis-ota-worker queue-age-velexis-ota-worker disk-root
   disk-var-lib-postgresql redis-memory backup-age tls-platform.example.com tls-admin.platform.example.com
-  tls-api.platform.example.com tls-admin.ota.example.com tls-api.ota.example.com
+  tls-api.platform.example.com tls-admin.ota.example.com tls-api.ota.example.com tls-demo.ota.example.com
   payment-inventory payment-page-checkout-pay-card payment-page-checkout-pay-airline)
 
 # ---- 1. a clean pass ----------------------------------------------------------------------------------------------------
 step "1. a clean pass"
 run_hc
 check "a clean first run exits 0 and sends no alert [X-030 AC1]" quiet_run
-check "every check passes: the seven units, both workers' queues, both disks, Redis, the backup, the five certificates and both payment pages [X-030 AC1]" \
+check "every check passes: the seven units, both workers' queues, both disks, Redis, the backup, the six certificates (the storefront's too) and both payment pages [X-030 AC1] [FIX-W68-OPS AC2]" \
   ok_ids "${ALL_IDS[@]}"
 check "the platform worker's readiness lists its queues as the OTA worker's does, so its job checks run too [FIX-W46-PLATFORM AC4]" \
   not out_has "skip failed-jobs-velexis-platform-worker"
@@ -906,6 +911,57 @@ check "a Redis that never answers: redis-cli is stopped at its time limit, one a
 rm -f "$STATE/redis-hang"
 run_hc
 check "Redis answering again: one recovery [X-030 AC1]" recovered "Redis memory"
+
+# KI-039: the storefront of the payment page check (HEALTHCHECK_STOREFRONT_HOST) has a tls- row of its own.
+make_cert demo.ota.example.com 5
+run_hc
+storefront_cert_alerted() {
+  failed_once "TLS certificate of demo.ota.example.com: the certificate of demo.ota.example.com expires within 14 days" &&
+    state_is tls-demo.ota.example.com fail && state_is tls-api.ota.example.com ok
+}
+check "the storefront host's certificate valid for 5 more days: one alert naming the host [FIX-W68-OPS AC2]" \
+  storefront_cert_alerted
+make_cert demo.ota.example.com 90
+run_hc
+check "and one recovery once it is renewed [FIX-W68-OPS AC2]" recovered "TLS certificate of demo.ota.example.com"
+tls_rows() { grep -cE "^(ok   |FAIL )tls-${1//./\\.}(: |\$)" "$LAST_OUT" || true; } # host -> results printed for its row
+printf '# no storefront host set\n' >"$ETC/healthcheck.env"
+make_cert demo.ota.example.com 5
+run_hc
+default_storefront() { failed_once "TLS certificate of demo.ota.example.com" && [ "$(tls_rows demo.ota.example.com)" -eq 1 ]; }
+check "without HEALTHCHECK_STOREFRONT_HOST the row is demo.<STOREFRONT_BASE_DOMAIN> of caddy.env [FIX-W68-OPS AC2]" \
+  default_storefront
+make_cert demo.ota.example.com 90
+run_hc
+check "and it recovers once [FIX-W68-OPS AC2]" recovered "TLS certificate of demo.ota.example.com"
+printf 'HEALTHCHECK_STOREFRONT_HOST=travel.example.net\n' >"$ETC/healthcheck.env"
+make_cert travel.example.net 3
+run_hc
+custom_storefront() {
+  rc_is 0 && alerts_are 1 &&
+    alert_has "health check failed: TLS certificate of travel.example.net: the certificate of travel.example.net expires within 14 days" &&
+    [ "$(tls_rows demo.ota.example.com)" -eq 0 ]
+}
+check "another storefront host (a custom domain) gets its own row instead of the demo storefront's [FIX-W68-OPS AC2]" \
+  custom_storefront
+make_cert travel.example.net 90
+run_hc
+check "and recovers once [FIX-W68-OPS AC2]" recovered "TLS certificate of travel.example.net"
+printf 'HEALTHCHECK_STOREFRONT_HOST=api.ota.example.com\n' >"$ETC/healthcheck.env"
+run_hc
+named_once() { quiet_run && [ "$(tls_rows api.ota.example.com)" -eq 1 ] && [ "$(tls_rows travel.example.net)" -eq 0 ]; }
+check "a storefront host that is also a named host is checked once [FIX-W68-OPS AC2]" named_once
+printf 'HEALTHCHECK_STOREFRONT_HOST=demo.ota.example.com/x\n' >"$ETC/healthcheck.env"
+run_hc
+not_a_host() {
+  quiet_run && out_has "WARNING: HEALTHCHECK_STOREFRONT_HOST names a host that is not a host name: demo.ota.example.com/x; its TLS check is skipped" &&
+    ok_ids tls-api.ota.example.com
+}
+check "a HEALTHCHECK_STOREFRONT_HOST that is not a host name: its TLS check is skipped with a warning, the others run [FIX-W68-OPS AC2]" \
+  not_a_host
+printf '# test settings\nHEALTHCHECK_STOREFRONT_HOST=demo.ota.example.com\n' >"$ETC/healthcheck.env"
+run_hc
+check "the storefront host back: no alert [FIX-W68-OPS AC2]" quiet_run
 
 # ---- 7. an alert that cannot be sent ------------------------------------------------------------------------------------
 step "7. velexis-alert fails"

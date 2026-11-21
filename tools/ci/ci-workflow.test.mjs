@@ -159,6 +159,8 @@ describe("workflow shape", () => {
     const same = (list, run) => list.find((s) => s.run === run);
     const bootstrap = (list) => list.find((s) => /deploy\/postgres\/bootstrap\.sql/.test(s.run ?? ""));
     const pan = steps.find((s) => (s.name ?? "").startsWith("PAN-absence proof"));
+    // The backup and restore test runs last (KI-040, lead decision (37q); [FIX-W68-OPS AC3] below).
+    const backup = steps.find((s) => /backup-restore\.test\.sh/.test(s.run ?? ""));
     const order = [
       uses(steps, "actions/checkout"),
       uses(steps, "pnpm/action-setup"),
@@ -169,6 +171,7 @@ describe("workflow shape", () => {
       same(steps, "pnpm dev:keys"),
       same(steps, "pnpm test:int"),
       pan,
+      backup,
     ];
     assert.ok(order.every(Boolean), "every step of the integration job is there");
     assert.deepEqual(order, steps, "and nothing else, in this order");
@@ -371,6 +374,89 @@ describe("workflow shape", () => {
         assert.ok(covered, `${test} needs ${tool}, which the step or the runner image provides`);
       }
     }
+  });
+
+  it("[FIX-W68-OPS AC3] the Integration tests job installs age, rclone and zstd and runs backup-restore.test.sh", () => {
+    // KI-040, lead decision (37q) of 2026-11-21, approved by the owner: backup.sh and restore.sh had no CI run.
+    const steps = JOBS.get("integration").steps;
+    const at = steps.findIndex((s) => /backup-restore\.test\.sh/.test(s.run ?? ""));
+    assert.ok(at >= 0, "the integration job has a step that runs backup-restore.test.sh");
+    const step = steps[at];
+    const lines = step.run.split("\n").map((l) => l.trim());
+    for (const line of [
+      "for tool in age zstd rclone; do",
+      "for tool in psql pg_dump pg_dumpall pg_restore; do",
+      'command -v "$tool" > /dev/null || { missing+=(postgresql-client-16); break; }',
+      "bash deploy/scripts/test/backup-restore.test.sh",
+    ]) {
+      assert.ok(lines.includes(line), `the step runs: ${line}`);
+    }
+    assert.match(
+      step.run,
+      /apt-get install -y --no-install-recommends "\$\{missing\[@\]\}"/,
+      "a missing tool from apt",
+    );
+    const install = lines.findIndex((l) => /apt-get install/.test(l));
+    const test = lines.indexOf("bash deploy/scripts/test/backup-restore.test.sh");
+    assert.ok(install >= 0 && install < test, "the tools are installed before the test runs");
+    assert.equal(
+      test,
+      lines.length - 1,
+      "the test is the step's last command, so its exit code is the step's",
+    );
+    // After the database roles exist (the bootstrap step makes velexis_test_admin) and with the job's own env: the
+    // test reads TEST_DATABASE_ADMIN_URL and DATABASE_MIGRATOR_URL from it, and the step adds nothing.
+    const bootstrap = steps.findIndex((s) => /deploy\/postgres\/bootstrap\.sql/.test(s.run ?? ""));
+    assert.ok(bootstrap >= 0 && bootstrap < at, "it runs after the bootstrap step");
+    assert.match(steps[bootstrap].run, /CREATE ROLE velexis_test_admin LOGIN CREATEDB/);
+    const env = mapOf(jobKey("integration", "env"));
+    for (const name of ["TEST_DATABASE_ADMIN_URL", "DATABASE_MIGRATOR_URL", "REDIS_URL"]) {
+      assert.ok(env[name], `the job's env has ${name}`);
+    }
+    assert.equal(step.env, undefined, "the step uses the job's env as it is");
+    assert.equal(step.uses, undefined, "no action, only commands");
+    assert.equal(step.if, undefined, "the step always runs");
+    assert.equal(step["continue-on-error"], undefined, "a failing test fails the job");
+    // The tools the test checks for are the ones the step makes sure of (age-keygen comes with age) or the runner
+    // image and the job's setup always have.
+    const text = readFileSync(join(ROOT, "deploy/scripts/test/backup-restore.test.sh"), "utf8");
+    const tools =
+      /for tool in ([^;]+); do/
+        .exec(text)?.[1]
+        .split(/[\s\\]+/)
+        .filter(Boolean) ?? [];
+    assert.ok(
+      tools.includes("rclone") && tools.includes("pg_restore"),
+      "backup-restore.test.sh names its tools",
+    );
+    const fromStep = ["age", "age-keygen", "zstd", "rclone", "psql", "pg_dump", "pg_dumpall", "pg_restore"];
+    const always = [
+      "node",
+      "pnpm",
+      "tar",
+      "sha256sum",
+      "cmp",
+      "comm",
+      "awk",
+      "od",
+      "dd",
+      "find",
+      "stat",
+      "hostname",
+      "diff",
+    ];
+    for (const tool of tools) {
+      assert.ok(
+        fromStep.includes(tool) || always.includes(tool),
+        `backup-restore.test.sh needs ${tool}, which the step or the runner provides`,
+      );
+    }
+    // Only the integration job runs it: the job on other hosts and ports is unchanged.
+    assert.equal(
+      JOBS.get("alt-hosts").steps.findIndex((s) => /backup-restore/.test(s.run ?? "")),
+      -1,
+      "alt-hosts does not run it",
+    );
   });
 
   it("[FIX-W47-SHARED AC6] build-test lints and tests tools/perf with the CI checks, before the tests", () => {

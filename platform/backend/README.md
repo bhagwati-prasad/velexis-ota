@@ -215,8 +215,8 @@ Loaded and validated by `src/config.ts` (`@velexis/config`); the process refuses
 | `PLATFORM_BFF_KEY` | yes | (generated, 32+ random bytes) | Shared first-party key of the portal and admin servers. Only a loopback request that carries it in `X-Velexis-Bff-Key` may forward the end user's IP and user agent ([PADR-0019](../docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)) (new) | M1 |
 | `MAX_TENANTS_PER_ACCOUNT` | no (`3`) | `3` | Non-failed OTAs one account may own (new) | M1 |
 | `FEATURE_STRIPE_BILLING`, `FEATURE_OWN_STRIPE`, `FEATURE_SETTLEMENTS`, `FEATURE_OWN_AMADEUS`, `FEATURE_CUSTOM_DOMAINS`, `FEATURE_LIVE_SWITCH` | no (`false`) | `false` | Milestone switches ([PADR-0015](../docs/adr/0015-milestone-feature-switches.md)) (new) | M1 |
-| `STORAGE_DRIVER`, `STORAGE_DIR` | no | `local`, `/var/lib/velexis/storage` | Listed for the platform in the configuration matrix; not read by the MVP code (CSV exports are streamed) | — |
-| `SENTRY_DSN` | no | (empty) | Error tracking, off when empty | M6 |
+| `STORAGE_DRIVER`, `STORAGE_DIR` | — | — | Not variables of the platform: it stores no files (CSV exports are streamed), the storage folder is the OTA's, and the env templates no longer list them (KI-044) | — |
+| `SENTRY_DSN` | — | — | Not read: error tracking is not implemented yet (no client sends errors anywhere; M6, [ADR-0016](../../docs/mvp/adr/0016-observability.md)), and the env templates no longer list it (KI-043) | M6 |
 
 Never in environment variables: the shared Amadeus credentials (encrypted in `platform.amadeus_accounts`), OTA credentials, MFA secrets.
 

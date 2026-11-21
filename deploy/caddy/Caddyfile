@@ -138,11 +138,17 @@
 
 # Security headers. A `header` block that deletes a header (-Server) is deferred, and deferred headers are not
 # applied to responses written by handle_errors: every handle_errors block below imports its headers again.
+# Referrer-Policy is a default (`?`): set only when the answer has none, so the apps' own policies reach the browser
+# (the platform admin's `same-origin`, the portal's `no-referrer` on token pages and `strict-origin` on the console
+# hand-off, the APIs' helmet values), and Caddy's own answers (error pages, the maintenance page, 404s) and an app answer
+# without one get `strict-origin-when-cross-origin` (ADR-0014). Caddy 2.8 puts a `?` field into a header handler of its
+# own whose condition (the header is absent when the response is written) gates that field alone, never the block's
+# other fields (KI-037; caddy-smoke.sh checks both cases).
 (security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
-		Referrer-Policy "strict-origin-when-cross-origin"
+		?Referrer-Policy "strict-origin-when-cross-origin"
 		X-Frame-Options "DENY"
 		-Server
 	}

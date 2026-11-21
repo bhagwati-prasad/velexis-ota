@@ -705,6 +705,29 @@ jobs:
           }
           EOF
 
+      - name: velexis-backup and velexis-restore test (scratch databases, a local rclone remote, no root)
+        # X-024 and X-045: backup.sh and restore.sh unchanged against this job's PostgreSQL 16, with the roles of the
+        # bootstrap step above (velexis_test_admin makes and drops the scratch databases velexis_bkt_*), two age key
+        # pairs and an rclone `local` remote behind a wrapper that refuses every delete; see backup-restore.test.sh's
+        # header. TEST_DATABASE_ADMIN_URL, DATABASE_MIGRATOR_URL and REDIS_URL come from the job's env. age (with
+        # age-keygen), rclone and zstd come from the runner's apt (Ubuntu 24.04: age 1.1.1, rclone 1.60.1, zstd
+        # 1.5.5), and so do the PostgreSQL 16 client tools (postgresql-client-16) if the image lacks one. KI-040, lead
+        # decision (37q) of 2026-11-21, approved by the owner (FIX-W68-OPS).
+        run: |
+          missing=()
+          for tool in age zstd rclone; do
+            command -v "$tool" > /dev/null || missing+=("$tool")
+          done
+          for tool in psql pg_dump pg_dumpall pg_restore; do
+            command -v "$tool" > /dev/null || { missing+=(postgresql-client-16); break; }
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          echo "age $(age --version); $(rclone version | head -n 1); $(zstd --version); $(pg_dump --version)"
+          bash deploy/scripts/test/backup-restore.test.sh
+
   # X-032: the move to managed PostgreSQL and Redis is configuration only (decisions.md §2, deployment-single-vm.md
   # §15). The integration tests run with PostgreSQL and Redis reached through other host names (/etc/hosts aliases)
   # and ports (6543, 6380), PostgreSQL over TLS only with the CA and the check of the host name in the DSNs, and

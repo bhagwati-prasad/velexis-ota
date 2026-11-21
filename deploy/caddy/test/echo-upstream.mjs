@@ -29,6 +29,12 @@
 // test can read what reached the upstream; any other request an actual answer's. The smoke test proves that Caddy
 // passes them on unchanged on api.ota and adds none of its own.
 //
+// A request whose path is /referrer-policy/<policy> (any port, any method; <policy> one of the tokens of the Referrer
+// Policy standard) gets `Referrer-Policy: <policy>` with its answer, as the apps send their own: the platform admin's
+// `same-origin`, the portal's `no-referrer` on token pages and `strict-origin` on the console hand-off, the APIs'
+// helmet values. Every other answer carries none, so the smoke test can prove that Caddy keeps an app's policy and adds
+// its default only where the app sent none (KI-037, FIX-W68-OPS).
+//
 // GET /redirect answers 302 instead, with `Location: /landing?<the request's own query>` and the same echo, so the
 // smoke test can show which query values of a redirect's `Location` reach Caddy's access log (FIX-W29-SECURITY).
 //
@@ -47,6 +53,25 @@ const REDIRECT_PATH = "/redirect";
 const OTA_API_PORT = 4000;
 /** getPublicAsset's route as Express matches it: case-insensitive, on the path as received. */
 const PUBLIC_ASSET_PATH = /^\/v1\/assets\/[^/]+\/[^/]+\.[^/]+$/i;
+/** An app's own Referrer-Policy (KI-037): /referrer-policy/<policy>, with a token of the Referrer Policy standard. */
+const REFERRER_POLICY_PATH = /^\/referrer-policy\/([a-z-]+)$/;
+const REFERRER_POLICIES = new Set([
+  "no-referrer",
+  "no-referrer-when-downgrade",
+  "origin",
+  "origin-when-cross-origin",
+  "same-origin",
+  "strict-origin",
+  "strict-origin-when-cross-origin",
+  "unsafe-url",
+]);
+
+/** The Referrer-Policy header the app would send for the path `rawPath` (none unless it asks for one). */
+function referrerPolicyHeaders(rawPath) {
+  const policy = REFERRER_POLICY_PATH.exec(rawPath)?.[1];
+  return policy !== undefined && REFERRER_POLICIES.has(policy) ? { "referrer-policy": policy } : {};
+}
+
 /** The CSP of the OTA API's helmet on every answer (HELMET_OPTIONS). */
 const HELMET_CSP = "default-src 'none'; frame-ancestors 'none'";
 /** The headers of getPublicAsset's answer (public-assets.controller.ts; PUBLIC_ASSET_CSP replaces helmet's CSP). */
@@ -134,11 +159,12 @@ function handler(port) {
       }
       const rawPath = (req.url ?? "/").split("?")[0] ?? "/";
       const cors = port === OTA_API_PORT ? corsHeaders(req) : {};
+      const ownPolicy = referrerPolicyHeaders(rawPath);
       if (port === OTA_API_PORT && req.method === "GET" && PUBLIC_ASSET_PATH.test(rawPath)) {
         send(res, 200, echo, { ...PUBLIC_ASSET_HEADERS, ...cors });
         return;
       }
-      send(res, 200, echo, cors);
+      send(res, 200, echo, { ...cors, ...ownPolicy });
     });
   };
 }
