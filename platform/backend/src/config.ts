@@ -368,7 +368,8 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
   DNS_RESOLVERS: env.list({ pattern: DNS_RESOLVER_ITEM, default: DEFAULT_DNS_RESOLVERS }),
   /**
    * The OTAs that are not `failed` one account may own (platform/docs/scope.md PF-10 AC4): beyond it createTenant
-   * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`.
+   * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`, and so does the owner's retry of a failed OTA
+   * (retryProvisioning, FIX-W67-KI002); the platform admin's job retry is exempt.
    */
   MAX_TENANTS_PER_ACCOUNT: env.int({ min: 1, default: 3 }),
   /**

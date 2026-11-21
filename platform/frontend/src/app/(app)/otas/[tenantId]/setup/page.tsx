@@ -20,15 +20,18 @@ import { ProvisioningProgress } from "@/components/provisioning-progress";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { platformApi } from "@/lib/api";
-import { errorMessage, isPlatformErrorCode } from "@/lib/errors";
+import { errorMessage, isPlatformErrorCode, TENANT_LIMIT_REASON } from "@/lib/errors";
 import { can, otaPath, type TenantRole } from "@/lib/roles";
-import { SETUP_STRINGS } from "@/lib/strings";
+import { SETUP_STRINGS, WIZARD_STRINGS } from "@/lib/strings";
 
 export const metadata: Metadata = { title: SETUP_STRINGS.title };
 
 type Subscription = components["schemas"]["Subscription"];
 
-/** The query of the page: `checkout=success` (back from Stripe), `payment=<code>` (a payment that did not start). */
+/**
+ * The query of the page: `checkout=success` (back from Stripe), `payment=<code>` (a payment that did not start), with
+ * `reason=tenant_limit` and `limit=<n>` for a retry refused over the tenant limit (FIX-W67-KI002).
+ */
 type SearchParams = Record<string, string | string[] | undefined>;
 
 /** An OTA id as the platform issues it (`ten_` + ULID); anything else is not an OTA of the account. */
@@ -167,20 +170,34 @@ const INFORMATIVE: ReadonlySet<PlatformErrorCode> = new Set<PlatformErrorCode>([
   "PROVISIONING_NOT_RETRYABLE",
 ]);
 
+/** `limit=<n>` of the page's query: a whole number of at most four digits, else none. */
+function limitOf(value: string | undefined): number | undefined {
+  return value !== undefined && /^\d{1,4}$/.test(value) ? Number(value) : undefined;
+}
+
 /**
  * Why the last payment attempt did not leave for Stripe (`?payment=<code>`, written by the wizard and the page's
  * actions). Only a code of the catalogue counts, and only the portal's text for it is shown; a plan that is no
- * longer available links to the billing page for the roles that see it.
+ * longer available links to the billing page for the roles that see it. A retry refused over the tenant limit
+ * (`UNPROCESSABLE` with `reason=tenant_limit`, PF-10 AC4, FIX-W67-KI002) reads as the wizard's message for the same
+ * refusal, with the limit when the query carries one.
  */
 function PaymentNotice({
   code,
+  tenantLimit,
   tenantId,
   role,
 }: {
   readonly code: PlatformErrorCode;
+  /** The query named the tenant limit as the reason; `limit` is the limit it carried, if any. */
+  readonly tenantLimit?: { readonly limit: number | undefined };
   readonly tenantId: string;
   readonly role: TenantRole;
 }) {
+  const message =
+    code === "UNPROCESSABLE" && tenantLimit !== undefined
+      ? WIZARD_STRINGS.tenantLimit(tenantLimit.limit)
+      : (PAYMENT_NOTICES[code] ?? errorMessage(code));
   const informative = INFORMATIVE.has(code);
   return (
     <Alert
@@ -189,7 +206,7 @@ function PaymentNotice({
     >
       <AlertDescription>
         <p>
-          {PAYMENT_NOTICES[code] ?? errorMessage(code)}{" "}
+          {message}{" "}
           {code === "PLAN_NOT_AVAILABLE" && can(role, "viewBilling") ? (
             <Link href={otaPath(tenantId, "/billing")} className="font-medium underline underline-offset-4">
               {SETUP_STRINGS.billingLink}
@@ -338,8 +355,15 @@ export default async function SetupPage({
     redirect(`${otaPath(tenantId, "/billing")}?checkout=success`);
   }
   const noticeCode = single(query["payment"]);
+  const tenantLimit =
+    single(query["reason"]) === TENANT_LIMIT_REASON ? { limit: limitOf(single(query["limit"])) } : undefined;
   const notice = isPlatformErrorCode(noticeCode) ? (
-    <PaymentNotice code={noticeCode} tenantId={tenantId} role={role} />
+    <PaymentNotice
+      code={noticeCode}
+      {...(tenantLimit === undefined ? {} : { tenantLimit })}
+      tenantId={tenantId}
+      role={role}
+    />
   ) : null;
   const payment = await paymentOf(tenantId, role, progress.progress, checkoutReturn);
 

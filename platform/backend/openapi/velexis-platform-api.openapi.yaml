@@ -2102,6 +2102,15 @@ paths:
         back to `provisioning` and a **new** `provision` job is inserted and dispatched; the failed job stays as
         history. From M5, a tenant that failed because its Checkout was abandoned gets a new Checkout instead: the
         answer carries `checkoutUrl` and the job waits for the payment. Writes an audit row.
+
+
+        **Tenant limit.** A failed OTA does not count towards `MAX_TENANTS_PER_ACCOUNT`, and a retry makes it count
+        again for each of its owners, so the limit of `createTenant` applies: when an owner of the OTA (the caller or
+        another owner) already owns as many OTAs that are not `failed` as the limit allows, the retry answers `422
+        UNPROCESSABLE` with `details.reason = tenant_limit` and `details.limit`, exactly as `createTenant` does, and
+        changes nothing (the tenant stays `failed`, no job, no audit row). The owners' accounts are locked before the
+        tenant, as `createTenant` locks the account, so a creation and a retry of one account count one after the
+        other. The platform admin's `adminRetryProvisioningJob` is exempt.
       tags:
         - Tenants
       security:
@@ -2116,9 +2125,11 @@ paths:
         - FORBIDDEN
         - NOT_FOUND
         - PROVISIONING_NOT_RETRYABLE
+        - UNPROCESSABLE
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-platform-tables:
+        - accounts
         - tenant_memberships
         - tenants
         - subscriptions
@@ -2167,6 +2178,29 @@ paths:
               examples:
                 PROVISIONING_NOT_RETRYABLE:
                   $ref: '#/components/examples/PROVISIONING_NOT_RETRYABLE'
+        '422':
+          description: >-
+            An owner of the OTA already owns as many OTAs that are not `failed` as `MAX_TENANTS_PER_ACCOUNT` allows
+            (`details.reason = tenant_limit`, `details.limit`); nothing changed. Possible codes: UNPROCESSABLE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNPROCESSABLE:
+                  summary: An owner of the OTA owns as many OTAs as allowed
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: The request breaks a business rule.
+                      status: 422
+                      requestId: req_01JB3K9R4T8W2Y6A0C4E8G2J6M
+                      details:
+                        reason: tenant_limit
+                        limit: 3
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -8038,6 +8072,10 @@ paths:
         `provisioning`; when its schema already exists, the OTA run is a no-op and only the platform post-steps run
         again. `409 PROVISIONING_NOT_RETRYABLE` when the job is not `failed`, when a job of the same kind is already
         queued or running for the OTA, or for a `provision` job of an OTA that is not `failed`. Writes an audit row.
+        `MAX_TENANTS_PER_ACCOUNT` does not apply: unlike the owner's `retryProvisioning`, which answers `422
+        UNPROCESSABLE` (`tenant_limit`) when an owner of the OTA already owns as many OTAs that are not `failed` as
+        allowed, a platform admin's retry of a failed setup is a deliberate staff action and reopens the OTA whatever
+        its owners own.
       tags:
         - Admin provisioning jobs
       security:

@@ -1177,6 +1177,35 @@ describe("/otas/[tenantId]/setup from M5: the payment of a new OTA", () => {
     expect(navigation.redirect).not.toHaveBeenCalled();
   });
 
+  it("[FIX-W67-KI002 AC5] retryPayment over the tenant limit comes back with its reason and limit, and the page says it as the wizard does", async () => {
+    // A redirect keeps no details, so the reason and the limit travel in the query.
+    routes({
+      [`POST ${RETRY_PATH}`]: () =>
+        apiError("UNPROCESSABLE", 422, { details: { reason: "tenant_limit", limit: 3 } }),
+    });
+    expect(await outcome(retryPayment(TENANT_ID, new FormData()))).toBe(
+      `NEXT_REDIRECT ${SETUP_PATH}?payment=UNPROCESSABLE&reason=tenant_limit&limit=3`,
+    );
+    routes({
+      [`POST ${RETRY_PATH}`]: () => apiError("UNPROCESSABLE", 422, { details: { reason: "tenant_limit" } }),
+    });
+    expect(await outcome(retryPayment(TENANT_ID, new FormData()))).toBe(
+      `NEXT_REDIRECT ${SETUP_PATH}?payment=UNPROCESSABLE&reason=tenant_limit`,
+    );
+
+    // The page: the wizard's message for the same refusal, with the limit when the query carries a usable one.
+    await openSetup({ payment: "UNPROCESSABLE", reason: "tenant_limit", limit: "3" });
+    expect(screen.getByRole("alert").textContent).toContain(WIZARD_STRINGS.tenantLimit(3));
+    cleanup();
+    await openSetup({ payment: "UNPROCESSABLE", reason: "tenant_limit", limit: "lots" });
+    expect(screen.getByRole("alert").textContent).toContain(WIZARD_STRINGS.tenantLimit(undefined));
+    cleanup();
+    // Without the reason, UNPROCESSABLE keeps the catalogue's message.
+    await openSetup({ payment: "UNPROCESSABLE" });
+    expect(screen.getByRole("alert").textContent).toContain(ERROR_MESSAGES.UNPROCESSABLE);
+    expect(document.body.textContent).not.toContain(RAW_API_MESSAGE);
+  });
+
   it("before M5 (a manual trial) a waiting or failed set-up is the progress, as in M1", async () => {
     routes({
       [`GET ${SUBSCRIPTION_PATH}`]: () =>

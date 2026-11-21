@@ -536,6 +536,8 @@ export interface paths {
         /**
          * Retry a failed setup
          * @description Owners only. Allowed only for a `failed` tenant (`409 PROVISIONING_NOT_RETRYABLE` otherwise): the tenant goes back to `provisioning` and a **new** `provision` job is inserted and dispatched; the failed job stays as history. From M5, a tenant that failed because its Checkout was abandoned gets a new Checkout instead: the answer carries `checkoutUrl` and the job waits for the payment. Writes an audit row.
+         *
+         *     **Tenant limit.** A failed OTA does not count towards `MAX_TENANTS_PER_ACCOUNT`, and a retry makes it count again for each of its owners, so the limit of `createTenant` applies: when an owner of the OTA (the caller or another owner) already owns as many OTAs that are not `failed` as the limit allows, the retry answers `422 UNPROCESSABLE` with `details.reason = tenant_limit` and `details.limit`, exactly as `createTenant` does, and changes nothing (the tenant stays `failed`, no job, no audit row). The owners' accounts are locked before the tenant, as `createTenant` locks the account, so a creation and a retry of one account count one after the other. The platform admin's `adminRetryProvisioningJob` is exempt.
          */
         post: operations["retryProvisioning"];
         delete?: never;
@@ -2053,7 +2055,7 @@ export interface paths {
         put?: never;
         /**
          * Retry a failed tenant job
-         * @description Inserts a **new** job of the same kind and payload for a `failed` job and dispatches it; the failed row stays as history (PADR-0001 item 7). Retrying a failed `provision` job also sets the OTA from `failed` back to `provisioning`; when its schema already exists, the OTA run is a no-op and only the platform post-steps run again. `409 PROVISIONING_NOT_RETRYABLE` when the job is not `failed`, when a job of the same kind is already queued or running for the OTA, or for a `provision` job of an OTA that is not `failed`. Writes an audit row.
+         * @description Inserts a **new** job of the same kind and payload for a `failed` job and dispatches it; the failed row stays as history (PADR-0001 item 7). Retrying a failed `provision` job also sets the OTA from `failed` back to `provisioning`; when its schema already exists, the OTA run is a no-op and only the platform post-steps run again. `409 PROVISIONING_NOT_RETRYABLE` when the job is not `failed`, when a job of the same kind is already queued or running for the OTA, or for a `provision` job of an OTA that is not `failed`. Writes an audit row. `MAX_TENANTS_PER_ACCOUNT` does not apply: unlike the owner's `retryProvisioning`, which answers `422 UNPROCESSABLE` (`tenant_limit`) when an owner of the OTA already owns as many OTAs that are not `failed` as allowed, a platform admin's retry of a failed setup is a deliberate staff action and reopens the OTA whatever its owners own.
          */
         post: operations["adminRetryProvisioningJob"];
         delete?: never;
@@ -7480,6 +7482,16 @@ export interface operations {
             404: components["responses"]["NotFound"];
             /** @description Only a failed setup can be retried. Possible codes: PROVISIONING_NOT_RETRYABLE. */
             409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description An owner of the OTA already owns as many OTAs that are not `failed` as `MAX_TENANTS_PER_ACCOUNT` allows (`details.reason = tenant_limit`, `details.limit`); nothing changed. Possible codes: UNPROCESSABLE. */
+            422: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     [name: string]: unknown;

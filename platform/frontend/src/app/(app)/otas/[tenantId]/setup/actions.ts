@@ -6,9 +6,9 @@ import { notFound, redirect } from "next/navigation";
 
 import type { SecretValue } from "@/components/secret-reveal-panel";
 import { platformApi, type ApiError } from "@/lib/api";
-import { errorMessage } from "@/lib/errors";
+import { errorMessage, isTenantLimit, TENANT_LIMIT_REASON, tenantLimitOf } from "@/lib/errors";
 import { otaPath } from "@/lib/roles";
-import { SETUP_STRINGS } from "@/lib/strings";
+import { SETUP_STRINGS, WIZARD_STRINGS } from "@/lib/strings";
 
 /**
  * The server actions of the set-up page (README §2 `/otas/[tenantId]/setup` and §5; flow provisioning.md §4 and
@@ -16,7 +16,9 @@ import { SETUP_STRINGS } from "@/lib/strings";
  *
  * - `getSetupProgress` reads `getProvisioning`; the page calls it for the first render, and `ProvisioningProgress`
  *   every 2 seconds until the set-up reaches a final state;
- * - `retrySetup` calls `retryProvisioning` (owners; only for a failed OTA), which starts a new set-up job;
+ * - `retrySetup` calls `retryProvisioning` (owners; only for a failed OTA), which starts a new set-up job; when an
+ *   owner of the OTA already owns as many OTAs as one account may (`422 UNPROCESSABLE`, `details.reason =
+ *   tenant_limit`, FIX-W67-KI002) its message is the wizard's for the same refusal, with the limit;
  * - `revealSetupKeys` calls `revealInitialKeys` (owners) and returns the two test keys exactly once.
  *
  * From M5 (PFE-020; flow signup-and-create-ota.md step 7 and "Failure handling", billing flow §B and §H, PF-71) two
@@ -126,6 +128,20 @@ function failure(error: Pick<ApiError, "code">): SetupFailure {
   return { status: "failed", code: error.code, message: errorMessage(error) };
 }
 
+/**
+ * A refused retry in the portal's words: the tenant limit (scope PF-10 AC4: a retry makes the failed OTA count again
+ * for its owners) gets the wizard's message for the same refusal, with the limit; any other code its catalogue message.
+ */
+function retryFailure(error: ApiError): SetupFailure {
+  return isTenantLimit(error)
+    ? {
+        status: "failed",
+        code: error.code,
+        message: WIZARD_STRINGS.tenantLimit(tenantLimitOf(error.details)),
+      }
+    : failure(error);
+}
+
 /** The page's view of `ProvisioningStatus`: everything but the job's error text and the steps' error messages. */
 function progressOf(status: Schemas["ProvisioningStatus"]): SetupProgress {
   const { job } = status;
@@ -176,7 +192,7 @@ export async function retrySetup(tenantId: unknown): Promise<SetupRetry> {
   });
   if (result.error !== undefined) {
     leaveOnSessionEnd(result.error, tenantId);
-    return failure(result.error);
+    return retryFailure(result.error);
   }
   const target = checkoutTarget(result.data.checkoutUrl);
   if (target !== undefined) {
@@ -207,10 +223,28 @@ function checkoutTarget(value: string | null | undefined): string | undefined {
   return url.protocol === "https:" && url.username === "" && url.password === "" ? value : undefined;
 }
 
-/** The set-up page, with `?payment=<code>` when a payment attempt did not leave for Stripe. */
-function setupPath(tenantId: string, code?: PlatformErrorCode): string {
+/**
+ * The set-up page, with `?payment=<code>` when a payment attempt did not leave for Stripe. A refused retry over the
+ * tenant limit also carries `reason=tenant_limit` and, when the API sent it, `limit=<n>` (FIX-W67-KI002), because a
+ * redirect keeps no details: the page words it as the wizard does.
+ */
+function setupPath(
+  tenantId: string,
+  error?: { readonly code: PlatformErrorCode; readonly details?: ApiError["details"] },
+): string {
   const path = otaPath(tenantId, "/setup");
-  return code === undefined ? path : `${path}?${new URLSearchParams({ payment: code }).toString()}`;
+  if (error === undefined) {
+    return path;
+  }
+  const query = new URLSearchParams({ payment: error.code });
+  if (isTenantLimit(error)) {
+    query.set("reason", TENANT_LIMIT_REASON);
+    const limit = tenantLimitOf(error.details);
+    if (limit !== undefined) {
+      query.set("limit", String(limit));
+    }
+  }
+  return `${path}?${query.toString()}`;
 }
 
 /** `PlanCode` and `IdempotencyKey` of the platform document. */
@@ -243,7 +277,7 @@ export async function continueToPayment(tenantId: unknown, formData: FormData): 
     (billingInterval !== "month" && billingInterval !== "year")
   ) {
     // The page always renders the three fields: without them the form is not the page's.
-    redirect(setupPath(tenantId, "VALIDATION_FAILED"));
+    redirect(setupPath(tenantId, { code: "VALIDATION_FAILED" }));
   }
   const api = await platformApi();
   const result = await api.POST("/v1/tenants/{tenantId}/billing/checkout-session", {
@@ -252,10 +286,10 @@ export async function continueToPayment(tenantId: unknown, formData: FormData): 
   });
   if (result.error !== undefined) {
     leaveOnSessionEnd(result.error, tenantId);
-    redirect(setupPath(tenantId, result.error.code));
+    redirect(setupPath(tenantId, result.error));
   }
   const target = checkoutTarget(result.data.url);
-  redirect(target ?? setupPath(tenantId, "INTERNAL_ERROR"));
+  redirect(target ?? setupPath(tenantId, { code: "INTERNAL_ERROR" }));
 }
 
 /**
@@ -274,7 +308,8 @@ export async function retryPayment(tenantId: unknown, _formData: FormData): Prom
   });
   if (result.error !== undefined) {
     leaveOnSessionEnd(result.error, tenantId);
-    redirect(setupPath(tenantId, result.error.code));
+    // The tenant limit comes back with its reason and limit (setupPath), worded as the wizard words it.
+    redirect(setupPath(tenantId, result.error));
   }
   const target = checkoutTarget(result.data.checkoutUrl);
   redirect(target ?? setupPath(tenantId));

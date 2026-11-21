@@ -23,7 +23,10 @@
 //   status in the row). After the commit the job is dispatched as the owner's retry dispatches it (never failing the
 //   call; the reconciler takes a job left `queued`, and a `provision` job may wait for its gate), and the answer is
 //   `202 {job}` as it is then. When the schema already exists the OTA worker's run is a no-op and only the platform's
-//   post-steps run again (each idempotent), so the OTA becomes `active`.
+//   post-steps run again (each idempotent), so the OTA becomes `active`. MAX_TENANTS_PER_ACCOUNT does not apply: unlike
+//   the owner's retry (LifecycleService.retryProvisioning, FIX-W67-KI002), a platform admin's retry of a failed OTA is a
+//   deliberate staff action and never answers `tenant_limit` (lead decision (36e) of 2026-11-21, approved by the owner;
+//   scope PF-10).
 // - `cancel` (adminCancelProvisioningJob, **reason**): one transaction locks the job; only a `queued` one is canceled
 //   (`409 CONFLICT`, `details.reason = not_queued`, for a running or finished job). It becomes `canceled`
 //   (`finished_at`), nothing more is sent to the OTA worker (the reconciler dispatches `queued` jobs only), and the
@@ -290,6 +293,9 @@ export class AdminJobsService {
         const now = this.clock.now();
         let tenantStatus = job.tenant_status;
         if (job.kind === "provision") {
+          // No MAX_TENANTS_PER_ACCOUNT here (lead decision (36e)): the owner's retry counts the owners' OTAs and may
+          // answer `tenant_limit` (LifecycleService.retryProvisioning), but reopening a failed OTA from the admin is a
+          // platform admin's deliberate action, so it never does, and it locks no account row.
           const tenant = await this.tenants.lockForUpdate(trx, job.tenant_id);
           if (
             tenant === undefined ||

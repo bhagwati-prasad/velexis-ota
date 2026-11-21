@@ -82,7 +82,7 @@ sequenceDiagram
 ### C. Provisioning jobs and queues
 
 - The jobs page filters by status and kind and shows the step log, attempts, last error and the BullMQ state of the current attempt.
-- **Retry** a `failed` job: a new job of the same kind is created (and for `provision` the tenant returns to `provisioning`). **Cancel** a `queued` job that has not been dispatched.
+- **Retry** a `failed` job: a new job of the same kind is created (and for `provision` the tenant returns to `provisioning`; `MAX_TENANTS_PER_ACCOUNT` does not apply to this deliberate staff action, unlike the owner's retry: FIX-W67-KI002, lead decision (36e), [scope PF-10](../scope.md#32-ota-lifecycle)). **Cancel** a `queued` job that has not been dispatched.
 - The queues page shows waiting, active, delayed and failed counts and the oldest waiting age for the platform queues and the OTA queues (`ota-*`, read-only). Failed jobs show their reason and their id-only payload. Only platform jobs can be retried from here; OTA jobs are retried by the OTA admin or the developer.
 
 ### D. Plans, subscriptions, invoices, Stripe events (M1 plans, M5 the rest)

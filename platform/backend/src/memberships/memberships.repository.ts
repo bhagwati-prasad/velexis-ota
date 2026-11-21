@@ -275,8 +275,9 @@ export class MembershipsRepository implements TenantMembershipLookup, MfaEnrolme
   /**
    * The number of OTAs that `accountId` owns and that are not `failed`, read in `trx`: its `owner` memberships that are
    * not `removed` (a suspended membership still holds its OTA) of tenants in any status but `failed` (scope PF-10
-   * AC4: a failed OTA keeps its key but no longer counts). The caller holds the account's row lock, so two creations
-   * of one account count one after the other.
+   * AC4: a failed OTA keeps its key but no longer counts). The caller holds the account's row lock (createTenant's `FOR
+   * UPDATE`, or the `FOR NO KEY UPDATE` of the owner's retry since FIX-W67-KI002), so two creations or retries of one
+   * account count one after the other.
    */
   async countOwnedTenants(trx: PlatformTransaction, accountId: string): Promise<number> {
     const row = await trx
@@ -289,6 +290,23 @@ export class MembershipsRepository implements TenantMembershipLookup, MfaEnrolme
       .where("t.status", "<>", "failed")
       .executeTakeFirstOrThrow();
     return Number(row.owned);
+  }
+
+  /**
+   * The accounts that own `tenantId`, read in `trx`, in id order: its `owner` memberships that are not `removed`, the
+   * memberships `countOwnedTenants` counts. A failed OTA can have several: an owner may invite owners, or grant the
+   * role, while its setup runs or after it failed (FIX-W67-KI002; the owner's retry counts each one's OTAs).
+   */
+  async ownerAccountIds(trx: PlatformTransaction, tenantId: string): Promise<string[]> {
+    const rows = await trx
+      .selectFrom("platform.tenant_memberships")
+      .select("account_id")
+      .where("tenant_id", "=", tenantId)
+      .where("role", "=", "owner" satisfies TenantRole)
+      .where("status", "<>", "removed" satisfies MembershipStatus)
+      .orderBy("account_id")
+      .execute();
+    return rows.map((row) => row.account_id);
   }
 
   /** The member columns of a membership and its account. */

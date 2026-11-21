@@ -64,3 +64,24 @@ export function leaveForMfaEnrolment(error: CodedError, next?: string): void {
     redirect(mfaEnrolmentPath(next));
   }
 }
+
+// ---- The tenant limit (scope PF-10 AC4) ---------------------------------------------------------------------------
+//
+// `createTenant` and, since FIX-W67-KI002 (lead decision (36e)), the owner's `retryProvisioning` answer `422
+// UNPROCESSABLE` with `details.reason = tenant_limit` and `details.limit` when an account owns as many OTAs that are
+// not failed as `MAX_TENANTS_PER_ACCOUNT` allows. The wizard and the set-up page both word it with
+// `WIZARD_STRINGS.tenantLimit` (lib/strings.ts).
+
+/** `details.reason` of the API's tenant limit answer. */
+export const TENANT_LIMIT_REASON = "tenant_limit";
+
+/** `error` is the API's tenant limit: `UNPROCESSABLE` with `details.reason = tenant_limit`. */
+export function isTenantLimit(error: CodedError): boolean {
+  return error.code === "UNPROCESSABLE" && error.details?.["reason"] === TENANT_LIMIT_REASON;
+}
+
+/** The `details.limit` of a tenant limit answer, when the API sent a usable one (a whole number, 0 or more). */
+export function tenantLimitOf(details: Readonly<Record<string, unknown>> | undefined): number | undefined {
+  const limit = details?.["limit"];
+  return typeof limit === "number" && Number.isSafeInteger(limit) && limit >= 0 ? limit : undefined;
+}

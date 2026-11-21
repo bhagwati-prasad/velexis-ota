@@ -298,6 +298,31 @@ export class AccountsRepository {
   }
 
   /**
+   * Locks the accounts `accountIds` for the rest of `trx`, in id order, `FOR NO KEY UPDATE`, and returns the ids it
+   * locked (FIX-W67-KI002, lead decision (36e) of 2026-11-21): the owners of an OTA whose failed setup is retried,
+   * which LifecycleService.retryProvisioning locks before the tenant's row and whose OTAs it then counts. The mode
+   * conflicts with createTenant's `FOR UPDATE` (`lockForUpdate`) and with itself, so a creation and a retry, or two
+   * retries, of one account count one after the other. It leaves free the `KEY SHARE` lock that a foreign key check
+   * takes on the account (an audit row or an invitation that names it) and that a session refresh takes
+   * (`lockForSessionChange`): a transaction that holds the tenant's row, or a key share of it, and then writes such a
+   * row never waits for the retry, so the two cannot deadlock while the retry waits for the tenant's row. One statement
+   * with `ORDER BY id`, as `lockActivePlatformAdmins` locks, so two callers never wait for each other in a cycle.
+   */
+  async lockForTenantCount(trx: PlatformTransaction, accountIds: readonly string[]): Promise<string[]> {
+    if (accountIds.length === 0) {
+      return [];
+    }
+    const rows = await trx
+      .selectFrom("platform.accounts")
+      .select("id")
+      .where("id", "in", [...accountIds])
+      .orderBy("id")
+      .forNoKeyUpdate()
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /**
    * Marks the address of a `pending_verification` account verified at `now` and makes the account `active`, with
    * `version + 1`, in `trx`. Returns `false` when the account is not `pending_verification` (nothing changed).
    */

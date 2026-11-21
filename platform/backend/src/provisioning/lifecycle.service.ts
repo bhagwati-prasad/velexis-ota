@@ -14,10 +14,11 @@
 //    that never echo the value), as `updateTenant` checks them; the key's pattern was checked by the schema.
 // 3. One transaction (`runInTransaction`):
 //    - the account's row is locked (`FOR UPDATE`): it must be verified and `active` (`403 EMAIL_NOT_VERIFIED`), and two
-//      creations of one account run one after the other, so the tenant limit below holds under concurrency;
+//      creations of one account run one after the other, so the tenant limit below holds under concurrency (so do a
+//      creation and an owner's retry, which locks its owners' accounts before the tenant: `retryProvisioning` below);
 //    - the key must be neither reserved nor used by any tenant row in any status (`409 TENANT_KEY_UNAVAILABLE`);
 //    - the account must own fewer than `MAX_TENANTS_PER_ACCOUNT` OTAs that are not `failed` (`422 UNPROCESSABLE`,
-//      `details.reason = "tenant_limit"`);
+//      `details.reason = "tenant_limit"`, `details.limit`: `tenantLimitError`);
 //    - then the tenant (`provisioning`, storefront `test`, `created_by_account_id`, the plan of step 1), the owner
 //      membership, the subscription, the verified primary sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`, the `provision`
 //      job (`queued`, 5 attempts) and the audit row `tenant.created`. The subscription is the manual trial before M5
@@ -66,13 +67,29 @@
 //   newest): status, current step, the step log of the OTA worker and the post-steps, attempts, the last error, and
 //   `initialKeysAvailable`, true while the keys of a succeeded job wait for their reveal (`revealState`). It writes
 //   nothing.
-// - `retryProvisioning` (owners): one transaction locks the tenant's row; only a `failed` tenant may be retried (`409
-//   PROVISIONING_NOT_RETRYABLE`, also when a `provision` job is active already, the partial unique index). The tenant
-//   goes back to `provisioning` (`version + 1`), a **new** `provision` job is queued (the failed ones stay as history)
-//   and `provisioning_job.retried` is audited. After the commit a `tenant` invalidation is published (the status
-//   changed: architecture §6.3, as the admin's retry publishes it, FIX-W32-PLATFORM) and the job is dispatched as
-//   createTenant's is (never failing the call; the reconciler takes a job left `queued`), and the answer is `202 {job,
-//   checkoutUrl: null}` with the job as it is then.
+// - `retryProvisioning` (owners): one transaction locks, in createTenant's order (accounts, then the tenant), the
+//   accounts of the OTA's owners (its `owner` memberships that are not `removed`, and the caller) in id order, then the
+//   tenant's row. Only a `failed` tenant may be retried (`409 PROVISIONING_NOT_RETRYABLE`, also when a `provision` job
+//   is active already, the partial unique index). Then MAX_TENANTS_PER_ACCOUNT applies as in createTenant
+//   (FIX-W67-KI002, lead decision (36e) of 2026-11-21, approved by the owner; scope PF-10 AC4): a failed OTA does not
+//   count, so reopening it makes it count again for each of its owners, and when one of them already owns as many OTAs
+//   that are not `failed` as the limit allows (`countOwnedTenants`, read under the owners' locks), the retry answers
+//   createTenant's `422 UNPROCESSABLE` (`details.reason = "tenant_limit"`, `details.limit`, `tenantLimitError`). The
+//   refusal rolls the transaction back, so it changes nothing and, like createTenant's, writes no audit row: the tenant
+//   stays `failed`, with no new job, no reopened Checkout row and no invalidation. A failed OTA can have several
+//   owners (an owner may invite owners, or grant the role, while its setup runs or after it failed), so every owner is
+//   counted; the owners are read again under the tenant's lock, so one who joined meanwhile is counted too, although
+//   not locked. The owners' accounts are locked `FOR NO KEY UPDATE` (AccountsRepository.lockForTenantCount), not with
+//   createTenant's `FOR UPDATE`: the mode conflicts with createTenant's and with itself, so a creation and a retry, or
+//   two retries, of one account count one after the other, but it leaves free the `KEY SHARE` lock that a foreign key
+//   check takes on the account. With `FOR UPDATE` the retry, holding the account and waiting for the tenant's row,
+//   would deadlock with a transaction of the same owner that holds the row's key share (an invitation, an audit row of
+//   the OTA) and then checks the key of its account; the admin's retry (admin-jobs.service.ts) stays exempt from the
+//   limit. The tenant goes back to `provisioning` (`version + 1`), a **new** `provision` job is queued (the failed ones
+//   stay as history) and `provisioning_job.retried` is audited. After the commit a `tenant` invalidation is published
+//   (the status changed: architecture §6.3, as the admin's retry publishes it, FIX-W32-PLATFORM) and the job is
+//   dispatched as createTenant's is (never failing the call; the reconciler takes a job left `queued`), and the answer
+//   is `202 {job, checkoutUrl: null}` with the job as it is then.
 //   From M5 (PBE-044) a tenant failed by an abandoned Checkout (no current subscription, the newest one a Stripe row
 //   `incomplete_expired`, billing flow §H) gets a new `incomplete` Stripe row with the same plan and interval in the
 //   same transaction, and a pending `incomplete` row is reused. Its job is not dispatched (the gate is closed until the
@@ -290,6 +307,15 @@ function initialKeysOf(value: unknown): InitialKeys {
   };
 }
 
+/**
+ * `422 UNPROCESSABLE` with `details.reason = "tenant_limit"` and `details.limit` (scope PF-10 AC4): createTenant's
+ * refusal when the account owns `limit` OTAs that are not `failed`, and since FIX-W67-KI002 the owner's retry's when
+ * an owner of the failed OTA does, so both answer exactly the same error.
+ */
+export function tenantLimitError(limit: number): AppError {
+  return new AppError("UNPROCESSABLE", { details: { reason: "tenant_limit", limit } });
+}
+
 /** `409 TENANT_KEY_UNAVAILABLE`: reserved, used by a tenant row, or taken meanwhile; the answer never says which. */
 function keyUnavailable(cause?: unknown): AppError {
   return new AppError("TENANT_KEY_UNAVAILABLE", cause === undefined ? {} : { cause });
@@ -397,13 +423,20 @@ export class LifecycleService {
     let retried: { readonly jobId: string; readonly checkout: RetryCheckout | null };
     try {
       retried = await runInTransaction(this.db, async (trx) => {
+        // createTenant's lock order: the accounts first (the owners', in id order), then the tenant's row.
+        const owners = await this.memberships.ownerAccountIds(trx, tenantId);
+        await this.accounts.lockForTenantCount(trx, [...new Set([accountId, ...owners])]);
         const tenant = await this.tenants.lockForUpdate(trx, tenantId);
         if (tenant === undefined) {
           throw new AppError("NOT_FOUND");
         }
         const previous = await this.jobs.latestProvisionJob(tenantId, trx);
         const now = this.clock.now();
-        if (tenant.status !== "failed" || !(await this.tenants.reopenFailed(trx, tenantId, now))) {
+        if (tenant.status !== "failed") {
+          throw new AppError("PROVISIONING_NOT_RETRYABLE", { details: { status: tenant.status } });
+        }
+        await this.checkRetryTenantLimit(trx, tenantId);
+        if (!(await this.tenants.reopenFailed(trx, tenantId, now))) {
           throw new AppError("PROVISIONING_NOT_RETRYABLE", { details: { status: tenant.status } });
         }
         // The status changed (`failed` → `provisioning`): the OTA backend drops its cached row after the commit.
@@ -488,6 +521,21 @@ export class LifecycleService {
       });
       return keys;
     });
+  }
+
+  /**
+   * MAX_TENANTS_PER_ACCOUNT for the owner's retry of the failed OTA `tenantId` (see `retryProvisioning` in the file
+   * header), in its transaction, which holds the owners' account locks and the tenant's row: reopening the OTA makes it
+   * count for each of its owners, so `tenantLimitError` when one of them owns as many OTAs that are not `failed` as
+   * the limit allows (the failed OTA itself is not among them). The owners are read again here, under the tenant's
+   * lock.
+   */
+  private async checkRetryTenantLimit(trx: PlatformTransaction, tenantId: string): Promise<void> {
+    for (const owner of await this.memberships.ownerAccountIds(trx, tenantId)) {
+      if ((await this.memberships.countOwnedTenants(trx, owner)) >= this.maxTenantsPerAccount) {
+        throw tenantLimitError(this.maxTenantsPerAccount);
+      }
+    }
   }
 
   /**
@@ -614,9 +662,7 @@ export class LifecycleService {
     }
     const owned = await this.memberships.countOwnedTenants(trx, accountId);
     if (owned >= this.maxTenantsPerAccount) {
-      throw new AppError("UNPROCESSABLE", {
-        details: { reason: "tenant_limit", limit: this.maxTenantsPerAccount },
-      });
+      throw tenantLimitError(this.maxTenantsPerAccount);
     }
 
     const now = this.clock.now();

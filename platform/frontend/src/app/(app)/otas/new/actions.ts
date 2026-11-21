@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { platformApi, type ApiError } from "@/lib/api";
-import { errorMessage, isPlatformErrorCode } from "@/lib/errors";
+import { errorMessage, isPlatformErrorCode, isTenantLimit, tenantLimitOf } from "@/lib/errors";
 import { otaPath } from "@/lib/roles";
 import { ERROR_MESSAGES, WIZARD_STRINGS } from "@/lib/strings";
 
@@ -202,12 +202,6 @@ function apiFieldErrors(error: ApiError): Partial<Record<CreateOtaField, string>
   return fieldErrors;
 }
 
-/** The limit of a `tenant_limit` answer, when the API sent a usable one. */
-function tenantLimitOf(details: Readonly<Record<string, unknown>>): number | undefined {
-  const { limit } = details;
-  return typeof limit === "number" && Number.isSafeInteger(limit) && limit >= 0 ? limit : undefined;
-}
-
 /** What the wizard shows for a failed `createTenant`. */
 function failureOf(error: ApiError): CreateOtaState {
   const { code } = error;
@@ -229,8 +223,8 @@ function failureOf(error: ApiError): CreateOtaState {
   if (code === "PLAN_NOT_AVAILABLE") {
     return fieldFailure(code, { planCode: ERROR_MESSAGES.PLAN_NOT_AVAILABLE });
   }
-  if (code === "UNPROCESSABLE" && error.details["reason"] === "tenant_limit") {
-    // PF-10 AC4: the account owns MAX_TENANTS_PER_ACCOUNT OTAs that are not failed.
+  if (isTenantLimit(error)) {
+    // PF-10 AC4: the account owns MAX_TENANTS_PER_ACCOUNT OTAs that are not failed (lib/errors.ts).
     return messageFailure(code, WIZARD_STRINGS.tenantLimit(tenantLimitOf(error.details)));
   }
   if (code === "RATE_LIMITED") {

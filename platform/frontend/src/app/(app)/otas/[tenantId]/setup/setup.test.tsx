@@ -50,7 +50,13 @@ import { SETUP_POLL_INTERVAL_MS } from "@/components/provisioning-progress";
 import { BFF_KEY_HEADER, END_USER_AGENT_HEADER, END_USER_IP_HEADER } from "@/lib/end-user";
 import { TENANT_ROLES, type TenantRole } from "@/lib/roles";
 import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
-import { ERROR_MESSAGES, SECRET_STRINGS, SETUP_STEP_LABELS, SETUP_STRINGS } from "@/lib/strings";
+import {
+  ERROR_MESSAGES,
+  SECRET_STRINGS,
+  SETUP_STEP_LABELS,
+  SETUP_STRINGS,
+  WIZARD_STRINGS,
+} from "@/lib/strings";
 
 // ---- Builders (dummy values only: no real token or key) ----------------------------------------------------------
 
@@ -199,10 +205,23 @@ function json(body: unknown, status: number, headers: Record<string, string> = {
   });
 }
 
-/** An error envelope of the platform API; its `message` must never reach the page. */
-function apiError(code: string, status: number, headers: Record<string, string> = {}): Response {
+/** An error envelope of the platform API, with `details` when given; its `message` must never reach the page. */
+function apiError(
+  code: string,
+  status: number,
+  headers: Record<string, string> = {},
+  details?: Record<string, unknown>,
+): Response {
   return json(
-    { error: { code, message: "The API's own text, never shown", status, requestId: "req_api_pfe009" } },
+    {
+      error: {
+        code,
+        message: "The API's own text, never shown",
+        status,
+        requestId: "req_api_pfe009",
+        ...(details === undefined ? {} : { details }),
+      },
+    },
     status,
     headers,
   );
@@ -921,6 +940,36 @@ describe("/otas/[tenantId]/setup: a failed set-up", () => {
     // The button is back once the attempt ended ("Starting a new attempt…" while it runs).
     expect(await screen.findByRole("button", { name: SETUP_STRINGS.retry }, ACTION_WAIT)).toBeTruthy();
     expect(summary()).toBe(SETUP_STRINGS.summaryFailed);
+  });
+
+  it("[FIX-W67-KI002 AC5] a retry refused over the tenant limit shows the wizard's limit message, with the limit, where its errors appear", async () => {
+    routes({
+      [`GET ${TENANT_PATH}`]: () => json(tenant({ status: "failed" }), 200),
+      [`GET ${PROVISIONING_PATH}`]: () => json(failed(), 200),
+      [`POST ${RETRY_PATH}`]: () => apiError("UNPROCESSABLE", 422, {}, { reason: "tenant_limit", limit: 3 }),
+    });
+    await openSetup();
+    fireEvent.click(retryButton() as HTMLElement);
+
+    const alert = await screen.findByRole("alert", {}, ACTION_WAIT);
+    expect(alert.textContent).toBe(WIZARD_STRINGS.tenantLimit(3));
+    expect(alert.textContent).not.toBe(ERROR_MESSAGES.UNPROCESSABLE);
+    expect(document.body.textContent).not.toContain("The API's own text, never shown");
+    // Nothing started: the set-up is still failed, the button is back and nothing else was asked.
+    expect(await screen.findByRole("button", { name: SETUP_STRINGS.retry }, ACTION_WAIT)).toBeTruthy();
+    expect(summary()).toBe(SETUP_STRINGS.summaryFailed);
+    expect(calls("POST", RETRY_PATH)).toHaveLength(1);
+
+    // retrySetup itself: the limit when the API sent a usable one, the wizard's wording without it otherwise.
+    resetPlatformApi();
+    routes({
+      [`POST ${RETRY_PATH}`]: () => apiError("UNPROCESSABLE", 422, {}, { reason: "tenant_limit" }),
+    });
+    expect(await retrySetup(TENANT_ID)).toEqual({
+      status: "failed",
+      code: "UNPROCESSABLE",
+      message: WIZARD_STRINGS.tenantLimit(undefined),
+    });
   });
 });
 
