@@ -1223,6 +1223,8 @@ export const ACCOUNT_DETAIL_STRINGS = Object.freeze({
   failedLogins: "Failed sign-ins in a row",
   lockedUntil: "Locked until",
   notLocked: "Not locked",
+  /** Beside the "Locked" badge while the sign-in lockout runs: "Locked until 21 Nov 2026, 10:15". */
+  lockedNowUntil: "until",
   lastLogin: "Last sign-in",
   created: "Created",
   version: "Version",

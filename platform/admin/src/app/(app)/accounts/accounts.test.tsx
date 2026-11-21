@@ -68,6 +68,7 @@ import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from "@/app/(app)/audit/audit-filte
 import { AuditTable } from "@/app/(app)/audit/audit-table";
 import { GET as exportCsv, HEAD as exportCsvHead } from "@/app/(app)/audit/export.csv/route";
 import AuditPage from "@/app/(app)/audit/page";
+import { formatDateTime } from "@/components/date-time";
 import { FilterBar } from "@/components/filter-bar";
 import * as tableComponents from "@/components/ui/table";
 import { BFF_KEY_HEADER, END_USER_AGENT_HEADER, END_USER_IP_HEADER } from "@/lib/end-user";
@@ -605,6 +606,18 @@ function repositoryRoot(): string {
   return folder;
 }
 
+/**
+ * The values platform/docs/data-model.md §6 marks reserved for `column` (KI-014): its row's "Reserved: `a`, `b`."
+ * part; none when the row has no such part.
+ */
+function reservedStatuses(column: string): string[] {
+  const document = readFileSync(join(repositoryRoot(), "platform/docs/data-model.md"), "utf8");
+  const row = document.split("\n").find((line) => line.startsWith(`| \`${column}\` |`));
+  expect(row, `data-model.md §6 has a row for ${column}`).toBeDefined();
+  const reserved = /Reserved: ((?:`[a-z_]+`(?:, | and )?)+)/.exec(row ?? "")?.[1] ?? "";
+  return [...reserved.matchAll(/`([a-z_]+)`/g)].map((match) => match[1] ?? "");
+}
+
 /** The lines of the platform OpenAPI document, read once by the warm-up hook (it is large). */
 let platformDocument: readonly string[] = [];
 
@@ -709,6 +722,84 @@ describe("accounts/page.tsx: the account search", () => {
     await openAccounts("cursor=stale");
     expect(screen.getByText(ACCOUNT_LIST_STRINGS.invalidFilters)).toBeTruthy();
   });
+
+  /** The values and labels the status filter offers, in order. */
+  function statusChoices(): [string, string][] {
+    const select = screen.getByRole("combobox", { name: ACCOUNT_LIST_STRINGS.statusLabel });
+    return within(select)
+      .getAllByRole("option")
+      .map((option) => [(option as HTMLOptionElement).value, option.textContent ?? ""]);
+  }
+
+  it("[FIX-W68-PLATFORM AC1] asks the API for the accounts locked out now with status=locked and shows them as Locked", async () => {
+    const lockedOut = { ...accountSummaries()[0], status: "locked" } as Schemas["AdminAccountSummary"];
+    routes({
+      "GET /v1/admin/accounts": () => json({ data: [lockedOut], page: { nextCursor: null, limit: 50 } }, 200),
+    });
+    await openAccounts("status=locked");
+
+    expect(queryOfCall("/v1/admin/accounts")).toEqual([["status", "locked"]]);
+    const table = screen.getByRole("table", { name: ACCOUNT_LIST_STRINGS.caption });
+    const badge = within(table).getByText(STATUS_LABELS.account.locked);
+    expect([badge.getAttribute("data-status"), badge.getAttribute("data-tone")]).toEqual([
+      "locked",
+      "warning",
+    ]);
+    expect(
+      (screen.getByRole("combobox", { name: ACCOUNT_LIST_STRINGS.statusLabel }) as HTMLSelectElement).value,
+    ).toBe("locked");
+
+    // Picking Locked from another filter puts status=locked into the URL.
+    cleanup();
+    await openAccounts("q=berg");
+    fireEvent.change(screen.getByRole("combobox", { name: ACCOUNT_LIST_STRINGS.statusLabel }), {
+      target: { value: "locked" },
+    });
+    const [href] = navigation.router.push.mock.calls[0] as [string];
+    expect(sortedQuery(new URL(href, "https://admin.invalid").search)).toEqual([
+      ["q", "berg"],
+      ["status", "locked"],
+    ]);
+  });
+
+  it("[FIX-W68-PLATFORM AC2] offers no status data-model.md §6 marks reserved for accounts but Locked, which finds the accounts locked out now", async () => {
+    await openAccounts();
+    const offered = statusChoices().map(([value]) => value);
+    expect(reservedStatuses("accounts.status")).toEqual(["locked", "deleted"]);
+    // `locked` is never stored, but the admin's `locked` is the lockout that runs now (KI-015), which does occur.
+    expect(reservedStatuses("accounts.status").filter((value) => offered.includes(value))).toEqual([
+      "locked",
+    ]);
+  });
+
+  it("[FIX-W68-PLATFORM AC2] offers only the statuses an account can show, never the reserved Deleted", async () => {
+    await openAccounts();
+    const any = ["", expect.any(String)];
+    expect(statusChoices()).toEqual([
+      any,
+      ["pending_verification", STATUS_LABELS.account.pending_verification],
+      ["active", STATUS_LABELS.account.active],
+      ["locked", STATUS_LABELS.account.locked],
+      ["disabled", STATUS_LABELS.account.disabled],
+    ]);
+    cleanup();
+    resetPlatformApi();
+
+    // An address that already carries the reserved value still works (the API takes it) and keeps it as the choice.
+    await openAccounts("status=deleted");
+    expect(queryOfCall("/v1/admin/accounts")).toEqual([["status", "deleted"]]);
+    expect(statusChoices().map(([value]) => value)).toEqual([
+      "",
+      "pending_verification",
+      "active",
+      "locked",
+      "disabled",
+      "deleted",
+    ]);
+    expect(
+      (screen.getByRole("combobox", { name: ACCOUNT_LIST_STRINGS.statusLabel }) as HTMLSelectElement).value,
+    ).toBe("deleted");
+  });
 });
 
 // ---- The account page ----------------------------------------------------------------------------------------------
@@ -741,6 +832,43 @@ describe("accounts/[accountId]/page.tsx: one account for support", () => {
     expect(hrefOf(link(ACCOUNT_DETAIL_STRINGS.targetAudit, audit))).toBe(
       `/audit?targetType=account&targetId=${ACCOUNT_ID}`,
     );
+  });
+
+  it("[FIX-W68-PLATFORM AC1] shows an account locked out now as Locked with the end of its lockout", async () => {
+    const lockedUntil = "2026-11-21T10:15:00Z";
+    routes({
+      [`GET ${ACCOUNT_PATH}`]: () =>
+        json(detail({ status: "locked", failedLoginCount: 5, lockedUntil }), 200),
+    });
+    await openAccount();
+
+    const until = formatDateTime(lockedUntil) ?? "";
+    expect(until).not.toBe("");
+    const heading = screen.getByRole("heading", { level: 1, name: /Anna Berg/ });
+    expect(within(heading).getByText(STATUS_LABELS.account.locked).getAttribute("data-status")).toBe(
+      "locked",
+    );
+    const fields = screen.getByRole("region", { name: ACCOUNT_DETAIL_STRINGS.accountTitle });
+    const status = within(fields).getByText(ACCOUNT_DETAIL_STRINGS.status).parentElement;
+    expect(status).not.toBeNull();
+    expect(within(status as HTMLElement).getByText(STATUS_LABELS.account.locked)).toBeTruthy();
+    expect(status?.textContent).toContain(`${ACCOUNT_DETAIL_STRINGS.lockedNowUntil} ${until}`);
+    // The unlock action is offered for it.
+    expect(
+      within(actionsSection()).getByRole("button", { name: ACCOUNT_ACTION_STRINGS.unlock }),
+    ).toBeTruthy();
+    cleanup();
+
+    // Once the lockout has ended the API shows the stored status again: no "until" beside the badge.
+    routes({
+      [`GET ${ACCOUNT_PATH}`]: () =>
+        json(detail({ status: "active", failedLoginCount: 5, lockedUntil }), 200),
+    });
+    await openAccount();
+    const after = screen.getByRole("region", { name: ACCOUNT_DETAIL_STRINGS.accountTitle });
+    const afterStatus = within(after).getByText(ACCOUNT_DETAIL_STRINGS.status).parentElement;
+    expect(within(afterStatus as HTMLElement).getByText(STATUS_LABELS.account.active)).toBeTruthy();
+    expect(afterStatus?.textContent).not.toContain(ACCOUNT_DETAIL_STRINGS.lockedNowUntil);
   });
 
   it("hands the actions only the account's id, name and the flags that decide what is offered", async () => {

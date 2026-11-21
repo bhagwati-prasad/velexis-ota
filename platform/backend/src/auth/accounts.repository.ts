@@ -29,8 +29,21 @@ import type { PlatformDb } from "../common/database";
 /** A `platform.accounts` row as the API reads it. */
 export type AccountRecord = Selectable<PlatformDatabase["platform.accounts"]>;
 
-/** The lifecycle states of `accounts.status` (migration 0001). */
+/**
+ * The lifecycle states of `accounts.status` (migration 0001). The MVP code writes `pending_verification`, `active` and
+ * `disabled`; `locked` and `deleted` are reserved (platform/docs/data-model.md §6): the sign-in lockout writes
+ * `locked_until` and leaves `status` alone, and nothing erases an account yet.
+ */
 export type AccountStatus = "pending_verification" | "active" | "locked" | "disabled" | "deleted";
+
+/**
+ * The stored states whose running sign-in lockout the platform admin shows as `locked` (KI-015, FIX-W68-PLATFORM): an
+ * account that could sign in but for the lockout. A `disabled` account stays `disabled` whatever its lockout.
+ */
+export const LOCKABLE_ACCOUNT_STATUSES: readonly AccountStatus[] = Object.freeze([
+  "pending_verification",
+  "active",
+]);
 
 /** The fields of an account that sign-up and verification read. */
 export type AccountIdentity = Pick<
@@ -231,6 +244,10 @@ const ADMIN_ACCOUNT_COLUMNS = [
 export interface AdminAccountSearch {
   /** Part of the e-mail address or the name, matched ignoring letter case; `%`, `_` and `\` match themselves. */
   readonly q?: string | undefined;
+  /**
+   * The status as the admin shows it (`adminAccountStatus` of admin/admin-accounts.service.ts): `locked` finds the
+   * accounts locked out at the search's `now`, and `pending_verification` and `active` leave those out.
+   */
   readonly status?: AccountStatus | undefined;
 }
 
@@ -242,6 +259,11 @@ export function containsPattern(text: string): string {
 /** The condition "not locked out at `now`": `locked_until` is unset or has passed. */
 function notLockedOutAt(now: Date) {
   return sql<boolean>`(locked_until IS NULL OR locked_until <= ${now})`;
+}
+
+/** The condition "locked out at `now`": the lockout that `recordFailedSignIn` started has not ended yet. */
+function lockedOutAt(now: Date) {
+  return sql<boolean>`(locked_until IS NOT NULL AND locked_until > ${now})`;
 }
 
 @Injectable()
@@ -664,13 +686,19 @@ export class AccountsRepository {
 
   /**
    * Up to `limit` accounts of the admin's search, newest first (`created_at`, then id), read on `db`: `q` matches
-   * part of the e-mail address or the name ignoring letter case, `status` filters, and with `afterId` only the
-   * accounts after that one in this order are read (the cursor's account; the comparison runs in SQL, so the
-   * microseconds of `created_at` count).
+   * part of the e-mail address or the name ignoring letter case, `status` filters by the status the admin shows at
+   * `now` (the Clock's time, as sign-in judges the lockout), and with `afterId` only the accounts after that one in
+   * this order are read (the cursor's account; the comparison runs in SQL, so the microseconds of `created_at` count).
+   *
+   * The sign-in lockout writes `locked_until` and leaves `status` alone (KI-015), so `locked` finds the
+   * `pending_verification` and `active` accounts locked out at `now` (and any row stored as the reserved `locked`), and
+   * `pending_verification` and `active` leave those out: every account matches exactly one status, the one its badge
+   * shows. `disabled` and `deleted` filter on the stored status alone.
    */
   async searchForAdmin(
     db: PlatformTransaction | PlatformDb,
     search: AdminAccountSearch,
+    now: Date,
     afterId: string | undefined,
     limit: number,
   ): Promise<AdminAccountRecord[]> {
@@ -679,8 +707,18 @@ export class AccountsRepository {
       const pattern = containsPattern(search.q);
       query = query.where((eb) => eb.or([eb("email", "ilike", pattern), eb("full_name", "ilike", pattern)]));
     }
-    if (search.status !== undefined) {
-      query = query.where("status", "=", search.status);
+    const status = search.status;
+    if (status === "locked") {
+      query = query.where((eb) =>
+        eb.or([
+          eb("status", "=", status),
+          eb.and([eb("status", "in", LOCKABLE_ACCOUNT_STATUSES), lockedOutAt(now)]),
+        ]),
+      );
+    } else if (status !== undefined && LOCKABLE_ACCOUNT_STATUSES.includes(status)) {
+      query = query.where("status", "=", status).where(notLockedOutAt(now));
+    } else if (status !== undefined) {
+      query = query.where("status", "=", status);
     }
     if (afterId !== undefined) {
       query = query.where(

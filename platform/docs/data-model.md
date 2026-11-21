@@ -191,15 +191,20 @@ When a secret moves from a submission to a connection, the worker decrypts it an
 
 ## 6. Status values used by the platform
 
+A value marked **reserved** is one the column's CHECK constraint allows (and, where the API names the column, its enum) but that no MVP code writes: nothing may rely on it, and no platform admin filter offers it. The values stay valid, so no migration removes them; a task that starts writing one moves it out of "Reserved" here. Note (2026-11-21, KI-014 and KI-015, approved by the owner; FIX-W68-PLATFORM): every writer of these columns was checked against this table on 2026-11-21; `accounts`, `tenant_memberships` and `tenant_schema_migrations` were added, `supplier_connections.status` `invalid_credentials` was found unwritten as well, and the manual subscriptions' `active` was added.
+
 | Column | Values and meaning |
 |---|---|
-| `tenants.status` | `provisioning` (created, schema not ready), `active`, `suspended`, `failed` (setup failed or Checkout abandoned). `deprovisioning` and `deleted` are post-MVP. |
+| `accounts.status` | `pending_verification` (signed up, address not verified), `active`, `disabled` (by Velexis staff; enabling goes back to `active`, or to `pending_verification` without a verified address). Reserved: `locked`, `deleted`. The sign-in lockout writes `locked_until` (five wrong passwords, 15 minutes) and leaves `status` alone, so the platform admin shows a `pending_verification` or `active` account whose `locked_until` is in the future as `locked`, and its `status=locked` filter finds exactly those (`adminListAccounts`; a `disabled` account stays `disabled`). No MVP code erases an account. |
+| `tenants.status` | `provisioning` (created, schema not ready), `active`, `suspended`, `failed` (setup failed or Checkout abandoned). Reserved: `deprovisioning`, `deleted` (post-MVP; the API's `TenantStatus` does not name them). |
+| `tenant_memberships.status` | `active`, `removed` (taken off the team, or left it; the row stays). Reserved: `suspended`. |
 | `provisioning_jobs.status` | `queued` (waiting for dispatch or its gate), `running` (dispatched, lease in `locked_until`), `succeeded`, `failed`, `canceled`. |
-| `subscriptions.status` | Stripe's statuses; `billing_provider = 'manual'` rows use `trialing`, `past_due` and `canceled` only. |
-| `supplier_connections.status` | `pending_verification` (no office yet, or credentials not verified), `active`, `invalid_credentials`, `disabled`. |
-| `payment_provider_connections.status` | `pending` (Connect account cannot charge yet), `active`, `disabled` (deauthorised or switched off by an admin), `error`. |
+| `tenant_schema_migrations.status` | `applied` (the provisioning post-step mirrors each migration the OTA worker applied to the tenant's schema). Reserved: `pending`, `running`, `failed`, `rolled_back`. |
+| `subscriptions.status` | Stripe's statuses; `billing_provider = 'manual'` rows use `trialing`, `active` (paid outside Stripe, set by an admin), `past_due` and `canceled` only. |
+| `supplier_connections.status` | `pending_verification` (no office yet, or credentials not verified), `active`, `disabled`. Reserved: `invalid_credentials` (the OTA's own credentials are verified in `credential_submissions` before they replace a connection's, so a refusal leaves the connection as it was; `amadeus_accounts.status` does write `invalid_credentials`). |
+| `payment_provider_connections.status` | `pending` (Connect account cannot charge yet), `active`, `disabled` (deauthorised or switched off by an admin). Reserved: `error`. |
 | `amadeus_offices.status` | `available`, `assigned`, `releasing`, `retired`. |
 | `credential_submissions.status` | `pending`, `verifying`, `applied`, `failed`, `superseded`. |
 | `settlements.status` | `draft`, `approved` (to be paid), `paid`, `carried_forward` (net ≤ 0, rolled into the next statement), `void` (drafts only). |
 | `stripe_events.status` | `received`, `processing`, `processed`, `ignored` (no tenant, or a type we do not handle), `failed`. |
-| `email_outbox.status` | `pending`, `sending`, `sent`, `failed`, `canceled`. |
+| `email_outbox.status` | `pending`, `sending`, `sent`, `failed`. Reserved: `canceled`. |

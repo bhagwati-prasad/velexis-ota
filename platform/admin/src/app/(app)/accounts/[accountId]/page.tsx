@@ -88,6 +88,23 @@ function Section({
   );
 }
 
+/**
+ * The status badge; while the sign-in lockout runs (the API shows `locked`, KI-015) it also says until when, as the
+ * stored status stays what it was and shows again once the lockout ends.
+ */
+function AccountStatusValue({ account }: { readonly account: AdminAccount }) {
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      <StatusBadge kind="account" status={account.status} />
+      {account.status === "locked" && account.lockedUntil !== null ? (
+        <Muted>
+          {S.lockedNowUntil} <DateTime value={account.lockedUntil} />
+        </Muted>
+      ) : null}
+    </span>
+  );
+}
+
 /** The account has a lockout or failed sign-ins that `adminUnlockAccount` clears. */
 function hasLockout(account: AdminAccount): boolean {
   return account.status === "locked" || account.lockedUntil !== null || account.failedLoginCount > 0;
@@ -107,7 +124,7 @@ function AccountFields({ account }: { readonly account: AdminAccount }) {
       <Field label={S.locale}>{account.locale}</Field>
       <Field label={S.timeZone}>{account.timeZone}</Field>
       <Field label={S.status}>
-        <StatusBadge kind="account" status={account.status} />
+        <AccountStatusValue account={account} />
       </Field>
       <Field label={S.mfa}>
         {account.mfaEnabled ? (

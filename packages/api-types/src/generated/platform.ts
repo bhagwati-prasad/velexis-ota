@@ -2994,7 +2994,7 @@ export interface paths {
         };
         /**
          * Search the accounts
-         * @description Every account of the portal and the admin, newest first, cursor-paginated. `q` matches part of the e-mail address or the name, case-insensitively; `status` filters. Never a password hash, an MFA secret or a token.
+         * @description Every account of the portal and the admin, newest first, cursor-paginated. `q` matches part of the e-mail address or the name, case-insensitively; `status` filters by the status each answer shows (`AccountStatus`, judged at the time of the request: an account locked out now is `locked`). Never a password hash, an MFA secret or a token.
          */
         get: operations["adminListAccounts"];
         put?: never;
@@ -5738,7 +5738,7 @@ export interface components {
             page: components["schemas"]["Page"];
         };
         /**
-         * @description The lifecycle of an account: `pending_verification` (e-mail address not verified), `active`, `locked`, `disabled` (by Velexis staff), `deleted` (erased).
+         * @description The state of an account as the platform admin shows it: `pending_verification` (e-mail address not verified), `active`, `locked` (locked out now: the sign-in lockout of a `pending_verification` or `active` account runs until `lockedUntil`; the lockout leaves the stored status as it was, which shows again once `lockedUntil` has passed or an admin unlocks the account), `disabled` (by Velexis staff; stays `disabled` while locked out), `deleted` (erased; reserved: no MVP code erases an account).
          * @enum {string}
          */
         AccountStatus: "pending_verification" | "active" | "locked" | "disabled" | "deleted";
@@ -5776,7 +5776,7 @@ export interface components {
             failedLoginCount: number;
             /**
              * Format: date-time
-             * @description The end of the current lockout; `null` when not locked.
+             * @description The end of the last sign-in lockout; `null` when none was started since the last successful sign-in or unlock. The account is locked out (`status` `locked`, unless it is `disabled`) while this is in the future; a past time stays until the next successful sign-in or unlock clears it.
              */
             lockedUntil: string | null;
             /** Format: date-time */
@@ -13985,7 +13985,7 @@ export interface operations {
                  * @example berg
                  */
                 q?: string;
-                /** @description Only accounts in this status. */
+                /** @description Only accounts in this status as `AccountStatus` shows it at the time of the request. `locked` finds the accounts locked out now: a `pending_verification` or `active` account whose sign-in lockout runs (`lockedUntil` in the future, which is what five wrong passwords write); once `lockedUntil` has passed the account is found by its stored status again. `active` and `pending_verification` leave out the accounts locked out now, so every account matches exactly one status. `disabled` and `deleted` filter on the stored status (a disabled account stays `disabled` while locked out; `deleted` is reserved and matches nothing in the MVP). */
                 status?: components["schemas"]["AccountStatus"];
                 /** @description Opaque cursor from `page.nextCursor` of the previous page. */
                 cursor?: components["parameters"]["Cursor"];

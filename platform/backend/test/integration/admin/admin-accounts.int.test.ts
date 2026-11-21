@@ -468,6 +468,159 @@ describe("adminListAccounts", () => {
   });
 });
 
+describe("the status of a locked-out account (KI-015, FIX-W68-PLATFORM)", () => {
+  // The sign-in lockout writes `locked_until` and leaves `status` alone: the admin shows a `pending_verification` or
+  // `active` account as `locked` while `locked_until` is after the Clock's time, and `status=locked` finds exactly
+  // those, as long as the lockout runs.
+  const domain = "lockout-status.example.com";
+  const q = encodeURIComponent(domain);
+  let free: PlatformRow<"accounts">;
+  let ended: PlatformRow<"accounts">;
+  let disabledLocked: PlatformRow<"accounts">;
+  let pendingLocked: PlatformRow<"accounts">;
+  let signedOut: PlatformRow<"accounts">;
+  let wrongPasswords: string[] = [];
+
+  beforeAll(async () => {
+    free = await insertPerson({
+      email: `free@${domain}`,
+      full_name: "Free Person",
+      created_at: ago(5 * DAY_MS),
+    });
+    ended = await insertPerson({
+      email: `ended@${domain}`,
+      full_name: "Ended Lockout",
+      failed_login_count: 5,
+      locked_until: ago(MINUTE_MS),
+      created_at: ago(4 * DAY_MS),
+    });
+    disabledLocked = await insertPerson({
+      email: `disabled@${domain}`,
+      full_name: "Disabled Locked",
+      status: "disabled",
+      failed_login_count: 5,
+      locked_until: ahead(10 * MINUTE_MS),
+      created_at: ago(3 * DAY_MS),
+    });
+    pendingLocked = await insertPerson({
+      email: `pending@${domain}`,
+      full_name: "Pending Locked",
+      status: "pending_verification",
+      email_verified_at: null,
+      failed_login_count: 5,
+      locked_until: ahead(10 * MINUTE_MS),
+      created_at: ago(2 * DAY_MS),
+    });
+    signedOut = await insertPerson({
+      email: `five@${domain}`,
+      full_name: "Five Wrong",
+      created_at: ago(DAY_MS),
+    });
+    // Five wrong passwords: the fifth starts the 15-minute lockout (sign-in.service.ts), from an IP of this group.
+    const ip = nextIp();
+    wrongPasswords = [];
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const res = await t.http
+        .post("/v1/auth/sign-in")
+        .set(t.bffHeaders(ip))
+        .send({ email: signedOut.email, password: `${TEST_PASSWORD}-wrong` });
+      wrongPasswords.push(outcomeOf(res));
+    }
+  }, GROUP_SETUP_TIMEOUT_MS);
+
+  /** The ids and statuses `status` finds among this group's accounts, newest first. */
+  async function found(status: string): Promise<Array<{ id: string; status: string }>> {
+    const res = await call("get", `/v1/admin/accounts?q=${q}&status=${status}`);
+    expect(outcomeOf(res)).toBe("200");
+    expectResponseToMatch("adminListAccounts", res, { document: "platform" });
+    return (res.body as { data: Array<{ id: string; status: string }> }).data.map(
+      ({ id, status: shown }) => ({
+        id,
+        status: shown,
+      }),
+    );
+  }
+
+  it("[FIX-W68-PLATFORM AC1] finds the accounts locked out now with status=locked, and leaves them out of active and pending_verification", async () => {
+    expect(wrongPasswords).toEqual([
+      "401 INVALID_CREDENTIALS",
+      "401 INVALID_CREDENTIALS",
+      "401 INVALID_CREDENTIALS",
+      "401 INVALID_CREDENTIALS",
+      "423 ACCOUNT_LOCKED",
+    ]);
+    const stored = await accountRow(signedOut.id);
+    expect([stored.status, stored.failed_login_count, stored.locked_until?.toISOString()]).toEqual([
+      "active",
+      5,
+      ahead(15 * MINUTE_MS).toISOString(),
+    ]);
+
+    expect(await found("locked")).toEqual([
+      { id: signedOut.id, status: "locked" },
+      { id: pendingLocked.id, status: "locked" },
+    ]);
+    expect(await found("active")).toEqual([
+      { id: ended.id, status: "active" },
+      { id: free.id, status: "active" },
+    ]);
+    expect(await found("pending_verification")).toEqual([]);
+    // A disabled account stays disabled while locked out: an unlock alone would not let it in.
+    expect(await found("disabled")).toEqual([{ id: disabledLocked.id, status: "disabled" }]);
+
+    // Without a status filter every account shows the status it is found by.
+    const all = await call("get", `/v1/admin/accounts?q=${q}`);
+    expect(
+      (all.body as { data: Array<{ id: string; status: string }> }).data.map((row) => row.status),
+    ).toEqual(["locked", "locked", "disabled", "active", "active"]);
+
+    const detail = await call("get", `/v1/admin/accounts/${signedOut.id}`);
+    expect(outcomeOf(detail)).toBe("200");
+    expectResponseToMatch("adminGetAccount", detail, { document: "platform" });
+    expect((detail.body as { account: Record<string, unknown> }).account).toEqual(
+      expect.objectContaining({
+        status: "locked",
+        failedLoginCount: 5,
+        lockedUntil: ahead(15 * MINUTE_MS).toISOString(),
+      }),
+    );
+  });
+
+  it("[FIX-W68-PLATFORM AC1] no longer finds an account with status=locked once its locked_until has passed", async () => {
+    const start = t.clock.now();
+    try {
+      // One second after the five-wrong-passwords lockout ends; the other two lockouts (10 minutes) ended before.
+      t.clock.set(new Date(start.getTime() + 15 * MINUTE_MS + 1000));
+
+      expect(await found("locked")).toEqual([]);
+      expect(await found("active")).toEqual([
+        { id: signedOut.id, status: "active" },
+        { id: ended.id, status: "active" },
+        { id: free.id, status: "active" },
+      ]);
+      expect(await found("pending_verification")).toEqual([
+        { id: pendingLocked.id, status: "pending_verification" },
+      ]);
+      const detail = await call("get", `/v1/admin/accounts/${signedOut.id}`);
+      expect((detail.body as { account: Record<string, unknown> }).account).toEqual(
+        expect.objectContaining({
+          status: "active",
+          lockedUntil: new Date(start.getTime() + 15 * MINUTE_MS).toISOString(),
+        }),
+      );
+    } finally {
+      t.clock.set(start);
+    }
+  });
+
+  it("[FIX-W68-PLATFORM AC1] shows the account as it is again after an unlock", async () => {
+    const unlocked = await call("post", `/v1/admin/accounts/${signedOut.id}/unlock`);
+    expect(outcomeOf(unlocked)).toBe("200");
+    expect(unlocked.body).toEqual(expect.objectContaining({ status: "active", lockedUntil: null }));
+    expect((await found("locked")).map((row) => row.id)).toEqual([pendingLocked.id]);
+  });
+});
+
 describe("adminGetAccount", () => {
   let person: PlatformRow<"accounts">;
   let tenant: PlatformRow<"tenants">;

@@ -1,4 +1,7 @@
 // @vitest-environment happy-dom
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { components } from "@velexis/api-types/platform";
 import Link from "next/link";
@@ -541,6 +544,31 @@ async function openDashboard(): Promise<void> {
   render(await DashboardPage());
 }
 
+/** The repository's root folder: the nearest folder above the working directory that holds pnpm-workspace.yaml. */
+function repositoryRoot(): string {
+  let folder = process.cwd();
+  while (!existsSync(join(folder, "pnpm-workspace.yaml"))) {
+    const parent = dirname(folder);
+    if (parent === folder) {
+      throw new Error("No pnpm-workspace.yaml above the working directory.");
+    }
+    folder = parent;
+  }
+  return folder;
+}
+
+/**
+ * The values platform/docs/data-model.md §6 marks reserved for `column` (KI-014): its row's "Reserved: `a`, `b`."
+ * part; none when the row has no such part.
+ */
+function reservedStatuses(column: string): string[] {
+  const document = readFileSync(join(repositoryRoot(), "platform/docs/data-model.md"), "utf8");
+  const row = document.split("\n").find((line) => line.startsWith(`| \`${column}\` |`));
+  expect(row, `data-model.md §6 has a row for ${column}`).toBeDefined();
+  const reserved = /Reserved: ((?:`[a-z_]+`(?:, | and )?)+)/.exec(row ?? "")?.[1] ?? "";
+  return [...reserved.matchAll(/`([a-z_]+)`/g)].map((match) => match[1] ?? "");
+}
+
 /** Renders `/tenants<search>` as a browser opening that URL gets it. */
 async function openTenants(search = ""): Promise<void> {
   setUrl("/tenants", search);
@@ -848,6 +876,25 @@ describe("tenants/page.tsx: the tenant search", () => {
     expect(within(nordic).getByText("Early access")).toBeTruthy();
     expect(within(nordic).getByText("Set-up failed")).toBeTruthy();
     expect(within(nordic).getByText(TENANT_LIST_STRINGS.notYet)).toBeTruthy();
+  });
+
+  it("[FIX-W68-PLATFORM AC2] offers no tenant status data-model.md §6 marks reserved, and refuses one in the URL", async () => {
+    const reserved = reservedStatuses("tenants.status");
+    expect(reserved).toEqual(["deprovisioning", "deleted"]);
+    await openTenants();
+    const status = screen.getByRole("combobox", { name: TENANT_LIST_STRINGS.statusLabel });
+    const offered = within(status)
+      .getAllByRole("option")
+      .map((option) => option.getAttribute("value"));
+    expect(offered).toEqual(["", "provisioning", "active", "suspended", "failed"]);
+    expect(reserved.filter((value) => offered.includes(value))).toEqual([]);
+    cleanup();
+
+    // A reserved value in the address is not a filter the API takes: the notice, and no call.
+    fetchMock.mockClear();
+    await openTenants("status=deprovisioning");
+    expect(screen.getByText(TENANT_LIST_STRINGS.invalidFilters)).toBeTruthy();
+    expect(calls("GET", "/v1/admin/tenants")).toHaveLength(0);
   });
 
   it("shows a notice for filters the API would refuse, and does not ask it for a list", async () => {

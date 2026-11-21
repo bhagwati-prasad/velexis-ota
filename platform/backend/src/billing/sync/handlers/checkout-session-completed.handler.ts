@@ -28,6 +28,10 @@
 //    re-dispatched as `retryProvisioning` would do it: `failed → provisioning` (`version + 1`), a new `queued` provision
 //    job (the active one when there is one; the failed ones stay as history), `provisioning_job.retried` audited
 //    (actor `system`, `billing.sync`, the Session), the `tenant` invalidation and the dispatch after the commit.
+//    MAX_TENANTS_PER_ACCOUNT does not apply (lead decision (37i) of 2026-11-21, approved by the owner; scope PF-10):
+//    unlike the owner's `retryProvisioning`, this reopen never answers `tenant_limit`, because the owner has paid
+//    and refusing would leave a paid subscription on a failed OTA; like the platform admin's retry (36e), it locks no
+//    account row and counts nothing.
 //
 // The lock is confirmed in the transaction just before its commit and released after the work that follows the commit.
 // A duplicate or a second event of the same session writes nothing new and dispatches nothing: the job is `running`
@@ -253,7 +257,13 @@ export class CheckoutSessionCompletedHandler implements StripeEventHandler {
     return shown !== undefined && shown.id === synced.row.id && RESUMING_STATUSES.has(shown.status);
   }
 
-  /** Step 3 of the file header, in `trx`, for the locked `failed` tenant. */
+  /**
+   * Step 3 of the file header, in `trx`, for the locked `failed` tenant. Exempt from MAX_TENANTS_PER_ACCOUNT (lead
+   * decision (37i) of 2026-11-21, approved by the owner; FIX-W68-PLATFORM): the Checkout is paid, so refusing the
+   * reopen would leave a paid subscription on a failed OTA. The owner's retry (`retryProvisioning`) counts the owners'
+   * OTAs and may answer `tenant_limit`; this event has no caller to answer, so it reopens the OTA whatever its owners
+   * own, as the platform admin's retry does (lead decision (36e)).
+   */
   private async reopenFailed(
     trx: PlatformTransaction,
     tenant: TenantRecord,

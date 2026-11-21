@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 import { AccountTable, type AccountSummary } from "@/app/(app)/accounts/account-table";
 import type { ListPage } from "@/components/data-table";
-import { FilterBar, SEARCH_MAX_LENGTH, type FilterField } from "@/components/filter-bar";
+import { FilterBar, SEARCH_MAX_LENGTH, type FilterField, type FilterOption } from "@/components/filter-bar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
@@ -25,6 +25,19 @@ interface AccountFilters {
 
 /** The labels of every account status (checked against the platform document by `StatusBadge`). */
 const STATUS_NAMES: Readonly<Record<AccountStatus, string>> = STATUS_LABELS.account;
+
+/**
+ * The statuses the filter offers: the ones an account can show (KI-014, KI-015; platform/docs/data-model.md §6).
+ * `locked` finds the accounts locked out now (the API judges the lockout's end, `lockedUntil`). `deleted` is reserved,
+ * as no MVP code erases an account, so the filter never offers it: an address that already carries it keeps it as an
+ * extra choice, as the API still takes it.
+ */
+const OFFERED_ACCOUNT_STATUSES: readonly AccountStatus[] = Object.freeze([
+  "pending_verification",
+  "active",
+  "locked",
+  "disabled",
+]);
 
 /** The `maxLength` of the `Cursor` parameter. */
 const CURSOR_MAX_LENGTH = 512;
@@ -84,6 +97,15 @@ function summaryOf(row: AccountSummary): AccountSummary {
   };
 }
 
+/** The status filter's choices: the offered statuses, and the URL's status if it is another one the API takes. */
+function statusOptions(current: AccountStatus | undefined): FilterOption[] {
+  const statuses =
+    current === undefined || OFFERED_ACCOUNT_STATUSES.includes(current)
+      ? OFFERED_ACCOUNT_STATUSES
+      : [...OFFERED_ACCOUNT_STATUSES, current];
+  return statuses.map((value) => ({ value, label: STATUS_NAMES[value] }));
+}
+
 function sessionEnded(error: ApiError | undefined): boolean {
   return error?.code === "UNAUTHENTICATED" || error?.code === "TOKEN_EXPIRED";
 }
@@ -119,7 +141,7 @@ export default async function AccountsPage({
       kind: "select",
       name: "status",
       label: S.statusLabel,
-      options: Object.entries(STATUS_NAMES).map(([value, label]) => ({ value, label })),
+      options: statusOptions(filters?.status),
     },
   ];
 

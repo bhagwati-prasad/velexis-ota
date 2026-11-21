@@ -6,7 +6,10 @@
 // is an active platform admin; RecentMfaGuard the step-up of the operations marked `x-mfa-step-up`.
 //
 // - adminListAccounts: newest first, `q` (part of the e-mail address or the name, ignoring letter case) and `status`;
-//   an opaque cursor of the last account's id (`400` on `/query/cursor` for anything else).
+//   an opaque cursor of the last account's id (`400` on `/query/cursor` for anything else). The status of every
+//   answer and of the filter is the one `adminAccountStatus` shows at the Clock's time: the sign-in lockout writes
+//   `locked_until` and leaves `status` alone, so a `pending_verification` or `active` account locked out now is
+//   `locked`, and the `active` and `pending_verification` filters leave it out (KI-015, FIX-W68-PLATFORM).
 // - adminGetAccount: the account, its active memberships, the number of its active sessions (portal and admin
 //   families that are neither revoked nor expired at the Clock's time) and its last 50 audit rows.
 // - adminDisableAccount (reason): never the caller (`403 FORBIDDEN`, `self`) nor the last active platform admin
@@ -51,6 +54,7 @@ import { AuditQueryService } from "../audit/audit-query.service";
 import { AuditService } from "../audit/audit.service";
 import {
   AccountsRepository,
+  LOCKABLE_ACCOUNT_STATUSES,
   type AccountMembershipRecord,
   type AccountStatus,
   type AdminAccountRecord,
@@ -101,8 +105,23 @@ const DISABLEABLE_STATUSES: readonly AccountStatus[] = Object.freeze([
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
-/** The API's `AdminAccount` of a row. */
-export function toAdminAccount(row: AdminAccountRecord): AdminAccount {
+/**
+ * The status the platform admin shows for `row` at `now` (KI-015): `locked` while the sign-in lockout of a
+ * `pending_verification` or `active` account runs (`locked_until` after `now`, as sign-in judges it), else the
+ * stored status. The lockout leaves `status` alone, so without this a locked-out account read `active`; a `disabled`
+ * account stays `disabled` (an unlock alone would not let it in). `searchForAdmin` filters by the same rule.
+ */
+export function adminAccountStatus(
+  row: Pick<AdminAccountRecord, "status" | "locked_until">,
+  now: Date,
+): AccountStatus {
+  const stored = row.status as AccountStatus;
+  const lockedOut = row.locked_until !== null && row.locked_until.getTime() > now.getTime();
+  return lockedOut && LOCKABLE_ACCOUNT_STATUSES.includes(stored) ? "locked" : stored;
+}
+
+/** The API's `AdminAccount` of a row, with its status at `now` (`adminAccountStatus`). */
+export function toAdminAccount(row: AdminAccountRecord, now: Date): AdminAccount {
   return {
     id: row.id,
     email: row.email,
@@ -110,7 +129,7 @@ export function toAdminAccount(row: AdminAccountRecord): AdminAccount {
     fullName: row.full_name,
     locale: row.locale,
     timeZone: row.time_zone,
-    status: row.status as AdminAccount["status"],
+    status: adminAccountStatus(row, now),
     mfaEnabled: row.mfa_enabled,
     mfaEnabledAt: iso(row.mfa_enabled_at),
     isPlatformAdmin: row.is_platform_admin,
@@ -122,13 +141,13 @@ export function toAdminAccount(row: AdminAccountRecord): AdminAccount {
   };
 }
 
-/** The API's `AdminAccountSummary` of a row (the search). */
-export function toAdminAccountSummary(row: AdminAccountRecord): AdminAccountSummary {
+/** The API's `AdminAccountSummary` of a row (the search), with its status at `now` (`adminAccountStatus`). */
+export function toAdminAccountSummary(row: AdminAccountRecord, now: Date): AdminAccountSummary {
   return {
     id: row.id,
     email: row.email,
     fullName: row.full_name,
-    status: row.status as AdminAccountSummary["status"],
+    status: adminAccountStatus(row, now),
     mfaEnabled: row.mfa_enabled,
     isPlatformAdmin: row.is_platform_admin,
     lastLoginAt: iso(row.last_login_at),
@@ -234,16 +253,19 @@ export class AdminAccountsService {
         throw invalidCursor();
       }
     }
+    // One instant for the filter and the answers, so every row shows the status it was found by.
+    const now = this.clock.now();
     const rows = await this.accounts.searchForAdmin(
       this.db,
       { q: query.q, status: query.status },
+      now,
       afterId,
       limit + 1,
     );
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     return {
-      data: page.map(toAdminAccountSummary),
+      data: page.map((row) => toAdminAccountSummary(row, now)),
       page: {
         nextCursor: rows.length > limit && last !== undefined ? encodeAccountCursor(last.id) : null,
         limit,
@@ -263,7 +285,7 @@ export class AdminAccountsService {
       this.auditQueries.recentForAccount(accountId),
     ]);
     return {
-      account: toAdminAccount(account),
+      account: toAdminAccount(account, this.clock.now()),
       memberships: memberships.map(toAccountMembership),
       activeSessions: families.length,
       recentAudit,
@@ -512,7 +534,7 @@ export class AdminAccountsService {
     if (account === undefined) {
       throw new AppError("NOT_FOUND");
     }
-    return toAdminAccount(account);
+    return toAdminAccount(account, this.clock.now());
   }
 
   /**
