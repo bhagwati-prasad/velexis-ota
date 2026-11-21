@@ -406,9 +406,9 @@ an admin seeing "owner" or "admin" in the role selector, and agents/viewers call
 - Stop the platform API while on any page: the portal's own message per code, never a stack trace or the API's text.
 - Response headers: `Content-Security-Policy` with a fresh nonce per request, `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: strict-origin-when-cross-origin` (`no-referrer` on `/verify-email` and token pages,
-  `strict-origin` on the console hand-off), `Permissions-Policy`, no `X-Powered-By`. Behind Caddy (production) the
-  shared `security_headers` snippet replaces every `Referrer-Policy` header with `strict-origin-when-cross-origin`; the
-  token and hand-off pages keep their policy through `<meta name="referrer">`.
+  `strict-origin` on the console hand-off), `Permissions-Policy`, no `X-Powered-By`. Behind Caddy (production) these
+  policies stay: the shared `security_headers` snippet sets `strict-origin-when-cross-origin` only on answers without
+  one; the token and hand-off pages also carry `<meta name="referrer">`.
 - An unknown OTA id or a removed member's OTA shows Next.js's default "404 This page could not be found." page (no
   shell, no way back); an unexpected server error shows Next.js's default error page (no `error.tsx` exists).
 - Keyboard only: the skip link, every error summary takes the focus, dialogs trap focus and Escape cancels.

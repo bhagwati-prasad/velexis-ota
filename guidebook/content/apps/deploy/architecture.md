@@ -113,8 +113,10 @@ Points that matter for bugs:
 - The tenant fan-out fails the deploy only when **more than** 10 % of the schemas failed (`migrate.js` exit 3). With
   fewer failures it exits 0, the deploy switches, and the failed schemas stay on the old version until the next
   deploy: read `failed[]` of `/var/log/velexis/migrate-<sha>.json` after every deploy.
-- A set whose folder is missing in the release (`migrations/<set>`) is skipped without a message, and `migrate.js`
-  treats a `--dir` that does not exist as an empty set (notice on stderr, exit 0).
+- A release with the migration CLI must hold `migrations/platform`, `migrations/reference` and `migrations/tenant` (a
+  symbolic link counts as missing): `velexis-deploy` refuses one that lacks a set (`release lacks migrations/<set>`)
+  before anything changes, `pack-release.sh` fails on a missing set folder, and `migrate.js` exits 1 for a `--dir` that
+  does not exist.
 - Caddy is reloaded for a changed Caddyfile or WAF files, restarted (never both) for a changed build or
   [[caddy-drop-in]], and the restart is recorded in `/var/lib/velexis/caddy-dropin.sha256`.
 
@@ -219,9 +221,11 @@ aide-baseline-states
   (`VELEXIS-EGRESS-DENY`); [[caddy-admin-socket]] instead of TCP 2019.
 - **Edge**: [[coraza-waf]] with [[owasp-core-rule-set]], HSTS, strict storefront CSP, `/internal/*` and private
   `/health/*` → 404, client copies of edge headers removed, [[log-query-filter]] on access, error and WAF logs.
-  The `(security_headers)` snippet sets `Referrer-Policy: strict-origin-when-cross-origin`; because the block deletes
-  `Server` it is deferred, so it replaces the value the portal (`no-referrer` on token pages) and the platform admin
-  (`same-origin`) send (`repo:deploy/caddy/Caddyfile#L139`).
+  The `(security_headers)` snippet sets `Referrer-Policy: strict-origin-when-cross-origin` only as a default
+  (`?Referrer-Policy`): an app's own policy reaches the browser (the portal's `no-referrer` on token pages and
+  `strict-origin` on the console hand-off, the platform admin's `same-origin`, the APIs' helmet values), and only
+  answers without one (Caddy's error pages, the maintenance page, the 404s, WAF refusals) get Caddy's value
+  (`repo:deploy/caddy/Caddyfile#L147`).
 - **Integrity and audit**: [[aide]] daily, [[auditd]] watches (`velexis-keys`, `velexis-aide`, `caddy-config`,
   `caddy-binary` …), [[security-log-shipment]] off the VM with 12-month object lock, [[security-log-review]] hourly.
 - **Host**: swap off and core dumps off (card data in memory must never reach disk), UTC with chrony,
@@ -234,8 +238,8 @@ aide-baseline-states
 
 | File | Key variables (names only) |
 |---|---|
-| `platform-backend.env` | `APP_ENV`, `TRUST_PROXY`, `DATABASE_URL`, `REDIS_URL`, `PLATFORM_BFF_KEY`, `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT`, `API_KEY_PEPPER_FILE`, `JWT_PRIVATE_KEY_FILE`, `SMTP_URL`, `MAIL_FROM`, `OPS_ALERT_EMAIL`, `PUBLIC_*_URL`, `STOREFRONT_BASE_DOMAIN`, `STOREFRONT_IPV4/IPV6`, `DNS_RESOLVERS`, `STRIPE_*`, `AMADEUS_BASE_URL_TEST/LIVE`, `MAX_TENANTS_PER_ACCOUNT`, `FEATURE_*`; the template also lists `STORAGE_DRIVER`, `STORAGE_DIR` and `SENTRY_DSN`, which the platform backend never reads (they must exist, or `velexis-deploy` refuses) |
-| `ota-backend.env` (+ `ota-worker.env`: `DATABASE_PROVISIONER_URL`) | `DATABASE_URL`, `REDIS_URL`, key files, `DOCUMENT_URL_KEY_FILE`, `SMTP_URL`, `PUBLIC_OTA_API_URL`, `OTA_ADMIN_SERVICE_KEY`, `VELEXIS_EDGE_SECRET`, `STRIPE_*_TEST/LIVE`, webhook secrets, `AMADEUS_BASE_URL_*`, `AIRLINE_CARD_ENABLED`, `STORAGE_DRIVER` (`local`; `s3` passes validation but the API and worker then fail at start with `createStorage: the s3 storage driver is not implemented yet`), `STORAGE_DIR`; `SENTRY_DSN` is in the template but not read |
+| `platform-backend.env` | `APP_ENV`, `TRUST_PROXY`, `DATABASE_URL`, `REDIS_URL`, `PLATFORM_BFF_KEY`, `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT`, `API_KEY_PEPPER_FILE`, `JWT_PRIVATE_KEY_FILE`, `SMTP_URL`, `MAIL_FROM`, `OPS_ALERT_EMAIL`, `PUBLIC_*_URL`, `STOREFRONT_BASE_DOMAIN`, `STOREFRONT_IPV4/IPV6`, `DNS_RESOLVERS`, `STRIPE_*`, `AMADEUS_BASE_URL_TEST/LIVE`, `MAX_TENANTS_PER_ACCOUNT`, `FEATURE_*`; `STORAGE_DRIVER`, `STORAGE_DIR` and `SENTRY_DSN`, which the platform backend never reads, left the template (KI-043, KI-044); a VM's leftover lines for them are passed on by systemd and ignored |
+| `ota-backend.env` (+ `ota-worker.env`: `DATABASE_PROVISIONER_URL`) | `DATABASE_URL`, `REDIS_URL`, key files, `DOCUMENT_URL_KEY_FILE`, `SMTP_URL`, `PUBLIC_OTA_API_URL`, `OTA_ADMIN_SERVICE_KEY`, `VELEXIS_EDGE_SECRET`, `STRIPE_*_TEST/LIVE`, webhook secrets, `AMADEUS_BASE_URL_*`, `AIRLINE_CARD_ENABLED`, `STORAGE_DRIVER` (`local`; the configuration check refuses any other value, `s3` included), `STORAGE_DIR`; no `SENTRY_DSN` (the backend reads none, KI-043) |
 | `platform-frontend.env`, `platform-admin.env`, `ota-admin.env` | `APP_ENV`, `PUBLIC_*_URL`, `PLATFORM_API_URL` + `PLATFORM_BFF_KEY` or `OTA_API_URL` + `OTA_ADMIN_SERVICE_KEY` |
 | `caddy.env` | `PLATFORM_BASE_DOMAIN`, `STOREFRONT_BASE_DOMAIN`, `ACME_EMAIL`, `VELEXIS_EDGE_SECRET`, optional `VELEXIS_WAF_ENGINE=DetectionOnly` |
 | `migrator.env`, `reference-loader.env` | `DATABASE_MIGRATOR_URL`, `MIGRATE_TENANT_CONCURRENCY` (4), `MIGRATE_TENANT_MAX_FAILURE_RATIO` (0.1); `DATABASE_URL` |
@@ -245,11 +249,12 @@ aide-baseline-states
 | provision-vm.sh environment | `ADMIN_USER`, `ADMIN_MFA` (`fido2`/`totp`), `DEPLOY_SSH_PUBKEY_FILE`, `CADDY_BINARY`, `SSH_ALLOW_FROM`, `NODE_MAJOR` (24), `NEW_MASTER_KEY` |
 
 `@@NAME@@` values are generated by `provision-vm.sh`; `CHANGE_ME` values are yours. `velexis-deploy` refuses a release
-whose templates name a variable the VM's file lacks, and while any value of an env file still holds `CHANGE_ME` (named
-as `file:VARIABLE`, never the value; comments do not count); `check-vm.sh --only envfiles` reports `FAIL` for the same
+whose templates name a variable the VM's file lacks, and while any assignment systemd reads (indented, with blanks
+around `=`, continued or quoted over lines) still holds `CHANGE_ME` (named as `file:VARIABLE`, never the value;
+comments, indented ones included, do not count); `check-vm.sh --only envfiles` reports `FAIL` for the same
 values and `provision-vm.sh --steps envfiles` lists them. A placeholder host without `CHANGE_ME` (such as
 `ALERT_SMTP_URL=smtps://smtp.example.com:465`) still passes both.
-`SENTRY_DSN` has no client in the code: setting it sends nothing anywhere.
+Error tracking is not implemented yet (M6): neither backend reads `SENTRY_DSN` and their templates no longer list it; the three Next.js templates keep it, validated only, with no client, so it stays empty.
 
 ## Testing
 
@@ -261,7 +266,7 @@ values and `provision-vm.sh --steps envfiles` lists them. A placeholder host wit
 | Caddy build + `caddy-smoke.sh` | `repo:deploy/caddy/test/caddy-smoke.sh` | Deploy files |
 | `units-smoke.sh` (real units under systemd, user boundary, alert to Mailpit, egress table in a netns) | `repo:deploy/systemd/test/units-smoke.sh` | systemd units smoke test |
 | `check-vm.test.sh` (real sshd, real nft) | `repo:deploy/scripts/test/check-vm.test.sh` | VM check test |
-| `backup-restore.test.sh` | `repo:deploy/scripts/test/backup-restore.test.sh` | not in CI: run when either script changes |
+| `backup-restore.test.sh` | `repo:deploy/scripts/test/backup-restore.test.sh` | Integration tests (its last step installs age, rclone and zstd from apt, KI-040) |
 | dev-setup twice on a clean runner | `repo:deploy/scripts/dev-setup.sh` | Local development setup |
 | Release dry run | `repo:deploy/scripts/pack-release.sh` | Build and test |
 | Unit heap flags | `repo:tools/perf/unit-node-options.test.mjs` | Build and test |

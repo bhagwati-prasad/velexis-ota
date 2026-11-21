@@ -273,11 +273,13 @@ platform-api/tenant-states
   snapshots, events, staff actions, idempotency bodies, notification payloads); identity document numbers keep their
   last 4. Request bodies are never logged.
 - **Audit**: one [[staff-action]] row per state-changing or refused console call and per audited read
-  (`repo:ota/backend/src/console/staff-actions.writer.ts`). Every console free-text field (notes, reasons, remarks,
-  process and emergency-contact texts) refuses a card number in the request validation, before the idempotency key is
-  claimed and before any booking write or supplier call (`400 VALIDATION_FAILED`, field code `card_data`;
-  `holdsCardNumber` of `@velexis/logger`, `repo:ota/backend/src/common/http/card-free-text.ts`); the refusal's audit row
-  holds the action and target only. The review-closure note keeps its own check
+  (`repo:ota/backend/src/console/staff-actions.writer.ts`). Every free-text field the OTA stores or forwards (the
+  console's notes, reasons, remarks, process and emergency-contact texts, tags and a markup rule's notes for staff; the
+  customer's cancellation comment, special requests and emergency-contact texts) refuses a card number in the request
+  validation, before the idempotency key is claimed and before any booking write or supplier call (`400
+  VALIDATION_FAILED`, field code `card_data`; `holdsCardNumber` of `@velexis/logger`,
+  `repo:ota/backend/src/common/http/card-free-text.ts`); a console refusal's audit row holds the action and target only;
+  text that arrives from Amadeus is not checked (KI-045). The review-closure note keeps its own check
   (`repo:ota/backend/src/console/review-closure.service.ts`).
 - **Tenancy**: only `active` tenants are served (`403 TENANT_SUSPENDED`); every repository has a two-tenant isolation
   test. Review: `repo:ota/docs/security-review.md`.
@@ -303,7 +305,7 @@ The API and the worker validate separate schemas. Template: `repo:ota/backend/.e
 | `AMADEUS_BASE_URL_TEST\|LIVE` | both | Override of the Amadeus host (the stub `http://127.0.0.1:4900` locally) |
 | `AIRLINE_CARD_ENABLED` | both | Global kill switch of the airline card |
 | `STORAGE_DRIVER`, `STORAGE_DIR` | both | Document and image storage |
-| `SENTRY_DSN` | both | Error tracking (off when empty) |
+| `SENTRY_DSN` | — | Not read: error tracking is not implemented yet (M6), and the env templates no longer list it (KI-043) |
 | `TEST_DATABASE_ADMIN_URL`, `MAILPIT_API_URL` | tests | Integration harness |
 
 Never in environment variables: Amadeus credentials and OTA Stripe keys (encrypted in platform rows), card data.

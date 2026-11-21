@@ -170,7 +170,7 @@
       "group": "db",
       "kind": "lib",
       "term": "storage-adapter",
-      "detail": "Atomic writes, mode 0600, key rules `tenant_<key>/…` or `platform/…`; `s3` not implemented."
+      "detail": "Atomic writes, mode 0600, key rules `tenant_<key>/…` or `platform/…`; `s3` planned, refused by the configuration check."
     },
     {
       "id": "generatedDb",

@@ -312,6 +312,7 @@ cancel-dialog-states
 | Change contacts while staff edit the booking | `409 VERSION_CONFLICT` reloads with `refresh: true`, typed values kept |
 | Cancel | Refund preview by [[cancellation-mode]], reason required, then "This booking is cancelled" (or "Request sent" for `request_only`) |
 | Double-click Confirm, reload, Retry | Same key `cancel-<bookingId>-<version>-<hash>` → one cancellation |
+| Type `4111 1111 1111 1111` into **Message to us (optional)** and confirm | "Remove the card number: card details never go in this field" at that field; nothing is cancelled (`400 card_data`). A special request at checkout ("Request 1 (optional)") that holds one gets the same field error and is not saved |
 | Download a document twice | A new signed URL each click (5-minute [[signed-url]]); "being prepared" for a pending document |
 | Open **Changes and refunds** on a booking made < 60 s ago | "The fare rules will be available in about a minute" (`429`), Retry enabled after `Retry-After` |
 | Refresh from airline twice in a minute | Second one keeps the saved booking (throttled) |

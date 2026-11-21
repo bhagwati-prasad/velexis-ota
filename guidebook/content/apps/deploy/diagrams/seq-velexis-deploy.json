@@ -29,7 +29,7 @@
     {
       "from": "vd",
       "to": "fs",
-      "label": "check_env_files: every variable of deploy/env/*.env.example exists in /etc/velexis/*.env, and no value still holds CHANGE_ME",
+      "label": "check_env_files: every variable of deploy/env/*.env.example exists in /etc/velexis/*.env, no assignment systemd reads (indented ones included) still holds CHANGE_ME; check_migration_sets: migrations/platform, reference and tenant exist (no symbolic link)",
       "kind": "call",
       "note": "Missing names → 'env files lack variables…'; a value still holding CHANGE_ME → 'env files hold values still at the templates' CHANGE_ME placeholders…'; nothing changed."
     },
@@ -98,7 +98,7 @@
     {
       "from": "sd",
       "to": "vd",
-      "label": "unhealthy unit → rollback_to previous sha (snapshot units, switch back, restart), exit 1",
+      "label": "unhealthy unit → rollback_to previous sha (its env templates checked first; snapshot units, switch back, restart), exit 1; a redeploy of the active sha names --rollback instead",
       "kind": "return"
     },
     {

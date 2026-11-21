@@ -65,7 +65,7 @@
     {
       "from": "failed",
       "to": "provisioning",
-      "label": "retryProvisioning (owner; 422 tenant_limit while an owner is at MAX_TENANTS_PER_ACCOUNT) / adminRetryProvisioningJob (exempt from the limit)"
+      "label": "retryProvisioning (owner; 422 tenant_limit while an owner is at MAX_TENANTS_PER_ACCOUNT) / adminRetryProvisioningJob (exempt from the limit) / billing sync after the owner pays the Checkout (checkout.session.completed; exempt from the limit, (37i))"
     },
     {
       "from": "active",

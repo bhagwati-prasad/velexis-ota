@@ -205,7 +205,7 @@ flow-domains
 
 | Route | What it shows | Try | Should happen |
 |---|---|---|---|
-| `/accounts` | Search (e-mail or name), Status; e-mail, status, two-factor, platform admin, last sign-in, created | Search part of an e-mail | Newest first, URL keeps `q` |
+| `/accounts` | Search (e-mail or name), Status (Not verified, Active, Locked, Disabled; Locked finds the accounts locked out now and shows them with a Locked badge); e-mail, status, two-factor, platform admin, last sign-in, created | Search part of an e-mail | Newest first, URL keeps `q` |
 | `/accounts/[accountId]` | Fields, active session count, memberships (OTA, status, role), last 50 audit rows, links to the audit log by actor and by target; **Unlock**, **Disable**, **Enable**, **Reset two-factor** | Disable yourself; reset MFA of a platform admin | No Disable on your own account (note says why); no reset for admins (note: revoke first or `admin:reset-mfa`) |
 | `/admins` | Name, e-mail, two-factor, last sign-in; **Grant admin rights**, **Revoke** per row | Revoke yourself; grant an account without MFA | Your row and the last admin's button disabled with a description; `422 mfa_not_enabled` worded |
 | `/audit` | OTA id, actor account id, actor type, action and target type (selects of the backend's lists), target id, from/to days; table "Audit rows, newest first"; export panel | A period longer than a year; from after to | Export link hidden with the reason; notice and no call |
@@ -250,7 +250,7 @@ Each task has a stepper above in the [Tour](#tour); here is the short version wi
    bank transfer** (`repo:tools/e2e/specs/admin-settlements.e2e.ts`).
 6. **Remove an abusive domain** — `/domains` → **Remove** with a reason; suspend the OTA too when the storefront itself
    is the problem (`repo:tools/e2e/specs/admin-domains.e2e.ts`; [[journey:custom-domain-and-go-live]]).
-7. **Help a locked-out user** — `/accounts?q=` → **Unlock**, or **Reset two-factor** after an identity check
+7. **Help a locked-out user** — `/accounts?status=locked` (or `?q=`) → **Unlock**, or **Reset two-factor** after an identity check
    (`repo:tools/e2e/specs/admin-signin.e2e.ts`).
 8. **Mark an OTA as paying outside Stripe** — `/subscriptions/<id>` → **Edit the manual subscription** → status
    Active → reason. Go-live then accepts the OTA.
@@ -365,8 +365,8 @@ Audit "to" is inclusive in the form but the API gets the next day at 00:00Z — 
 **Accessibility and headers.** Every page: `X-Robots-Tag: noindex`, a CSP with a fresh nonce, `<main id="main-content">`
 reachable by the skip link, tables scrollable by keyboard, status shown in words not only colour. Proven by
 `admin-a11y.e2e.ts` and `admin-headers.e2e.ts`; a page they do not reach is worth checking by hand. Locally
-`Referrer-Policy` is `same-origin`; behind Caddy (production) the shared `security_headers` snippet replaces it with
-`strict-origin-when-cross-origin` on `admin.platform.example.com`, so other sites can learn the admin's origin.
+`Referrer-Policy` is `same-origin`, and behind Caddy (production) too: the shared `security_headers` snippet sets its
+`strict-origin-when-cross-origin` only on answers without a policy (Caddy's own error pages).
 ```
 
 ## Troubleshooting

@@ -333,10 +333,12 @@ if it lags behind the tenant ledgers, check the `platform-tenant-events` queue.
 ```
 
 ```bug-hunt
-**Missing migrations folder is silent.** `migrate.js` treats a `--dir` that does not exist as an empty set: stderr
-`migrate: notice: the platform migrations folder <dir> does not exist; it is an empty set and nothing was applied`,
-exit 0. `deploy.sh` and `pack-release.sh` also skip a set whose folder is missing. A typo in `--dir` therefore
-"succeeds" with nothing applied. Try it: `node packages/db/dist/cli/migrate.js platform --dir /tmp/nope; echo $?`.
+**A missing migrations folder is refused.** `migrate.js` answers a `--dir` that does not exist with exit 1 before it
+reads the configuration or connects (`migrate: the platform migrations folder <dir> does not exist; nothing was applied
+(check --dir)`, then the usage). `velexis-deploy` refuses a release with the migration CLI that lacks
+`migrations/platform`, `migrations/reference` or `migrations/tenant` (a symbolic link counts as missing) before
+anything changes, and `pack-release.sh` fails on a missing set folder. Try it:
+`node packages/db/dist/cli/migrate.js platform --dir /tmp/nope; echo $?` prints `1`.
 ```
 
 ```bug-hunt

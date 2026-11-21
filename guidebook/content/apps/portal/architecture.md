@@ -198,9 +198,9 @@ Also: [[diagram:platform-api/api-key-states]], [[diagram:platform-api/invitation
   `frame-ancestors 'none'`, `object-src 'none'`); `Referrer-Policy` `strict-origin-when-cross-origin`, `no-referrer`
   on `/verify-email` and token pages, `strict-origin` on the hand-off page (so the OTA admin sees the portal's
   `Origin`); `nosniff`; `Permissions-Policy`; no `X-Powered-By` (`repo:platform/frontend/next.config.ts`). In
-  production Caddy's deferred `security_headers` snippet (`repo:deploy/caddy/Caddyfile`) replaces every
-  `Referrer-Policy` header with `strict-origin-when-cross-origin`; the token-link refresh page and the hand-off page
-  also carry `<meta name="referrer">`, which keeps their policy in the browser.
+  production Caddy's `security_headers` snippet (`repo:deploy/caddy/Caddyfile`) sets `Referrer-Policy` only when an
+  answer has none, so these policies reach the browser; the token-link refresh page and the hand-off page also carry
+  `<meta name="referrer">`.
 - **End-user identity for rate limits and audit** ([[end-user-headers]]): `X-Velexis-End-User-IP` (right-most
   `X-Forwarded-For` only), `X-Velexis-End-User-Agent`, `X-Velexis-Bff-Key`; the API trusts them only from loopback
   with the key (PADR-0019).
@@ -227,7 +227,7 @@ fills unset values from `platform/frontend/.env.local`, then the root `.env.loca
 | `PUBLIC_PORTAL_URL` | The portal's own origin: redirects, Origin checks (`https:` in production) |
 | `PUBLIC_OTA_ADMIN_URL` | OTA admin origin: CSP `form-action`, the only allowed `consoleSsoUrl` origin |
 | `STOREFRONT_BASE_DOMAIN` | Builds `<key>.<domain>` on the dashboard and in the wizard |
-| `SENTRY_DSN` | Optional error tracking |
+| `SENTRY_DSN` | Validated only (`https:` URL or empty); no client sends errors until M6, so it stays empty |
 
 The milestone switches (`FEATURE_*`) belong to the platform API; the portal reads them from `getMe.features`.
 

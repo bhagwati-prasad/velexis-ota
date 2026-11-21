@@ -265,92 +265,6 @@
     "terms": ["live-office-request", "admin-dashboard"]
   },
   {
-    "id": "KI-014",
-    "title": "Status values allowed by CHECK constraints that no code writes",
-    "app": "platform-api",
-    "severity": "low",
-    "kind": "db",
-    "status": "confirmed",
-    "where": [
-      "platform/backend/migrations/platform/0001_baseline.sql:72",
-      "platform/backend/migrations/platform/0001_baseline.sql:146",
-      "platform/backend/migrations/platform/0001_baseline.sql:306",
-      "platform/backend/migrations/platform/0002_add_mvp_platform_deltas.sql:553",
-      "platform/admin/src/app/(app)/tenants/page.tsx:147",
-      "platform/docs/data-model.md:196",
-      "platform/docs/data-model.md:200",
-      "platform/docs/data-model.md:205"
-    ],
-    "summary": "Several status values that the CHECK constraints allow are never written, yet the admin filters offer them and the docs call them used. No code writes `tenants.status` `deprovisioning` or `deleted`, `accounts.status` `deleted`, `tenant_memberships.status` `suspended`, `payment_provider_connections.status` `error` or `email_outbox.status` `canceled`. The tenant ones are documented as post-MVP, but data-model.md §6 lists payment `error` and outbox `canceled` as used, and the admin **Tenants** filter offers Deprovisioning and Deleted, which always return nothing.",
-    "reproduce": [
-      "In the platform admin open **Tenants** and filter by status Deprovisioning or Deleted: always empty.",
-      "`SELECT status, count(*) FROM platform.payment_provider_connections GROUP BY 1;` never shows `error`."
-    ],
-    "expected": "Filters offer only values that can occur, and data-model.md §6 marks reserved values as reserved.",
-    "actual": "Reserved values are filter choices and are documented as used.",
-    "fix": "Mark the values as reserved (post-MVP) in `platform/docs/data-model.md` §6 and leave them out of the admin filter options, or start writing them where intended (for example payment connection `error` when reading the Stripe account fails).",
-    "files": ["platform/docs/data-model.md", "platform/admin/src/app/(app)/tenants/page.tsx"],
-    "migration": false,
-    "terms": ["platform-schema"]
-  },
-  {
-    "id": "KI-015",
-    "title": "Account status “locked” is never written, so the admin “Locked” filter is always empty",
-    "app": "platform-api",
-    "severity": "low",
-    "kind": "ux",
-    "status": "confirmed",
-    "where": [
-      "platform/backend/migrations/platform/0001_baseline.sql:51",
-      "platform/backend/src/auth/sign-in.service.ts:195-200",
-      "platform/backend/src/admin/admin-accounts.service.ts:237-242",
-      "platform/admin/src/app/(app)/accounts/page.tsx:122",
-      "platform/admin/src/components/status-badge.tsx:105"
-    ],
-    "summary": "The admin's **Locked** account filter never matches. The sign-in lockout writes `accounts.locked_until` and leaves `status` alone; no code sets `status = 'locked'`. The admin account search still offers **Locked** and passes it to the API, so the list is empty even while accounts are locked out.",
-    "reproduce": [
-      "Sign in to the portal with a wrong password 5 times for one account: the fifth answer is `423 ACCOUNT_LOCKED`.",
-      "In the platform admin open **Accounts** and filter by status **Locked** (`GET /v1/admin/accounts?status=locked`): empty.",
-      "Open the account: **Locked until** is set, but the status badge reads Active."
-    ],
-    "expected": "The **Locked** filter finds locked-out accounts, or the filter does not offer a value that never matches.",
-    "actual": "The list is empty; the locked-out account shows status `active` with a `lockedUntil` time.",
-    "fix": "Either map `status=locked` in `searchForAdmin` to `locked_until > now()`, or drop `locked` from the filter options (and from `DISABLEABLE_STATUSES` and the OpenAPI enum) and add a “locked out” filter on `locked_until > now()`.",
-    "files": [
-      "platform/backend/src/admin/admin-accounts.service.ts",
-      "platform/backend/src/auth/accounts.repository.ts",
-      "platform/admin/src/app/(app)/accounts/page.tsx",
-      "platform/backend/openapi/velexis-platform-api.openapi.yaml"
-    ],
-    "migration": false,
-    "terms": ["account-lockout"]
-  },
-  {
-    "id": "KI-016",
-    "title": "Architecture doc says the reconciler re-dispatches provisioning while the OTA worker is down",
-    "app": "platform-api",
-    "severity": "low",
-    "kind": "docs",
-    "status": "confirmed",
-    "where": [
-      "platform/docs/architecture.md:248",
-      "platform/backend/src/provisioning/reconciler.scheduler.ts:5-15"
-    ],
-    "summary": "The architecture doc promises a re-dispatch that the reconciler never does. Its failure table says “OTA worker down: … the reconciler re-dispatches after `locked_until` (15 min)”. The code only extends the lease while the `tenant.provision` message still waits in `ota-tenant-ops`, and sends an `ops.alert` “stuck” e-mail after the second lease. An operator who follows the doc waits for retries and a failed job that never come.",
-    "reproduce": [
-      "Stop the OTA worker and create an OTA in the portal.",
-      "Wait 35 minutes: `provisioning_jobs.status` stays `running`, `locked_until` keeps moving, `attempt` stays 1, and Mailpit has an `ops.alert` “stuck” e-mail."
-    ],
-    "expected": "The doc describes the lease extension and the stuck alert.",
-    "actual": "The doc promises a re-dispatch after 15 minutes.",
-    "fix": "Change architecture.md line 248 to: “Provisioning jobs stay `running`; while the message waits, the reconciler extends the lease every 15 min and e-mails `ops.alert` (stuck) after the second lease; starting the OTA worker continues the job.”",
-    "files": ["platform/docs/architecture.md"],
-    "migration": false,
-    "journey": "signup-and-provision",
-    "step": "provisioned",
-    "terms": ["reconciler", "provisioning-job", "ota-tenant-ops"]
-  },
-  {
     "id": "KI-017",
     "title": "Airline-card page accepts expiry years above 2099",
     "app": "storefront",
@@ -361,7 +275,7 @@
       "ota/frontend/src/pages/checkout-pay-airline.js:968",
       "ota/frontend/src/pages/checkout-pay-airline.js:988",
       "ota/frontend/src/pages/checkout-pay-airline.js:1036-1037",
-      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38196-38199"
+      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38226-38229"
     ],
     "summary": "The airline-card page sends expiry years above 2099, which the API refuses after a round trip. The page checks only that the year is at least 2000 and not past, but the contract caps `expiryYear` at 2099, so the API answers `400 VALIDATION_FAILED` and the page empties every input. A 400 is not a decline, so no attempt is counted.",
     "reproduce": [
@@ -415,7 +329,7 @@
     "where": [
       "ota/frontend/src/pages/checkout-pay-airline.js:73",
       "ota/frontend/src/pages/checkout-pay-airline.js:126",
-      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38181-38185"
+      "ota/backend/openapi/velexis-ota-booking-api.openapi.yaml:38211-38215"
     ],
     "summary": "A card holder name with accents is refused with no hint why. Holder names must match `^[A-Za-z .'-]{2,64}$` on the page and `^[A-Za-z .'-]+$` in the contract (Amadeus sends them in upper case), so “José Müller” gets “Enter the name as it is written on the card”.",
     "reproduce": [
@@ -807,261 +721,102 @@
     "terms": ["publishable-key"]
   },
   {
-    "id": "KI-035",
-    "title": "A missing migrations folder counts as empty: the deploy applies nothing and exits 0",
-    "app": "packages",
-    "severity": "low",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": [
-      "packages/db/src/cli/migrate.ts:278-283",
-      "packages/db/src/migrate/files.ts:240-241",
-      "packages/db/src/migrate/tenants.ts:266-275",
-      "deploy/scripts/deploy.sh:617-630",
-      "deploy/scripts/pack-release.sh:74-82"
-    ],
-    "summary": "A missing migrations folder is treated as empty, so a deploy can apply nothing and still succeed. `migrate.js` prints a notice on stderr and exits 0 for a `--dir` that does not exist, and `deploy.sh` and `pack-release.sh` skip a set whose folder is missing. A typo in `--dir`, or a release packed without `migrations/`, deploys code against an unmigrated schema with no error. All three folders exist at this commit, so the original reason for the leniency (CI before X-012) is gone.",
-    "reproduce": [
-      "`pnpm build`",
-      "`node packages/db/dist/cli/migrate.js platform --dir platform/backend/migrations/platfrom; echo $?`",
-      "See the notice “… does not exist; it is an empty set and nothing was applied” and exit code 0."
-    ],
-    "expected": "A missing `--dir` fails (exit 1), and `velexis-deploy` refuses a release that has `db/dist/cli/migrate.js` but no `migrations/{platform,reference,tenant}`.",
-    "actual": "A notice and exit 0; the deploy continues with nothing applied.",
-    "fix": "Make a missing `--dir` a usage error (exit 1) unless `--allow-missing` is given. In `deploy.sh` replace the `[ -d ]` guards with `[ -d ] || die \"release lacks migrations/$set\"`. In `pack-release.sh` fail when a set folder is missing.",
-    "files": [
-      "packages/db/src/cli/migrate.ts",
-      "packages/db/src/migrate/files.ts",
-      "deploy/scripts/deploy.sh",
-      "deploy/scripts/pack-release.sh",
-      "packages/db/README.md"
-    ],
-    "migration": false,
-    "terms": ["migration-runner", "release-folder"]
-  },
-  {
-    "id": "KI-036",
-    "title": "STORAGE_DRIVER=s3 passes config validation, then the OTA API and worker crash at start",
-    "app": "packages",
-    "severity": "low",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": [
-      "packages/db/src/storage/index.ts:23",
-      "packages/db/src/storage/index.ts:46-47",
-      "ota/backend/src/config.ts:183",
-      "ota/backend/src/documents/documents.module.ts:46-51"
-    ],
-    "summary": "`STORAGE_DRIVER=s3` passes the config check, then the OTA API and worker crash at start. `STORAGE_DRIVERS = [\"local\", \"s3\"]` feeds `env.enum`, so `s3` is valid, but `createStorage` throws in a Nest factory provider during start-up. On the VM the unit never becomes ready and `velexis-deploy` rolls back.",
-    "reproduce": [
-      "Set `STORAGE_DRIVER=s3` in `ota/backend/.env.local`.",
-      "`pnpm --filter @velexis/ota-backend dev`",
-      "The API and the worker stop at start with “createStorage: the s3 storage driver is not implemented yet (ADR-0017)”."
-    ],
-    "expected": "The configuration check refuses `s3` (“STORAGE_DRIVER must be one of local”) like any other invalid value.",
-    "actual": "Validation passes, then a crash during Nest initialisation.",
-    "fix": "Export `STORAGE_DRIVERS = [\"local\"]` (keep the `s3` branch behind a separate constant) until an S3 adapter exists.",
-    "files": ["packages/db/src/storage/index.ts", "packages/db/README.md"],
-    "migration": false,
-    "terms": ["storage-adapter"]
-  },
-  {
-    "id": "KI-037",
-    "title": "Caddy security_headers overrides the apps' Referrer-Policy",
-    "app": "deploy",
-    "severity": "low",
-    "kind": "security",
-    "status": "confirmed",
-    "where": [
-      "deploy/caddy/Caddyfile:139-148",
-      "deploy/caddy/Caddyfile:410",
-      "deploy/caddy/Caddyfile:426",
-      "platform/admin/next.config.ts:15",
-      "platform/frontend/next.config.ts:51",
-      "platform/frontend/next.config.ts:55",
-      "platform/admin/README.md:211"
-    ],
-    "summary": "Caddy replaces the apps' stricter Referrer-Policy with `strict-origin-when-cross-origin`. The shared, deferred `security_headers` snippet sets the header after the upstream answers, which replaces the admin's `same-origin` on `admin.platform.example.com` and the portal's `no-referrer` (token pages) and `strict-origin` (hand-off) headers. Impact is small: only the admin origin leaks cross-origin, and the portal's token and hand-off pages also carry `<meta name=referrer>`. The admin README admits the override.",
-    "reproduce": [
-      "On the VM (or with caddy-smoke): `curl -sI https://admin.platform.example.com/sign-in | grep -i referrer-policy` → `strict-origin-when-cross-origin`.",
-      "`curl -sI 'https://platform.example.com/verify-email?token=x'` → `strict-origin-when-cross-origin` instead of `no-referrer`."
-    ],
-    "expected": "The app's stricter policy survives (`same-origin` on the admin, `no-referrer` on token pages).",
-    "actual": "`strict-origin-when-cross-origin` everywhere behind Caddy.",
-    "fix": "In `(security_headers)` use `?Referrer-Policy \"strict-origin-when-cross-origin\"` (set only when the upstream did not), or override it per site.",
-    "files": ["deploy/caddy/Caddyfile"],
-    "migration": false,
-    "terms": ["caddy"]
-  },
-  {
-    "id": "KI-038",
-    "title": "velexis-deploy --status takes the deploy lock and logs an ERROR during a deploy",
-    "app": "deploy",
-    "severity": "low",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": [
-      "deploy/scripts/deploy.sh:127-133",
-      "deploy/scripts/deploy.sh:528-532",
-      ".github/workflows/deploy.yml:188-192"
-    ],
-    "summary": "A read-only `velexis-deploy --status` during a deploy fails and writes an ERROR into deploy.log. The exclusive `flock` is taken before the arguments are read, so `--status` prints `ERROR: another deploy is running`, exits 1 and appends that line to `/var/log/velexis/deploy.log`. The Deploy workflow's smoke check calls `--status`.",
-    "reproduce": [
-      "On a throwaway VM start `sudo velexis-deploy <sha>` (or hold the lock: `sudo flock /run/velexis-deploy.lock sleep 60 &`).",
-      "In a second shell run `sudo velexis-deploy --status; echo $?`.",
-      "See `ERROR: another deploy is running`, exit 1, and the same line at the end of `/var/log/velexis/deploy.log`."
-    ],
-    "expected": "`--status` prints the current release and unit states (no lock, or a shared lock) and never writes an ERROR into deploy.log.",
-    "actual": "Exit 1, an ERROR line in deploy.log, and no status.",
-    "fix": "Handle `--status` before taking the lock (move its `case` above `exec 9>`), or take `flock -s` for it.",
-    "files": ["deploy/scripts/deploy.sh", "deploy/scripts/test/deploy.test.sh"],
-    "migration": false,
-    "terms": ["velexis-deploy"]
-  },
-  {
-    "id": "KI-039",
-    "title": "TLS expiry is checked only for the five named hosts",
-    "app": "deploy",
-    "severity": "low",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": ["deploy/scripts/healthcheck.sh:24", "deploy/scripts/healthcheck.sh:384-405"],
-    "summary": "Storefront and custom-domain certificates have no expiry check. `check_tls` loops over `PLATFORM_BASE_DOMAIN`, its `admin.` and `api.` hosts, and `admin.` and `api.` of `STOREFRONT_BASE_DOMAIN` only, so on-demand certificates get no `tls-` row. Only the demo storefront is watched, indirectly, by the external uptime monitor.",
-    "reproduce": [
-      "`sudo velexis-healthcheck --status` on the VM.",
-      "See only five `tls-<host>` rows, none for `demo.<STOREFRONT_BASE_DOMAIN>` or a custom domain."
-    ],
-    "expected": "At least the demo storefront (`HEALTHCHECK_STOREFRONT_HOST`), ideally every verified storefront host, gets a `tls-` expiry check.",
-    "actual": "No expiry check for storefront certificates.",
-    "fix": "Add `HEALTHCHECK_STOREFRONT_HOST` to the host list. Optionally list Caddy's certificate store (`/var/lib/caddy/.local/share/caddy/certificates`) and alert on any certificate expiring within 14 days.",
-    "files": [
-      "deploy/scripts/healthcheck.sh",
-      "deploy/scripts/test/healthcheck.test.sh",
-      "docs/mvp/deployment-single-vm.md"
-    ],
-    "migration": false,
-    "terms": ["on-vm-health-check", "on-demand-tls"]
-  },
-  {
-    "id": "KI-040",
-    "title": "backup-restore.test.sh is not run by CI",
-    "app": "deploy",
-    "severity": "low",
-    "kind": "bug",
-    "status": "confirmed",
-    "where": [".github/workflows/ci.yml:58-148", "docs/mvp/deployment-single-vm.md:395"],
-    "summary": "CI never runs `backup-restore.test.sh`, so a regression in `backup.sh` or `restore.sh` (the RPO and RTO path) is caught only by a manual run. The `deploy-files` job runs the deploy, healthcheck, ship-logs and log-review tests but not this one; the deployment doc says “CI does not run it yet”.",
-    "reproduce": ["Search `.github/workflows/ci.yml` for `backup-restore`: no match."],
-    "expected": "CI runs `bash deploy/scripts/test/backup-restore.test.sh` (the integration job already has PostgreSQL 16; add `age`, `rclone` and `zstd`).",
-    "actual": "Not run.",
-    "fix": "Add a step to the integration (or deploy-files) job that installs `age`, `rclone` and `zstd` and runs the test. Workflows are an owner change: agents never edit them.",
-    "files": [".github/workflows/ci.yml"],
-    "migration": false,
-    "terms": ["ci-workflow", "restore-drill"]
-  },
-  {
     "id": "KI-041",
-    "title": "Rollback re-checks neither the target's env templates nor its Node major",
+    "title": "Rollback does not refuse a target built on another Node major",
     "app": "deploy",
     "severity": "low",
     "kind": "bug",
     "status": "confirmed",
     "where": [
-      "deploy/scripts/deploy.sh:502-518",
-      "deploy/scripts/deploy.sh:552-556",
-      "deploy/scripts/deploy.sh:590"
+      "deploy/scripts/deploy.sh:386-390",
+      "deploy/scripts/deploy.sh:610-622",
+      "deploy/scripts/deploy.sh:640-643",
+      "docs/mvp/adr/0029-nodejs-24-runtime.md:147"
     ],
-    "summary": "`--rollback` switches to a release that cannot start, then fails. `rollback_to` stages the target's snapshot, switches `current` and restarts the units without the env-file and Node-major checks, which run only for a new upload or a redeploy. A target whose variables were removed from `/etc/velexis`, or one built on another Node major, is switched to and then fails.",
+    "summary": "A rollback switches to a release built on another Node major and only notes it in `deploy.log`. Since FIX-W68-DEPLOYSCRIPT, `--rollback` and the automatic rollback check the target's env templates against `/etc/velexis` first and refuse before anything is switched, naming each `file:VARIABLE`; but `check_node_major` refuses a release on its first activation only, and `rollback_to` logs `note: release <sha> was built with Node v<n> and the VM runs v<m>` and goes on. That is what ADR-0029 item 10 (decision D12, \"documented, not checked\": every native module is N-API) decides, so this record's expected refusal needs a lead decision first.",
     "reproduce": [
-      "On a throwaway VM deploy release A, then B, whose template renames a variable; remove the old name from the env file.",
+      "On a throwaway VM deploy release A built on Node 22, switch the VM to Node 24 (runbook node-upgrade.md §6), then deploy release B built on Node 24.",
       "`sudo velexis-deploy --rollback`",
-      "`current` switches to A, the unit fails its config check, and the run dies with “rollback release <A> is not healthy either; investigate now”."
+      "`deploy.log` notes both majors, `current` switches to A and its units restart on Node 24."
     ],
-    "expected": "`--rollback` refuses before switching, naming the missing `file:VARIABLE` or the Node major mismatch.",
-    "actual": "It switches first and fails after.",
-    "fix": "In `rollback_to` call `check_env_files \"$rel/deploy/env\"` and the Node-major comparison against `$rel/RELEASE.json` before `stage_system_files`.",
-    "files": ["deploy/scripts/deploy.sh", "deploy/scripts/test/deploy.test.sh"],
+    "expected": "Either `--rollback` refuses before switching and names the Node major mismatch, or ADR-0029 D12 stands and this record is removed as decided behaviour.",
+    "actual": "The note `a rollback does not refuse that (ADR-0029 item 10, D12: every native module is N-API)`, then the switch. The env-template half of this issue is fixed: a target whose template names a variable missing from `/etc/velexis`, or one still at `CHANGE_ME`, is refused (`rollback to <sha> refused: ...`) and nothing changes.",
+    "fix": "A lead decision on ADR-0029 D12 first. If rollbacks across majors are to be refused, revise D12 with a dated note, add the Node-major reason to `rollback_refusal` (decide whether the automatic rollback right after a Node-major switch and a redeploy of a release already on the VM are refused too), and flip `deploy.test.sh`'s D12 check (case 20, [FIX-W68-DEPLOYSCRIPT AC4]). If D12 stands, delete this record.",
+    "files": [
+      "deploy/scripts/deploy.sh",
+      "deploy/scripts/test/deploy.test.sh",
+      "docs/mvp/adr/0029-nodejs-24-runtime.md"
+    ],
     "migration": false,
     "terms": ["automatic-rollback", "node-major-pin"]
   },
   {
-    "id": "KI-042",
-    "title": "Redeploying the active sha with failing health says “no other release was active”",
-    "app": "deploy",
+    "id": "KI-045",
+    "title": "Card numbers in free text that arrives from Amadeus are stored as received",
+    "app": "ota-api",
     "severity": "low",
-    "kind": "ux",
-    "status": "confirmed",
-    "where": ["deploy/scripts/deploy.sh:544", "deploy/scripts/deploy.sh:659-665"],
-    "summary": "Redeploying the active release with a failing health check says “no other release was active” and does not roll back. When the sha being deployed is already current (`PREV_SHA == SHA`) and a unit fails its health check after the restart, the script dies with that message, although deploy-history holds a previous release.",
-    "reproduce": [
-      "On a throwaway VM run Deploy twice for the same commit, with PostgreSQL stopped during the second run.",
-      "The run fails with “deploy of <sha> failed health checks; no other release was active, so there is nothing to roll back to”."
-    ],
-    "expected": "A message that says the active release itself failed to restart and points to `velexis-deploy --rollback` (`previous_sha`), or an automatic rollback to `previous_sha`.",
-    "actual": "A misleading message and no rollback.",
-    "fix": "In the failure branch use `previous_sha` when `PREV_SHA == SHA`, or print “release <sha> was already active; run velexis-deploy --rollback to go back to <previous>”.",
-    "files": ["deploy/scripts/deploy.sh", "deploy/scripts/test/deploy.test.sh"],
-    "migration": false,
-    "terms": ["automatic-rollback", "velexis-deploy"]
-  },
-  {
-    "id": "KI-043",
-    "title": "SENTRY_DSN is offered as error tracking, but no code sends anything",
-    "app": "deploy",
-    "severity": "low",
-    "kind": "docs",
+    "kind": "security",
     "status": "confirmed",
     "where": [
-      "platform/backend/README.md:219",
-      "deploy/env/platform-backend.env.example:101",
-      "deploy/env/ota-backend.env.example:90",
-      "deploy/egress/allowed-hosts.conf:37",
-      "docs/mvp/deployment-single-vm.md:569",
-      "platform/backend/src/config.ts:251",
-      "platform/frontend/src/lib/config.ts:54",
-      "platform/admin/src/lib/config.ts:51",
-      "ota/admin/src/config.ts:63"
+      "ota/backend/src/console/console-booking-actions.service.ts:790-815",
+      "ota/backend/src/console/pnr-import.service.ts:1501-1513",
+      "ota/backend/src/console/console-booking-actions.service.ts:1962-1963",
+      "ota/backend/src/console/pnr-import.service.ts:1443",
+      "ota/backend/src/console/console-booking-actions.service.ts:947-952",
+      "ota/backend/src/bookings/booking-sync.service.ts:1000",
+      "ota/backend/src/amadeus/supplier-requests.repository.ts:376",
+      "packages/logger/src/redact-payload.ts:8-19"
     ],
-    "summary": "Setting `SENTRY_DSN` does nothing: no code sends errors anywhere. The five app env templates, the platform backend README (“Error tracking, off when empty”) and deployment §13 offer Sentry, but the two backends do not read the variable (it is not in `PLATFORM_BACKEND_CONFIG_SCHEMA`), the three Next.js apps only validate it, and no Sentry client exists. No egress refusal shows either; `allowed-hosts.conf` already says “SENTRY_DSN has no client in the code yet”.",
+    "summary": "Free text that Amadeus sends is kept as Amadeus sends it. The OTA API refuses a card number in the free text that staff and customers type (`card_data`, FIX-W67-KI001 and FIX-W68-CARDTEXT), but a remark a terminal agent typed into the order, or the remarks of an imported or resynced order, are copied into `booking_remarks` (`orderRemarksOf` keeps each `text`), into `bookings.order_snapshot` and into the supplier log (`supplier_requests`). Those copies pass only the shared [[redact-payload]], which masks by key name (`cardNumber`, `pan`, a card's `number`), never by what a text holds. A card number in such a remark therefore reaches the tenant database and its backups. Accepted for now by lead decision (37e) and recorded as a residual risk in the PCI pack (`ota/docs/pci/README.md` §8 item 8).",
     "reproduce": [
-      "Set `SENTRY_DSN=https://key@o0.ingest.example.com/1` in `platform/backend/.env.local` (or in `ota-admin.env` on the VM), restart, and cause a 500.",
-      "Nothing reaches Sentry, and `journalctl -k -g VELEXIS-EGRESS-DENY` shows nothing."
+      "With the Amadeus stub, give an order a general remark whose text holds a test card number, for example `PAX CARD 4111 1111 1111 1111`.",
+      "Import it in the OTA admin (PNR import), or resync a booking whose order now carries that remark.",
+      "Read `tenant_<key>.booking_remarks.text`, the booking's `order_snapshot` and the import's `supplier_requests.response_body`: the number is there in full."
     ],
-    "expected": "Either a Sentry client exists (with redaction and an egress line), or the templates and docs say it is not implemented.",
-    "actual": "A setting with no effect.",
-    "fix": "Mark `SENTRY_DSN` as “not read by the MVP code (M6)” in `platform/backend/README.md` and the env templates, as for `STORAGE_*`, or remove it from the backend templates. Change deployment §13 (line 568) to “not implemented yet”.",
+    "expected": "A card number in supplier text never reaches the database whole: it is masked on receipt (as `holdsCardNumber` finds it) or the text is not stored.",
+    "actual": "The remark text, the order snapshot and the supplier log keep the number as Amadeus sent it.",
+    "fix": "A later decision (37e): mask card numbers in supplier free text on receipt with a `holdsCardNumber`-like masker in `orderRemarksOf`, `keptOrderDataOf`, the sync's snapshot and the supplier log, or refuse to store such a text. No code now; until then staff never type card data into an order at the airline's or Amadeus's terminal (PCI responsibility matrix row 3).",
     "files": [
-      "platform/backend/README.md",
-      "platform/backend/.env.example",
-      "deploy/env/platform-backend.env.example",
-      "deploy/env/ota-backend.env.example",
-      "docs/mvp/deployment-single-vm.md"
+      "ota/backend/src/console/console-booking-actions.service.ts",
+      "ota/backend/src/console/pnr-import.service.ts",
+      "ota/backend/src/bookings/booking-sync.service.ts",
+      "ota/backend/src/amadeus/supplier-requests.repository.ts",
+      "packages/logger/src/redact-payload.ts"
     ],
     "migration": false,
-    "terms": ["env-file"]
+    "journey": "console-manage-booking",
+    "step": "pnr",
+    "terms": ["redact-payload", "pnr-import", "supplier-request", "cardholder-data-environment"]
   },
   {
-    "id": "KI-044",
-    "title": "platform-backend.env template requires STORAGE_DRIVER and STORAGE_DIR, which the platform backend never reads",
-    "app": "deploy",
+    "id": "KI-046",
+    "title": "Becoming an owner never checks MAX_TENANTS_PER_ACCOUNT",
+    "app": "platform-api",
     "severity": "low",
-    "kind": "docs",
+    "kind": "bug",
     "status": "confirmed",
     "where": [
-      "deploy/env/platform-backend.env.example:86-87",
-      "deploy/scripts/deploy.sh:272-285",
-      "platform/backend/src/config.ts"
+      "platform/backend/src/memberships/invitations.service.ts:298-345",
+      "platform/backend/src/memberships/members.service.ts:109-119",
+      "platform/backend/src/provisioning/lifecycle.service.ts:20-21"
     ],
-    "summary": "The platform backend env template requires `STORAGE_DRIVER` and `STORAGE_DIR`, which the platform backend never reads. They point at the OTA's storage folder and nothing under `platform/backend/src` reads either, but `velexis-deploy` still refuses a release until both exist in `/etc/velexis/platform-backend.env`.",
+    "summary": "An account can own more OTAs than `MAX_TENANTS_PER_ACCOUNT` (default 3). `createTenant` and the owner's retry refuse with `422 UNPROCESSABLE` (`details.reason` `tenant_limit`) once the account owns that many OTAs that are not `failed`, but the two other ways to become an owner count nothing: accepting an invitation with the role `owner` (`InvitationsService.accept` inserts or reactivates the membership with the invitation's role) and `changeRole` to `owner` (`MembersService.changeRole` checks permissions, MFA and the version only).",
     "reproduce": [
-      "`grep -rn STORAGE_ platform/backend/src`: no match.",
-      "On a throwaway VM remove `STORAGE_DIR` from `/etc/velexis/platform-backend.env` and deploy: “env files lack variables … platform-backend.env:STORAGE_DIR”."
+      "With `MAX_TENANTS_PER_ACCOUNT=1`, let account A own one active OTA.",
+      "As the owner of another OTA, invite A as `owner` (or invite A as `admin` and then change A's role to `owner`).",
+      "A accepts: A now owns two OTAs, and `createTenant` as A still answers `422 tenant_limit`."
     ],
-    "expected": "Templates list only variables the app reads.",
-    "actual": "Two unused variables that still block a deploy when missing.",
-    "fix": "Remove `STORAGE_DRIVER` and `STORAGE_DIR` from `deploy/env/platform-backend.env.example` (and from `platform/backend/.env.example` if present).",
-    "files": ["deploy/env/platform-backend.env.example"],
+    "expected": "A rule for the limit when an account becomes an owner: either both paths refuse with the same `tenant_limit` error, or the limit is documented as counting only the OTAs an account creates.",
+    "actual": "Both paths succeed whatever the account already owns.",
+    "fix": "A later decision (37k): count the account's owned OTAs that are not `failed` under the same row lock as `createTenant` in `accept` and in `changeRole` to `owner`, or write down in scope PF-10 that the limit applies to creating OTAs only. No code now.",
+    "files": [
+      "platform/backend/src/memberships/invitations.service.ts",
+      "platform/backend/src/memberships/members.service.ts",
+      "platform/docs/scope.md"
+    ],
     "migration": false,
-    "terms": ["env-file"]
+    "journey": "team-and-console-sso",
+    "step": "role-change",
+    "terms": ["invitation", "tenant-role"]
   }
 ]

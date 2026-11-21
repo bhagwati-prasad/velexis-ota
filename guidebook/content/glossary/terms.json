@@ -15,7 +15,7 @@
     "term": "Account",
     "aliases": ["acc_", "platform.accounts", "portal account"],
     "category": "identity",
-    "definition": "A person's login on the platform (`platform.accounts`, id `acc_…`): e-mail, Argon2id password, optional TOTP MFA, `is_platform_admin` and a status (`pending_verification` until the address is verified, then `active`; `disabled` blocks sign-in; the CHECK also lists `locked`, which is never set because lockout uses `locked_until`, and `deleted`). OTA owners, their staff and Velexis staff are all accounts, and one account can belong to several OTAs through [[membership]] rows.",
+    "definition": "A person's login on the platform (`platform.accounts`, id `acc_…`): e-mail, Argon2id password, optional TOTP MFA, `is_platform_admin` and a status (`pending_verification` until the address is verified, then `active`; `disabled` blocks sign-in; the CHECK also lists `locked` and `deleted`, both reserved and never written: the lockout writes `locked_until`, and the platform admin shows an account locked out now as `locked`). OTA owners, their staff and Velexis staff are all accounts, and one account can belong to several OTAs through [[membership]] rows.",
     "apps": ["portal", "platform-api", "platform-admin"],
     "related": [
       "membership",
@@ -38,7 +38,7 @@
     "term": "Account lockout",
     "aliases": ["ACCOUNT_LOCKED", "Unlock", "authfail", "locked_until"],
     "category": "security",
-    "definition": "Brute-force protection on password sign-in. On the platform the fifth consecutive wrong password sets `platform.accounts.locked_until` 15 minutes ahead and answers `423 ACCOUNT_LOCKED` with `Retry-After`; a platform admin can clear it with Unlock on `/accounts/<id>` (audited as `account.unlocked`). For storefront customers five wrong sign-ins for one e-mail within 15 minutes lock that address for 15 minutes through the Redis counter `t:<tenantId>:<env>:authfail:<sha256(email)>`, which also counts unknown addresses so the answers never reveal which e-mails have an account.",
+    "definition": "Brute-force protection on password sign-in. On the platform the fifth consecutive wrong password sets `platform.accounts.locked_until` 15 minutes ahead and answers `423 ACCOUNT_LOCKED` with `Retry-After`; while it runs, the platform admin shows the account as Locked (until that time) and its Locked filter (`status=locked`) finds it; a platform admin can clear it with Unlock on `/accounts/<id>` (audited as `account.unlocked`). For storefront customers five wrong sign-ins for one e-mail within 15 minutes lock that address for 15 minutes through the Redis counter `t:<tenantId>:<env>:authfail:<sha256(email)>`, which also counts unknown addresses so the answers never reveal which e-mails have an account.",
     "apps": ["platform-api", "platform-admin", "portal", "ota-api", "storefront"],
     "related": [
       "account",
@@ -539,7 +539,7 @@
     "term": "Automatic rollback",
     "aliases": ["--rollback", "rollback"],
     "category": "operations",
-    "definition": "What `velexis-deploy` does when a unit does not answer `/health/ready` within `HEALTH_TIMEOUT` (90 s per unit by default) after a deploy's restart: it re-installs the previous release's units and Caddyfile from its snapshot, points `current` back at it, restarts and exits 1. `sudo velexis-deploy --rollback` does the same by hand; migrations are never reversed (see [[expand-and-contract]]).",
+    "definition": "What `velexis-deploy` does when a unit does not answer `/health/ready` within `HEALTH_TIMEOUT` (90 s per unit by default) after a deploy's restart: it re-installs the previous release's units and Caddyfile from its snapshot, points `current` back at it, restarts and exits 1. Before that it checks the previous release's env templates against /etc/velexis; when one fails, nothing is switched back and the failed release stays current. A redeploy of the active release that fails rolls back nothing and names `velexis-deploy --rollback`. `sudo velexis-deploy --rollback` does the same by hand; migrations are never reversed (see [[expand-and-contract]]).",
     "apps": ["deploy"],
     "related": [
       "velexis-deploy",
@@ -1569,7 +1569,7 @@
     "term": "Env file",
     "aliases": ["/etc/velexis/*.env", "env template"],
     "category": "security",
-    "definition": "`/etc/velexis/<app>.env`, `root:root 0600`, read only by systemd before it starts a unit as its zone user. It is created once from `deploy/env/<app>.env.example` (`@@…@@` placeholders generated, `CHANGE_ME` values filled by hand), and `velexis-deploy` refuses a release whose templates name a variable the file lacks, or while a value still holds `CHANGE_ME` (`check-vm.sh` reports `FAIL` for it too).",
+    "definition": "`/etc/velexis/<app>.env`, `root:root 0600`, read only by systemd before it starts a unit as its zone user. It is created once from `deploy/env/<app>.env.example` (`@@…@@` placeholders generated, `CHANGE_ME` values filled by hand), and `velexis-deploy` refuses a release whose templates name a variable the file lacks, or while a value systemd reads (an indented assignment included) still holds `CHANGE_ME` (`check-vm.sh` reports `FAIL` for it too).",
     "apps": ["deploy"],
     "related": ["check-vm", "trust-zone", "velexis-deploy", "provision-vm", "edge-secret", "define-config"],
     "see": ["deploy/env"],
@@ -2356,7 +2356,7 @@
     "term": "Membership",
     "aliases": ["tenant_memberships", "stf_", "team member", "member"],
     "category": "identity",
-    "definition": "The link between an account and an OTA (`platform.tenant_memberships`, `stf_` id) with a [[tenant-role]] (owner, admin, agent, finance or viewer) and a status (`active`, `suspended` or `removed`; removal keeps the row). `TenantRoleGuard` reads it on every tenant request without a cache, and it is what lets an account open that OTA's console through [[sso]]; the OTA admin drops a removed member within 60 seconds.",
+    "definition": "The link between an account and an OTA (`platform.tenant_memberships`, `stf_` id) with a [[tenant-role]] (owner, admin, agent, finance or viewer) and a status (`active` or `removed`, with `suspended` reserved and never written; removal keeps the row). `TenantRoleGuard` reads it on every tenant request without a cache, and it is what lets an account open that OTA's console through [[sso]]; the OTA admin drops a removed member within 60 seconds.",
     "apps": ["platform-api", "portal", "ota-api", "ota-admin"],
     "related": ["account", "tenant-role", "invitation", "staff-role", "sso", "portal-token", "staff-session"],
     "see": [
@@ -4748,7 +4748,7 @@
     "term": "Storage adapter",
     "aliases": ["LocalDiskStorage", "StorageAdapter", "createStorage"],
     "category": "data",
-    "definition": "The file store of `@velexis/db` for documents and uploads (`StorageAdapter`, `createStorage`): keys `tenant_<key>/…` or `platform/…`, atomic writes with mode 0600, and `signedUrl` through an injected signer. Only the `local` driver (`LocalDiskStorage`) exists. `s3` passes config validation but makes the OTA API and worker fail at start (`createStorage: the s3 storage driver is not implemented yet`).",
+    "definition": "The file store of `@velexis/db` for documents and uploads (`StorageAdapter`, `createStorage`): keys `tenant_<key>/…` or `platform/…`, atomic writes with mode 0600, and `signedUrl` through an injected signer. Only the `local` driver (`LocalDiskStorage`) exists. `s3` is a planned driver: the configuration check refuses it (`STORAGE_DRIVER must be one of local`).",
     "apps": ["packages", "ota-api"],
     "related": ["signed-url", "booking-document", "storefront-asset", "tenant-schema", "backup-set"],
     "see": ["packages/db/src/storage/local-disk-storage.ts"],
@@ -5198,7 +5198,7 @@
     "term": "Tenant",
     "aliases": ["OTA", "platform.tenants", "ten_"],
     "category": "tenancy",
-    "definition": "One OTA as a customer of Velexis: a row of `platform.tenants` (`ten_…`) with a unique [[tenant-key]], a plan, a [[storefront-environment]] and a status (`provisioning`, `active`, `suspended`, `deprovisioning`, `deleted` or `failed`), plus its own PostgreSQL [[tenant-schema]] `tenant_<key>` on the OTA side. The OTA API serves only `active` tenants and reads the row read-only through a 60-second Redis cache that [[vx-invalidate]] events clear.",
+    "definition": "One OTA as a customer of Velexis: a row of `platform.tenants` (`ten_…`) with a unique [[tenant-key]], a plan, a [[storefront-environment]] and a status (`provisioning`, `active`, `suspended` or `failed`; `deprovisioning` and `deleted` are reserved and never written), plus its own PostgreSQL [[tenant-schema]] `tenant_<key>` on the OTA side. The OTA API serves only `active` tenants and reads the row read-only through a 60-second Redis cache that [[vx-invalidate]] events clear.",
     "apps": ["platform-api", "portal", "platform-admin", "ota-api", "storefront"],
     "related": [
       "tenant-key",
@@ -5651,7 +5651,7 @@
     "term": "velexis-deploy",
     "aliases": ["deploy.sh", "/usr/local/sbin/velexis-deploy"],
     "category": "operations",
-    "definition": "The root-owned deploy command (`deploy/scripts/deploy.sh`, installed as `/usr/local/sbin/velexis-deploy`) and the only command the deploy user may run with sudo. `velexis-deploy <sha>` verifies the uploaded [[release-folder]] against its [[sha256sums]], snapshots and stages system files, runs the migrations and the [[tenant-fan-out]] in [[transient-unit]]s, switches `/srv/velexis/current`, restarts the units with health checks, rolls back automatically on failure and prunes to five releases; `--rollback` and `--status` are its other modes.",
+    "definition": "The root-owned deploy command (`deploy/scripts/deploy.sh`, installed as `/usr/local/sbin/velexis-deploy`) and the only command the deploy user may run with sudo. `velexis-deploy <sha>` verifies the uploaded [[release-folder]] against its [[sha256sums]], snapshots and stages system files, runs the migrations and the [[tenant-fan-out]] in [[transient-unit]]s, switches `/srv/velexis/current`, restarts the units with health checks, rolls back automatically on failure and prunes to five releases; `--rollback` (which checks its target's env templates first) and `--status` (which takes no lock) are its other modes.",
     "apps": ["deploy"],
     "related": [
       "release-folder",

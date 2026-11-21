@@ -14,7 +14,7 @@
       "title": "Roll back",
       "actor": "Developer",
       "body": "`sudo /usr/local/sbin/velexis-deploy --rollback`",
-      "expect": "Log `ROLLBACK to <previous sha>`; units, drop-in, Caddyfile, WAF files and Caddy build re-installed from the previous snapshot; units restarted and healthy."
+      "expect": "If a variable of the previous release's templates is missing or at CHANGE_ME: `rollback to <sha> refused: ...`, nothing changed (add it, run again). Otherwise log `ROLLBACK to <previous sha>`; units, drop-in, Caddyfile, WAF files and Caddy build re-installed from the previous snapshot; units restarted and healthy."
     },
     {
       "title": "Verify",

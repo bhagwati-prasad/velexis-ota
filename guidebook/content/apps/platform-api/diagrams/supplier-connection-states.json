@@ -22,7 +22,7 @@
     },
     {
       "id": "invalid_credentials",
-      "label": "invalid_credentials",
+      "label": "invalid_credentials (reserved)",
       "kind": "error"
     },
     {
@@ -66,7 +66,7 @@
     {
       "from": "active",
       "to": "invalid_credentials",
-      "label": "credentials refused"
+      "label": "reserved: never written (a refused credential submission leaves the connection as it was)"
     }
   ]
 }

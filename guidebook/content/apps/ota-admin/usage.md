@@ -483,8 +483,8 @@ What a refusal should look like:
 
 ```note
 **Card numbers in free text are refused.** A note, a cancel, issue, capture or refund reason, a remark, the PNR
-import's note or reason and the shopping reason that hold a card number show "A note never holds a card number:
-remove it." (or "A reason …" / "A remark …") at the field; nothing is sent to the API, which refuses the same text
+import's note, reason or tags, a markup rule's notes for staff and the shopping reason that hold a card number show
+"A note never holds a card number: remove it." (or "A reason …" / "A remark …" / "A tag …") at the field; nothing is sent to the API, which refuses the same text
 with `card_data`. Add a note `4111 1111 1111 1111` and check that
 `SELECT summary, data FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER BY created_at DESC LIMIT 1;`
 finds no such row.

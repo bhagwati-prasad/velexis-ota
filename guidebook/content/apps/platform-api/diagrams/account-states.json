@@ -2,7 +2,7 @@
   "id": "account-states",
   "type": "state",
   "title": "Account status and lockout",
-  "caption": "`platform.accounts.status`. The sign-in lockout is `locked_until` (5 failures → 15 min), not the `locked` status, which no code writes.",
+  "caption": "`platform.accounts.status`. The sign-in lockout is `locked_until` (5 failures → 15 min), not the `locked` status, which no code writes; the platform admin shows a `pending_verification` or `active` account whose `locked_until` is ahead as `locked`, and its Locked filter (`status=locked`) finds it.",
   "states": [
     {
       "id": "start",
@@ -25,7 +25,7 @@
       "id": "lockedout",
       "label": "locked out (locked_until ahead)",
       "kind": "error",
-      "detail": "`423 ACCOUNT_LOCKED` with Retry-After; `status` stays as it was. The failure count is cleared only by a successful sign-in or adminUnlockAccount, so after 15 min each further wrong password locks again."
+      "detail": "`423 ACCOUNT_LOCKED` with Retry-After; `status` stays as it was; the platform admin shows the account as `locked` (badge with the end time) and finds it with `status=locked`. The failure count is cleared only by a successful sign-in or adminUnlockAccount, so after 15 min each further wrong password locks again."
     },
     {
       "id": "disabled",
@@ -37,7 +37,7 @@
       "id": "locked",
       "label": "locked (reserved)",
       "kind": "normal",
-      "detail": "In the CHECK and types; never written. Bug: the admin Accounts filter \"Locked\" therefore always lists nothing."
+      "detail": "In the CHECK and types; never written (reserved, data-model §6). The admin's Locked badge and `status=locked` filter mean the lockout that runs now (`locked_until` ahead), not this stored value."
     },
     {
       "id": "deleted",

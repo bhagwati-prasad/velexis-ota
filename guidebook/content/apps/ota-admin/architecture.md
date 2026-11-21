@@ -216,9 +216,9 @@ ota-api/payment-states
   role cannot do, for clarity only.
 - **Uploads**: 2 MB server action body limit (Caddy caps the admin host at 10 MB); SVG and files above 1 MB refused
   before any call; the API sniffs bytes.
-- **Free text**: a note, reason or remark that holds a card number is refused at its field by the server action
-  before any call (`repo:ota/admin/src/lib/card-text.ts`, `holdsCardNumber` of `@velexis/logger`) and by the API
-  (`card_data`).
+- **Free text**: a note, reason, remark, tag or markup rule's notes for staff that holds a card number is refused at its
+  field by the server action before any call (`repo:ota/admin/src/lib/card-text.ts`, `holdsCardNumber` of
+  `@velexis/logger`) and by the API (`card_data`).
 - **Template preview** in `<iframe sandbox="" srcdoc>`: no scripts, no same-origin.
 - **Logging**: one line per SDK response (method, path without query, status, request id, duration); never bodies,
   cookies or tokens.
@@ -235,7 +235,7 @@ Read by `repo:ota/admin/src/config.ts` on first use (`@velexis/config`; real env
 | `PUBLIC_PORTAL_URL` | SSO Origin check, "back to the portal", portal links |
 | `OTA_API_URL` | SDK base URL; must be `http:` on `127.0.0.1`, `[::1]` or `localhost` |
 | `OTA_ADMIN_SERVICE_KEY` | SDK `secretKey`; secret, `^sk_[A-Za-z0-9_]{16,}$`, equal to the backend's |
-| `SENTRY_DSN` | Optional error tracking (off when empty) |
+| `SENTRY_DSN` | Validated only (an absolute URL or empty); no client sends errors until M6, so it stays empty |
 
 `next.config.ts`: `output: "standalone"`, `outputFileTracingRoot` = repo root, `serverActions.bodySizeLimit` `2mb`,
 static security headers.

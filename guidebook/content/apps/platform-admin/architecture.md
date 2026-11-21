@@ -221,9 +221,9 @@ account-states
   [[payout-account-reveal]] lives 60 s in React state only, no copy button, audited each time.
 - **Headers.** `next.config.ts`: `X-Robots-Tag: noindex`, `X-Content-Type-Options: nosniff`, `Referrer-Policy:
   same-origin`, `Permissions-Policy`; middleware: CSP with nonce, `form-action 'self'`, `frame-ancestors 'none'`
-  (`'unsafe-eval'` only in development). Caddy adds HSTS and `X-Frame-Options: DENY`, and its deferred
-  `security_headers` snippet replaces `same-origin` with `strict-origin-when-cross-origin` on the admin host (the
-  README admits it under its header table).
+  (`'unsafe-eval'` only in development). Caddy adds HSTS and `X-Frame-Options: DENY`; its `security_headers`
+  snippet sets `Referrer-Policy` only when an answer has none, so the admin's `same-origin` reaches the browser on the
+  admin host too.
 - **Redirect safety.** `safeNextPath` drops absolute, protocol-relative, backslash and dot-segment tricks.
 - **Configuration.** `server-only` on every lib module; no `NEXT_PUBLIC_` variable and no `env` block
   (`config.test.ts` fails otherwise). PCI: the console never sees card data.
@@ -242,7 +242,7 @@ account-states
 | `PLATFORM_BFF_KEY` | Secret shared with the API and the portal (≥ 32 chars of `[A-Za-z0-9_-]`); never log it |
 | `PUBLIC_PLATFORM_ADMIN_URL` | The console's own origin: redirects, sign-out Origin check |
 | `PUBLIC_PORTAL_URL` | Portal origin for the MFA and password links |
-| `SENTRY_DSN` | Optional error tracking (`https:`) |
+| `SENTRY_DSN` | Validated only (`https:` URL or empty); no client sends errors until M6, so it stays empty |
 
 The M5 [[feature-switch]]es live in the platform API (`FEATURE_STRIPE_BILLING`, `FEATURE_OWN_STRIPE`,
 `FEATURE_SETTLEMENTS`, `FEATURE_CUSTOM_DOMAINS`, …); the console only reads them from `adminGetMe`.

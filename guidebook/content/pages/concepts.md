@@ -146,7 +146,7 @@ Flights come from [[amadeus-enterprise]] (ADR-0012, `repo:docs/mvp/adr/0012-amad
   (`platform.amadeus_offices`: `available` → `assigned` → `releasing` → `retired`) at provisioning (test) or on request
   (live). Office isolation: an OTA sees only orders whose owner or queuing office is one of its own.
 - **Connections.** `platform.supplier_connections`, one per tenant and environment (`pending_verification`, `active`,
-  `invalid_credentials`, `disabled`). No free test office means the OTA activates with a `pending_verification`
+  `disabled`; `invalid_credentials` is reserved and never written). No free test office means the OTA activates with a `pending_verification`
   connection and the storefront cannot search until an admin assigns one.
 - **Tokens.** One OAuth token per credential set and environment, shared by every OTA on the shared account, cached
   encrypted in Redis `amadeus:token:<credId>:<env>` for `expires_in` − 60 s, with a 10 s refill lock

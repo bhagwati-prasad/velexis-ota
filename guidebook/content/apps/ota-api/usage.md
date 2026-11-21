@@ -375,10 +375,11 @@ tenant table, Redis key, BullMQ job or log line; `payments` keeps `card_brand`, 
 ```
 
 ```note
-**Card numbers in staff free text are refused.** Every console note, reason and remark answers `400 VALIDATION_FAILED`
-with `card_data` at its pointer ("A note never holds a card number: remove it.", or "A reason …" / "A remark …") when
-it holds a card number (12 to 19 digits, grouped by single spaces or dashes or not, that start with 2 to 6 and pass the
-Luhn check), before the idempotency key is claimed and before anything is stored or sent to Amadeus; the audit keeps one
+**Card numbers in free text are refused.** Every console note, reason, remark and tag, a markup rule's notes for staff,
+and the customer's cancellation comment, special requests and emergency-contact texts answer `400 VALIDATION_FAILED`
+with `card_data` at their pointer ("A note never holds a card number: remove it.", or "A reason …" / "A remark …" /
+"A comment …" / "An emergency contact's text …" / "A tag …") when it holds a card number (12 to 19 digits, grouped
+by single spaces or dashes or not, that start with 2 to 6 and pass the Luhn check), before the idempotency key is claimed and before anything is stored or sent to Amadeus; the audit keeps one
 `failed` row with the action and target only (`repo:ota/backend/src/common/http/card-free-text.ts`). The review-closure
 note is checked with its outcome rules, after the key is claimed. Try `4111 1111 1111 1111` as a note: `400`, and
 `SELECT summary FROM tenant_<key>.booking_events WHERE type = 'staff.note' ORDER BY created_at DESC LIMIT 1;` shows no

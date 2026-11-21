@@ -277,7 +277,7 @@ e2e-run-states
 | `MAILPIT_API_URL`, `SMTP_URL` | testing, e2e | Mailpit API and SMTP |
 | `MASTER_KEY_DIR`, `MASTER_KEY_CURRENT` | backends → `LocalFileKeyProvider` | KEK folder and current id `local:v<N>` |
 | `API_KEY_PEPPER_FILE`, `JWT_PRIVATE_KEY_FILE`, `DOCUMENT_URL_KEY_FILE` | backends → `readKeyFile` | Paths only; the config never holds key material |
-| `STORAGE_DRIVER`, `STORAGE_DIR` | OTA backend → `createStorage` | `local`. `s3` passes config validation, then the OTA API and worker fail at start with `createStorage: the s3 storage driver is not implemented yet (ADR-0017)` |
+| `STORAGE_DRIVER`, `STORAGE_DIR` | OTA backend → `createStorage` | `local` only (`STORAGE_DRIVERS = ["local"]`): the configuration check refuses `s3` (`STORAGE_DRIVER must be one of local`); `s3` is a planned driver (`PLANNED_STORAGE_DRIVERS`) that `createStorage` refuses as not implemented yet (ADR-0017) |
 | `MIGRATE_TENANT_CONCURRENCY`, `MIGRATE_TENANT_MAX_FAILURE_RATIO` | `deploy.sh` (from `migrator.env`) | Fan-out defaults 4 and 0.1 |
 | `STUB_PORT` | stub CLI | default 4900 |
 | `AMADEUS_RECORD_CLIENT_ID`, `AMADEUS_RECORD_CLIENT_SECRET`, `AMADEUS_RECORD_BASE_URL` | `record` | Developer's own test credentials; never committed |
@@ -324,7 +324,7 @@ ADR-0015's levels: unit (`*.test.ts`), integration (`test/integration/**/*.int.t
 | What gets redacted in logs | `repo:packages/logger/src/redact-paths.ts` + `repo:packages/logger/src/redaction.test.ts` |
 | What gets redacted in stored payloads | `repo:packages/logger/src/redact-payload.ts` + `repo:packages/logger/src/redact-payload.test.ts` |
 | Request id, per-request log line, health-path skipping | `repo:packages/logger/src/http.ts` |
-| Whether a free text holds a card number (`holdsCardNumber`, the console's `card_data` refusal) | `repo:packages/logger/src/card-number.ts` + `repo:packages/logger/src/card-number.test.ts` |
+| Whether a free text holds a card number (`holdsCardNumber`, the API's `card_data` refusal of console and customer free text) | `repo:packages/logger/src/card-number.ts` + `repo:packages/logger/src/card-number.test.ts` |
 | Envelope format, AAD rules | `repo:packages/crypto/src/envelope.ts`, `repo:packages/crypto/src/aad.ts` |
 | KEK loading, file rules | `repo:packages/crypto/src/local-file-key-provider.ts` |
 | Re-wrap paging / reports | `repo:packages/crypto/src/rewrap-batch.ts`; callers `repo:platform/backend/src/secrets/rewrap.command.ts`, `repo:ota/backend/src/secrets/rewrap.command.ts` |

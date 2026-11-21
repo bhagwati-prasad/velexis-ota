@@ -321,9 +321,9 @@ On the VM both processes read `/etc/velexis/platform-backend.env`; the worker ma
 | `STOREFRONT_BASE_DOMAIN`, `STOREFRONT_IPV4`, `STOREFRONT_IPV6`, `DNS_RESOLVERS` | Sub-domains, apex records, verification resolvers |
 | `AMADEUS_BASE_URL_TEST`, `AMADEUS_BASE_URL_LIVE` | Hosts to verify OTA-owned credentials (official hosts only in production) |
 | `STRIPE_SECRET_KEY`, `STRIPE_BILLING_WEBHOOK_SECRET`, `STRIPE_CONNECT_CLIENT_ID`, `STRIPE_CONNECT_WEBHOOK_SECRET` | Velexis Stripe account (required while their switches are on) |
-| `MAX_TENANTS_PER_ACCOUNT` (3) | Non-failed OTAs per account (createTenant and the owner's retry; the admin's job retry is exempt) |
+| `MAX_TENANTS_PER_ACCOUNT` (3) | Non-failed OTAs per account (createTenant and the owner's retry; the admin's job retry and billing sync's reopen after a paid Checkout are exempt) |
 | `FEATURE_STRIPE_BILLING`, `FEATURE_OWN_STRIPE`, `FEATURE_SETTLEMENTS`, `FEATURE_OWN_AMADEUS`, `FEATURE_CUSTOM_DOMAINS`, `FEATURE_LIVE_SWITCH` | Milestone [[feature-switch]]es (default `false`) |
-| `SENTRY_DSN` | Listed in `.env.example` for M6; `config.ts` does not read it and no platform code sends errors anywhere yet |
+| `SENTRY_DSN` | Not a variable of the platform backend: `config.ts` does not read it, no platform code sends errors anywhere yet (M6), and the env templates no longer list it (KI-043) |
 
 Never in environment variables: the shared Amadeus credentials (encrypted in `amadeus_accounts`), OTA credentials,
 MFA secrets.

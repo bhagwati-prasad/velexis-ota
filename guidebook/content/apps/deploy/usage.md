@@ -74,7 +74,7 @@ should happen.
 
 | Command (installed as) | What it shows or does | Try | Expected |
 |---|---|---|---|
-| `sudo velexis-deploy --status` (`repo:deploy/scripts/deploy.sh`) | Active release and each unit's `is-active` (root only) | run it | `current: /srv/velexis/releases/<sha>` (or `current: none`) and seven `velexis-… active` lines, exit 0. While a deploy runs it prints `[<time>] ERROR: another deploy is running`, exits 1 and appends that line to `deploy.log` (it takes the deploy lock) |
+| `sudo velexis-deploy --status` (`repo:deploy/scripts/deploy.sh`) | Active release and each unit's `is-active` (root only) | run it | `current: /srv/velexis/releases/<sha>` (or `current: none`) and seven `velexis-… active` lines, exit 0. It takes no lock: while a deploy runs it prints the same status, exits 0 and writes nothing to `deploy.log` |
 | `sudo velexis-deploy <sha>` | Activate `/srv/velexis/incoming/<sha>` | (CI does this) | `deploy <sha> done` in `/var/log/velexis/deploy.log`, exit 0 |
 | `sudo velexis-deploy --rollback` | Back to the previous release (snapshot units, Caddyfile, WAF, Caddy build) | after a deploy | `ROLLBACK to <sha>`; history line `<sha> rollback` |
 | `sudo velexis-run <zone> <cmd…>` (`repo:deploy/scripts/run-as.sh`) | One-off command as a zone user with the zone unit's env files and sandbox | `sudo velexis-run platform node -e "process.exit(3)"` | exit code 3; `125` = velexis-run refused |
@@ -278,9 +278,10 @@ flow-ci-pull-request
 - Add a variable to a template without adding it on the VM: the refusal must name `file:NAME`, and `/srv/velexis/current` must not move.
 - Kill a unit's health (stop PostgreSQL on a throwaway VM mid-deploy): automatic rollback, history ends with `<prev> rollback`, exit 1, the Deploy run fails.
 - Deploy the same sha twice: no installed file changes (release, snapshot, units, Caddyfile, scripts), but migrations run again as no-ops, the fan-out report is published again and every unit is restarted one by one; the log shows `release <sha> is already on the VM: units and Caddyfile from its snapshot, root scripts stay as installed` and `deploy-history` gets a line.
-- `--status` during a running deploy fails with `ERROR: another deploy is running`, exit 1, and writes that line into `deploy.log` (it takes the deploy lock before reading its arguments, `deploy.sh` lines 132-133 and 528-532). A read-only status should not need the lock.
+- `--status` during a running deploy prints the status, exits 0 and writes nothing to `deploy.log` (it runs before the deploy lock).
 - A value that still holds `CHANGE_ME` in a VM env file stops `velexis-deploy` before anything changes (`env files hold values still at the templates' CHANGE_ME placeholders: <file>:<VARIABLE> ... Nothing was changed.`) and fails `check-vm.sh --only envfiles`; a placeholder host without `CHANGE_ME` (`smtp.example.com` in `ALERT_SMTP_URL`) still deploys without a word.
-- `--rollback` (and the automatic rollback) re-checks neither the env variables of the target release's templates nor its Node major: a target whose variable you removed fails with `rollback release <sha> is not healthy either; investigate now`.
+- `--rollback` refuses, changing nothing, a target whose template names a variable you removed or one still at `CHANGE_ME` (`rollback to <sha> refused: env files lack variables of release <sha>'s templates: <file>:<VARIABLE> ...`); the automatic rollback then leaves the failed release current and names both releases; a target built on another Node major is only noted (ADR-0029 D12, KI-041).
+- A redeploy of the active release that fails its health checks rolls back nothing: `$SHA was already the active release, so nothing was rolled back and it stays current`, naming `sudo velexis-deploy --rollback` and the release before it in `deploy-history` (or saying there is none), exit 1.
 - Pruning keeps five releases by folder time; after re-deploying an old sha check that the current and `--rollback` target were not pruned (`ls /srv/velexis/releases`, `ls /var/lib/velexis/system`).
 ```
 
@@ -299,7 +300,7 @@ flow-ci-pull-request
 - `curl -H 'X-Velexis-Edge: forged' https://acme.ota.example.com/api/v1/...`: the API must see only Caddy's value (smoke test checks it once each).
 - A storefront `/api` body > 256 KB → 413; a JSON field > 128 KiB through `api.ota.example.com` → 413 (console automations by API key hit this; the OTA admin on loopback does not).
 - A WAF refusal on `/api/*` must be the JSON envelope (`FORBIDDEN` or `INVALID_REQUEST` with `requestId`), on `/checkout/*` plain text, both `no-store` and with security headers.
-- `curl -sI https://platform.example.com/verify-email` and `https://admin.platform.example.com/`: `Referrer-Policy` is Caddy's `strict-origin-when-cross-origin`, not the app's own `no-referrer` or `same-origin`, because the deferred `(security_headers)` snippet overrides it (known; only the portal's token-link refresh page and console hand-off page keep their policy, through a `<meta name="referrer">` tag).
+- `curl -sI https://platform.example.com/verify-email` and `https://admin.platform.example.com/`: `Referrer-Policy` is the app's own `no-referrer` or `same-origin`, because `(security_headers)` sets Caddy's `strict-origin-when-cross-origin` only when the answer has none (`?Referrer-Policy`); Caddy's own error pages, the maintenance page and `/health/*` 404s carry Caddy's value (`caddy-smoke.sh` checks both cases).
 - Access log lines (`journalctl -u caddy -o cat | jq .request.uri`) must never contain values of `sig`, `token`, `client_secret`, `payment_intent_client_secret`, `setup_intent_client_secret`, `code`, `state`, `q`, `email`, `customerEmail`, `travelerLastName`, `targetId`, `next` — also in `Referer` and redirect `Location`.
 - A new storefront host gets a certificate only after `GET 127.0.0.1:3100/internal/tls/ask?domain=<host>` answers 200 (`tlsask:<host>` cached 60 s in Redis); a suspended tenant's sub-domain still gets one.
 ```
@@ -311,7 +312,7 @@ flow-ci-pull-request
 - Delete `/var/lib/velexis/backup-last-success`: `backup-age` alert on the next run.
 - Change one byte of `/srv/velexis/current/storefront/checkout/pay-card.html` on a throwaway VM and run `--payment-pages`: one alert naming the page and item.
 - Break `alert.env` and make one check change state (stop a worker): the alert cannot be sent, the run logs `could not be sent; the next run sends it again`, exits 1, the state file keeps the old state and `velexis-alert@velexis-healthcheck.service` starts (it reads the same broken `alert.env`, so it fails too). With no state change nothing is sent and the run exits 0.
-- TLS expiry is checked only for the five named hosts (`tls-platform.…`, `tls-admin.…`, `tls-api.…`); on-demand storefront and custom-domain certificates have no `tls-` check (`healthcheck.sh` line 386).
+- TLS expiry is checked for the five named hosts (`tls-platform.…`, `tls-admin.…`, `tls-api.…`) and for the storefront of `HEALTHCHECK_STOREFRONT_HOST` (`demo.<STOREFRONT_BASE_DOMAIN>` by default, its own `tls-<host>` row, checked once when it equals a named host); the other on-demand storefront and custom-domain certificates have no `tls-` check, because Caddy's store sits in the caddy user's 0700 folders that the unit cannot read.
 - Every alert subject starts with `[velexis][<ALERT_HOST_LABEL>]` and no body contains a secret or an env value.
 ```
 
@@ -321,7 +322,7 @@ flow-ci-pull-request
 - A second manual backup the same day goes to `daily/<UTC stamp>/` beside the nightly set, never replacing it.
 - `velexis-restore db … --replace-live` with a wrong hostname, wrong identity or corrupt file must leave `velexis` live and connectable.
 - Security log chunks and daily files: no `[uri "…?x=value"]` value, no secret; `cat` values only from `ssh sudo login auditd egress caddy waf fail2ban aide security velexis systemd`.
-- `SENTRY_DSN` is offered by five env templates and deployment §13, but no code sends anything to Sentry (the two backends do not even read it; the three Next.js apps only validate it): setting it changes nothing.
+- Error tracking is not implemented (M6): the two backend templates no longer list `SENTRY_DSN` (neither backend reads it), and the three Next.js templates keep it marked as validated only with no client, so setting it changes nothing.
 - A call to a host missing from the allow-list fails at once with "Operation not permitted" and logs `VELEXIS-EGRESS-DENY` with the UID; 30+ in an hour → one burst alert.
 - `check-vm.sh --only firewall` must FAIL while an emergency opening exists.
 ```
