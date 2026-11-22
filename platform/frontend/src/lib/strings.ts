@@ -1262,7 +1262,7 @@ export const INVITATION_STRINGS = Object.freeze({
   signIn: "Sign in to accept",
   signUp: "Create an account",
   signUpHint:
-    "New to Velexis? Create an account with the invited address and verify it, then sign in and open the invitation link again.",
+    "New to Velexis? Create an account with the invited address. After you verify it in this browser and sign in, you come back here to accept. If you open the verification link in another browser, sign in and open the invitation link again.",
   signedInAs: (email: string) => `You are signed in as ${email}.`,
   accept: "Accept the invitation",
   /** `INVITATION_EMAIL_MISMATCH`, naming the address the invitation was sent to (PF-20 AC3). */
@@ -1281,7 +1281,7 @@ export const INVITATION_STRINGS = Object.freeze({
     "This invitation has expired, was revoked or was already used. Ask the person who invited you to send it again.",
   linkMissingTitle: "Open the link from your invitation e-mail",
   linkMissing:
-    "To accept an invitation, open the link in the invitation e-mail. This page keeps it for 15 minutes; after that, open the link again.",
+    "To accept an invitation, open the link in the invitation e-mail. This page keeps it for 15 minutes (up to 24 hours once you create an account from it); after that, open the link again.",
   unavailableTitle: "The invitation could not be loaded",
   failedTitle: "The invitation could not be accepted",
   rateLimited: "Too many attempts from your network. Wait a few minutes, then open the page again.",

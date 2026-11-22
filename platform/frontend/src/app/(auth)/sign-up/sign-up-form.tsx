@@ -44,12 +44,20 @@ function summaryOf(state: SignUpState): FormErrorItem[] {
   return items;
 }
 
+/** The props of `SignUpForm`. */
+export interface SignUpFormProps {
+  /** The address to prefill (`?email=` of an invitation's sign-up link, PFE-012). */
+  readonly email?: string | undefined;
+  /** The path to return to after the e-mail verification, sent in a hidden field; the action checks it again. */
+  readonly next?: string | undefined;
+}
+
 /**
  * The sign-up form: full name, e-mail, password and the terms checkbox. After a refused submission the fields
- * keep what was typed, except the password, which is never sent back to the browser. `email` prefills the address
- * (`?email=` of an invitation's sign-up link, PFE-012).
+ * keep what was typed, except the password, which is never sent back to the browser. `email` prefills the address;
+ * `next` is the return path the page chose (FIX-W69-SIGNUP).
  */
-export function SignUpForm({ email }: { readonly email?: string | undefined } = {}) {
+export function SignUpForm({ email, next }: SignUpFormProps = {}) {
   const [state, dispatch, pending] = useActionState(
     signUp,
     email === undefined
@@ -60,6 +68,7 @@ export function SignUpForm({ email }: { readonly email?: string | undefined } = 
   const summary = useMemo(() => summaryOf(state), [state]);
   return (
     <form action={dispatch} noValidate className="grid gap-5">
+      {next === undefined ? null : <input type="hidden" name="next" value={next} />}
       <FormErrorSummary errors={summary} />
       <FormField
         label={SIGN_UP_STRINGS.fullNameLabel}

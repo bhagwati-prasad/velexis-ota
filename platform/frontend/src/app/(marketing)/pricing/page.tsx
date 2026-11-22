@@ -1,7 +1,7 @@
 import type { components } from "@velexis/api-types/platform";
 import { Check, Minus } from "lucide-react";
 import type { Metadata } from "next";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import Link from "next/link";
 
 import { Money } from "@/components/money";
@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { createPlatformApi } from "@/lib/api";
 import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
+import { newOtaPath } from "@/lib/plan-code";
+import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
 import { PRICING_STRINGS } from "@/lib/strings";
 
 export const metadata: Metadata = { title: PRICING_STRINGS.title };
@@ -17,11 +19,12 @@ export const metadata: Metadata = { title: PRICING_STRINGS.title };
 type Plan = components["schemas"]["Plan"];
 
 /**
- * `/sign-up?plan=<code>`: sign-up with the plan the visitor chose (README §2 Public). Sign-up does not read `plan`
- * yet; the plan is chosen in the create-OTA wizard.
+ * Where "Start" leads with the plan the visitor chose (README §2 Public, FIX-W69-SIGNUP, KI-009): `/sign-up?plan=<code>`,
+ * which keeps the plan through sign-up and the e-mail verification to the create-OTA wizard, or, for a visitor with a
+ * session, the wizard itself (`/otas/new?plan=<code>`), where the plan is preselected when it is offered.
  */
-function signUpHref(code: string): string {
-  return `/sign-up?${new URLSearchParams({ plan: code }).toString()}`;
+function startHref(code: string, signedIn: boolean): string {
+  return signedIn ? newOtaPath(code) : `/sign-up?${new URLSearchParams({ plan: code }).toString()}`;
 }
 
 /**
@@ -51,7 +54,7 @@ function Included({ included, children }: { readonly included: boolean; readonly
 }
 
 /** A plan as the API returned it: prices with `Money`, the free trial, the limits and "Start". */
-function PlanCard({ plan }: { readonly plan: Plan }) {
+function PlanCard({ plan, signedIn }: { readonly plan: Plan; readonly signedIn: boolean }) {
   const nameId = `plan-${plan.code}`;
   return (
     <li className="flex">
@@ -109,7 +112,7 @@ function PlanCard({ plan }: { readonly plan: Plan }) {
           </ul>
         </div>
         <Button asChild className="mt-auto">
-          <Link href={signUpHref(plan.code)} prefetch={false}>
+          <Link href={startHref(plan.code, signedIn)} prefetch={false}>
             {PRICING_STRINGS.start}
             <span className="sr-only">{PRICING_STRINGS.startWith(plan.name)}</span>
           </Link>
@@ -122,10 +125,13 @@ function PlanCard({ plan }: { readonly plan: Plan }) {
 /**
  * `/pricing` (README §2 Public, PF-70 AC1): the plans `listPlans` returns, in its order and nothing else: name,
  * description, monthly and annual price (`Money`), free trial and limits, and "Start", which leads to
- * `/sign-up?plan=<code>`. A failed call shows the portal's message for its code, never the API's own text.
+ * `/sign-up?plan=<code>` (to `/otas/new?plan=<code>` with a session: the middleware passes on an access token cookie
+ * only while it is fresh or was just renewed). A failed call shows the portal's message for its code, never the API's
+ * own text.
  */
 export default async function PricingPage() {
-  const plans = await listPlans();
+  const [plans, cookieStore] = await Promise.all([listPlans(), cookies()]);
+  const signedIn = Boolean(cookieStore.get(ACCESS_TOKEN_COOKIE)?.value);
   return (
     <main id="main-content" tabIndex={-1} className="flex-1 focus:outline-none">
       <div className="mx-auto grid w-full max-w-5xl gap-10 px-6 py-16">
@@ -155,7 +161,7 @@ export default async function PricingPage() {
         ) : (
           <ul aria-label={PRICING_STRINGS.plansLabel} className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {plans.data.data.map((plan) => (
-              <PlanCard key={plan.code} plan={plan} />
+              <PlanCard key={plan.code} plan={plan} signedIn={signedIn} />
             ))}
           </ul>
         )}

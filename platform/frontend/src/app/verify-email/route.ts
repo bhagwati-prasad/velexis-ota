@@ -5,18 +5,29 @@
 // expired, used or unknown link. The answer carries `Referrer-Policy: no-referrer` (next.config.ts sets the same
 // for this path, because Next.js keeps its configured headers over a route handler's) and `Cache-Control: no-store`.
 // `HEAD` never consumes the token (see `HEAD` below).
+//
+// A sign-up in this browser may have kept a return path (`__Host-vxp_verify_next`, FIX-W69-SIGNUP, KI-008, KI-009:
+// the invitation's `/invitations/accept`, or `/otas/new?plan=<code>` for the plan chosen on `/pricing`). After a
+// successful verification it is checked with `safeNextPath()` again and deleted, and the browser continues to
+// `/sign-in?verified=1&next=<path>` without a session, or to the path itself with one (a page that refreshes to it,
+// `continuePage`). A missing or unsafe value changes no target; a refused or unchecked link leaves the cookie for the
+// next link. A link opened in another browser has no such cookie and keeps the targets above.
 import { NextResponse, type NextRequest } from "next/server";
 
 import { createPlatformApi } from "@/lib/api";
 import { getConfig } from "@/lib/config";
 import {
   REFRESH_TOKEN_COOKIE,
+  VERIFY_NEXT_COOKIE,
+  clearedCookie,
   clearedSessionCookies,
   refresh,
+  safeNextPath,
   sessionCookies,
   writeCookies,
   type CookieWrite,
 } from "@/lib/session";
+import { TOKEN_LINK_STRINGS } from "@/lib/strings";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +68,59 @@ function redirectTo(path: string, portalUrl: string, cookies: readonly CookieWri
   return response;
 }
 
+const HTML_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+});
+
+/** `value` as HTML text or attribute value. */
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character] ?? character);
+}
+
+/**
+ * The answer that takes a signed-in browser on to the sign-up's return path `path`: a page without script or form
+ * whose declarative refresh (and a plain link for a browser that does not follow refreshes) opens `path` on the
+ * portal's public URL, with the token-page headers and `cookies`. It is not a `303` for the reason `middleware.ts`
+ * gives for its token links: the verification link is opened from a mail client, and a redirect keeps the start of
+ * the navigation it continues, so a `SameSite=Strict` cookie (the invitation's, which `/invitations/accept` needs)
+ * would not be sent; the refresh is a new navigation this page starts, and it replaces this page in the history.
+ */
+function continuePage(path: string, portalUrl: string, cookies: readonly CookieWrite[]): NextResponse {
+  const href = escapeHtml(new URL(path, portalUrl).href);
+  const body = [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '<meta charset="utf-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    '<meta name="referrer" content="no-referrer">',
+    `<meta http-equiv="refresh" content="0; url=${href}">`,
+    `<title>${escapeHtml(TOKEN_LINK_STRINGS.title)}</title>`,
+    "</head>",
+    "<body>",
+    `<main><p><a href="${href}">${escapeHtml(TOKEN_LINK_STRINGS.continue)}</a></p></main>`,
+    "</body>",
+    "</html>",
+    "",
+  ].join("\n");
+  const response = withTokenPageHeaders(
+    new NextResponse(body, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }),
+  );
+  writeCookies(response.cookies, cookies);
+  return response;
+}
+
+/** `/sign-in?verified=1`, with the sign-up's return path as `next` when there is one. */
+function signInTarget(returnPath: string | undefined): string {
+  return returnPath === undefined
+    ? VERIFY_EMAIL_TARGETS.signIn
+    : `/sign-in?${new URLSearchParams({ verified: "1", next: returnPath }).toString()}`;
+}
+
 /**
  * `HEAD /verify-email` answers `204` without calling the API, so the token stays unused. Without this handler
  * Next.js answers `HEAD` by running `GET`, and link checkers and mail scanners send `HEAD` to the links they find:
@@ -90,23 +154,32 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  // The sign-up's return path, read once the link worked: checked again, and deleted whatever comes next, so it leads
+  // one verification only. A value safeNextPath() refuses is deleted too and changes no target.
+  const kept = request.cookies.get(VERIFY_NEXT_COOKIE);
+  const returnPath = safeNextPath(kept?.value);
+  const consumed: CookieWrite[] = kept === undefined ? [] : [clearedCookie(VERIFY_NEXT_COOKIE)];
+
   // Signed in (an unverified account may sign in, PADR-0008 item 2): its access token still says `ev: false`, which
   // the middleware would send back to /verify-pending, so the session is renewed first. The refresh re-reads the
   // account, and the single-flight `refresh()` never presents one refresh token twice.
   const refreshToken = request.cookies.get(REFRESH_TOKEN_COOKIE)?.value;
   if (!refreshToken) {
-    return redirectTo(VERIFY_EMAIL_TARGETS.signIn, portalUrl);
+    return redirectTo(signInTarget(returnPath), portalUrl, consumed);
   }
   const outcome = await refresh(refreshToken, api);
   if (outcome.ok) {
+    const renewed = [...sessionCookies(outcome.session), ...consumed];
     // A session of another, still unverified account stays on its own verify-pending page.
-    const target = outcome.session.account.emailVerified
-      ? VERIFY_EMAIL_TARGETS.dashboard
-      : VERIFY_EMAIL_TARGETS.pending;
-    return redirectTo(target, portalUrl, sessionCookies(outcome.session));
+    if (!outcome.session.account.emailVerified) {
+      return redirectTo(VERIFY_EMAIL_TARGETS.pending, portalUrl, renewed);
+    }
+    return returnPath === undefined
+      ? redirectTo(VERIFY_EMAIL_TARGETS.dashboard, portalUrl, renewed)
+      : continuePage(returnPath, portalUrl, renewed);
   }
   if (outcome.final) {
-    return redirectTo(VERIFY_EMAIL_TARGETS.signIn, portalUrl, clearedSessionCookies());
+    return redirectTo(signInTarget(returnPath), portalUrl, [...clearedSessionCookies(), ...consumed]);
   }
-  return redirectTo(VERIFY_EMAIL_TARGETS.pending, portalUrl);
+  return redirectTo(VERIFY_EMAIL_TARGETS.pending, portalUrl, consumed);
 }

@@ -1,10 +1,12 @@
 "use server";
 
 import type { PlatformErrorCode } from "@velexis/errors";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
-import { platformApi, type ApiError } from "@/lib/api";
+import { createPlatformApi, platformApi, type ApiError } from "@/lib/api";
+import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
 import {
   codePoints,
@@ -12,14 +14,25 @@ import {
   PASSWORD_MAX_LENGTH,
   passwordFieldMessage,
 } from "@/lib/password-rule";
+import {
+  INVITATION_COOKIE,
+  VERIFY_NEXT_COOKIE,
+  clearedCookie,
+  keptInvitationCookie,
+  safeNextPath,
+  verifyNextCookie,
+  writeCookies,
+  type CookieWrite,
+} from "@/lib/session";
 import { ERROR_MESSAGES, SIGN_UP_STRINGS } from "@/lib/strings";
 import { termsVersion } from "@/lib/terms";
 
 /**
  * The sign-up server action (README §2 `/sign-up`, platform/docs/flows/signup-and-create-ota.md step 1, PF-01).
  * It validates the form with Zod, calls `signUp` with the current `termsVersion`, maps the API's field errors back
- * to the form, and on `202` redirects to `/sign-up/check-email`. The answer is the same for a new and a known
- * address, so the next page is too. The password is never returned in the state, logged or kept anywhere.
+ * to the form, and on `202` keeps the form's return path for the e-mail verification (`keepReturnPath`) and redirects
+ * to `/sign-up/check-email`. The answer is the same for a new and a known address, so the next page is too. The
+ * password is never returned in the state, logged or kept anywhere.
  */
 
 /** The fields of the sign-up form. */
@@ -44,6 +57,9 @@ export interface SignUpState {
 
 /** Where a successful sign-up continues. */
 const CHECK_EMAIL_PATH = "/sign-up/check-email";
+
+/** The invitation acceptance (`invitations/accept/page.tsx`), whose sign-up link sets `next` to this path. */
+const INVITATION_ACCEPT_PATH = "/invitations/accept";
 
 /** The bounds of the platform document (`SignUpRequest`, `EmailAddress`, `Password`). */
 const FULL_NAME_MAX = 200;
@@ -131,8 +147,56 @@ function hasAny(fieldErrors: Partial<Record<SignUpField, string>>): boolean {
 }
 
 /**
+ * The invitation cookie of this browser kept until the invitation expires (at most 24 hours, `keptInvitationCookie`),
+ * so its invitee can still accept after the e-mail verification and the sign-in (KI-008); `undefined` without the
+ * cookie or when `lookupInvitation` refuses the token or cannot be reached, which leaves the cookie as it is. The
+ * lookup is public: no bearer token, only the end-user headers (as on the accept page). The token is never logged and
+ * never leaves its httpOnly `SameSite=Strict` cookie.
+ */
+async function keptInvitation(token: string | undefined): Promise<CookieWrite | undefined> {
+  if (!token) {
+    return undefined;
+  }
+  const settings = getConfig();
+  const api = createPlatformApi({
+    baseUrl: settings.PLATFORM_API_URL,
+    bffKey: settings.PLATFORM_BFF_KEY,
+    requestHeaders: await headers(),
+  });
+  const preview = await api.POST("/v1/invitations/lookup", { body: { token } });
+  return preview.error === undefined ? keptInvitationCookie(token, preview.data.expiresAt) : undefined;
+}
+
+/**
+ * Keeps the return path of a successful sign-up for the e-mail verification in this browser (FIX-W69-SIGNUP, KI-008,
+ * KI-009): `__Host-vxp_verify_next` (httpOnly, `SameSite=Lax`, 24 hours, `verifyNextCookie`) with the path that
+ * `safeNextPath()` accepts, which `/verify-email` continues to. A sign-up from an invitation (`/invitations/accept`)
+ * also keeps the invitation's own cookie as long (`keptInvitation`). Without a safe path an older return path of this
+ * browser is deleted, so the latest sign-up decides where its verification leads.
+ */
+async function keepReturnPath(next: string | undefined): Promise<void> {
+  const cookieStore = await cookies();
+  const returnCookie = verifyNextCookie(next);
+  if (returnCookie === undefined) {
+    if (cookieStore.get(VERIFY_NEXT_COOKIE) !== undefined) {
+      writeCookies(cookieStore, [clearedCookie(VERIFY_NEXT_COOKIE)]);
+    }
+    return;
+  }
+  const writes: CookieWrite[] = [returnCookie];
+  if (returnCookie.value.split(/[?#]/, 1)[0] === INVITATION_ACCEPT_PATH) {
+    const invitation = await keptInvitation(cookieStore.get(INVITATION_COOKIE)?.value);
+    if (invitation !== undefined) {
+      writes.push(invitation);
+    }
+  }
+  writeCookies(cookieStore, writes);
+}
+
+/**
  * Creates an account (`POST /v1/auth/sign-up`) from the fields `fullName`, `email`, `password` and `acceptTerms`
- * (a checkbox). Redirects to `/sign-up/check-email` on success; otherwise returns the problems for the form.
+ * (a checkbox); the hidden field `next` is the return path after the e-mail verification, kept only when it is a safe
+ * relative path. Redirects to `/sign-up/check-email` on success; otherwise returns the problems for the form.
  */
 export async function signUp(_previous: SignUpState, formData: FormData): Promise<SignUpState> {
   const values = {
@@ -140,6 +204,7 @@ export async function signUp(_previous: SignUpState, formData: FormData): Promis
     email: text(formData, "email"),
     acceptTerms: formData.get("acceptTerms") === "on",
   };
+  const next = safeNextPath(text(formData, "next"));
   const parsed = SIGN_UP_FORM.safeParse({ ...values, password: text(formData, "password") });
   if (!parsed.success) {
     const fieldErrors: Partial<Record<SignUpField, string>> = {};
@@ -173,5 +238,6 @@ export async function signUp(_previous: SignUpState, formData: FormData): Promis
       values,
     };
   }
+  await keepReturnPath(next);
   redirect(CHECK_EMAIL_PATH);
 }

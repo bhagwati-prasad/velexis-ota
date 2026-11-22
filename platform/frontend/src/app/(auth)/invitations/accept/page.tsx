@@ -286,7 +286,8 @@ function SignedIn({
  * reaches a `Referer` or the rendered page. The page itself never reads `?token=`.
  *
  * With the cookie it shows the invitation (`lookupInvitation`: OTA, role, inviter, invited address, expiry). A visitor
- * who is not signed in gets sign-in and sign-up links with the invited address prefilled and `next` back here; a
+ * who is not signed in gets sign-in and sign-up links with the invited address prefilled and `next` back here (a
+ * sign-up keeps `next` and this cookie through the e-mail verification in the same browser, FIX-W69-SIGNUP); a
  * signed-in visitor gets "Accept" (`acceptInvitation`, then the OTA's dashboard), unless their account has another
  * address than the invited one (the message names the invited address and offers to sign out and sign in with it) or
  * an unverified one. Without the cookie, or with a token the API refuses, the page explains what to do.

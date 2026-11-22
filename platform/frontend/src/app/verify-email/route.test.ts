@@ -263,6 +263,169 @@ describe("GET /verify-email", () => {
   });
 });
 
+// ---- The sign-up's return path (FIX-W69-SIGNUP, KI-008, KI-009) -------------------------------------------------
+
+describe("GET /verify-email with the return path a sign-up kept in this browser", () => {
+  const RETURN_COOKIE = "__Host-vxp_verify_next";
+
+  /** The cookie as the browser sends it back: the value the portal wrote, URL-encoded as Next.js writes it. */
+  function kept(path: string, others: Record<string, string> = {}): Record<string, string> {
+    return { [RETURN_COOKIE]: encodeURIComponent(path), ...others };
+  }
+
+  /** The `Set-Cookie` line that deletes the return path, with the attributes of a `__Host-` cookie. */
+  function deletion(cookies: readonly string[]): string | undefined {
+    return cookies.find((cookie) => cookie.startsWith(`${RETURN_COOKIE}=`));
+  }
+
+  function expectDeleted(cookies: readonly string[]): void {
+    expect(deletion(cookies)).toMatch(
+      /^__Host-vxp_verify_next=; Path=\/; (Expires=[^;]+; )?Max-Age=0; Secure; HttpOnly; SameSite=lax$/i,
+    );
+  }
+
+  it.each([
+    ["the invitation", "/invitations/accept", "next=%2Finvitations%2Faccept"],
+    [
+      "the wizard with the plan chosen on /pricing",
+      "/otas/new?plan=growth",
+      "next=%2Fotas%2Fnew%3Fplan%3Dgrowth",
+    ],
+  ])(
+    "[FIX-W69-SIGNUP AC1] without a session continues to sign-in with %s as next, and deletes the cookie",
+    async (_case, path, next) => {
+      api({ verify: verifiedAnswer });
+
+      const response = await GET(verifyRequest(`?token=${TOKEN}`, { cookies: kept(path) }));
+
+      expect(expectCleanRedirect(response)).toBe(`https://platform.example.com/sign-in?verified=1&${next}`);
+      const cookies = response.headers.getSetCookie();
+      expect(cookies).toHaveLength(1);
+      expectDeleted(cookies);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ["an absolute URL", "https://evil.example/x"],
+    ["a protocol-relative path", "//evil.example"],
+    ["a backslash path", "/\\evil.example"],
+    ["dot segments to another host", "/a/..//evil.example"],
+    ["an empty value", ""],
+  ])(
+    "[FIX-W69-SIGNUP AC1] ignores %s: the target stays /sign-in?verified=1, and the cookie is deleted",
+    async (_case, value) => {
+      api({ verify: verifiedAnswer });
+
+      const response = await GET(verifyRequest(`?token=${TOKEN}`, { cookies: kept(value) }));
+
+      expect(expectCleanRedirect(response)).toBe("https://platform.example.com/sign-in?verified=1");
+      expectDeleted(response.headers.getSetCookie());
+    },
+  );
+
+  it("[FIX-W69-SIGNUP AC2] with a signed-in, now verified session continues to the return path through a page that refreshes to it, so SameSite=Strict cookies go with it", async () => {
+    const refreshToken = uniqueRefreshToken();
+    api({ verify: verifiedAnswer, refresh: () => sessionAnswer(true) });
+
+    const response = await GET(
+      verifyRequest(`?token=${TOKEN}`, {
+        cookies: kept("/invitations/accept", { "__Host-vxp_rt": refreshToken }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    const html = await response.text();
+    expect(html).toContain(
+      '<meta http-equiv="refresh" content="0; url=https://platform.example.com/invitations/accept">',
+    );
+    expect(html).toContain('<a href="https://platform.example.com/invitations/accept">');
+    expect(html).toContain('<meta name="referrer" content="no-referrer">');
+    expect(html).not.toMatch(/<script|<form/i);
+    expect(html).not.toContain(TOKEN);
+    // The renewed session, and the return path deleted.
+    const cookies = response.headers.getSetCookie();
+    expect(cookies).toHaveLength(3);
+    expect(cookies[0]).toMatch(/^__Host-vxp_at=renewed-access-token; Path=\/; /);
+    expect(cookies[1]).toMatch(/^__Host-vxp_rt=rotated-refresh-token; Path=\/; /);
+    expectDeleted(cookies);
+  });
+
+  it("[FIX-W69-SIGNUP AC1] escapes the return path in the page it answers to a signed-in session", async () => {
+    api({ verify: verifiedAnswer, refresh: () => sessionAnswer(true) });
+
+    const response = await GET(
+      verifyRequest(`?token=${TOKEN}`, {
+        cookies: kept('/otas/new?plan=growth&x="><b>', { "__Host-vxp_rt": uniqueRefreshToken() }),
+      }),
+    );
+
+    const html = await response.text();
+    expect(html).not.toContain("<b>");
+    expect(html).toContain("https://platform.example.com/otas/new?plan=growth&amp;x=%22%3E%3Cb%3E");
+
+    // The URL parser keeps an apostrophe in a path as it is: the page escapes it too.
+    api({ verify: verifiedAnswer, refresh: () => sessionAnswer(true) });
+    const quoted = await GET(
+      verifyRequest(`?token=${TOKEN}`, {
+        cookies: kept("/it's", { "__Host-vxp_rt": uniqueRefreshToken() }),
+      }),
+    );
+    const quotedHtml = await quoted.text();
+    expect(quotedHtml).toContain('<a href="https://platform.example.com/it&#39;s">');
+    expect(quotedHtml).not.toContain("it's");
+  });
+
+  it("[FIX-W69-SIGNUP AC1] a session that can no longer be renewed goes to sign-in with the return path; one of another, unverified account stays on /verify-pending", async () => {
+    api({ verify: verifiedAnswer, refresh: () => errorAnswer("REFRESH_TOKEN_INVALID", 401) });
+    let response = await GET(
+      verifyRequest(`?token=${TOKEN}`, {
+        cookies: kept("/invitations/accept", { "__Host-vxp_rt": uniqueRefreshToken() }),
+      }),
+    );
+    expect(expectCleanRedirect(response)).toBe(
+      "https://platform.example.com/sign-in?verified=1&next=%2Finvitations%2Faccept",
+    );
+    let cookies = response.headers.getSetCookie();
+    expect(cookies).toHaveLength(3);
+    expectDeleted(cookies);
+
+    api({ verify: verifiedAnswer, refresh: () => sessionAnswer(false) });
+    response = await GET(
+      verifyRequest(`?token=${TOKEN}`, {
+        cookies: kept("/invitations/accept", { "__Host-vxp_rt": uniqueRefreshToken() }),
+      }),
+    );
+    expect(expectCleanRedirect(response)).toBe("https://platform.example.com/verify-pending");
+    cookies = response.headers.getSetCookie();
+    expect(cookies).toHaveLength(3);
+    expectDeleted(cookies);
+  });
+
+  it.each([
+    ["an invalid link", () => errorAnswer("VERIFICATION_TOKEN_INVALID", 400), "/verify-pending?error=token"],
+    [
+      "a link the API could not check",
+      () => errorAnswer("SERVICE_UNAVAILABLE", 503),
+      "/verify-pending?error=unavailable",
+    ],
+  ])(
+    "[FIX-W69-SIGNUP AC1] keeps the return path after %s, for the next link",
+    async (_case, answer, target) => {
+      api({ verify: answer });
+
+      const response = await GET(verifyRequest(`?token=${TOKEN}`, { cookies: kept("/invitations/accept") }));
+
+      expect(expectCleanRedirect(response)).toBe(`https://platform.example.com${target}`);
+      expect(response.headers.getSetCookie()).toEqual([]);
+    },
+  );
+});
+
 /**
  * The headers of next.config.ts that Next.js sets on the response for `path` before the route handler runs: the
  * rules loaded and compiled to the regular expressions `next build` writes to routes-manifest.json. Next.js keeps

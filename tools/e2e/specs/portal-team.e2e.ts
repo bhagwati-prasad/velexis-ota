@@ -192,17 +192,18 @@ test("the invited person opens the link and signs up with the invited address [P
     origin: PORTAL_URL,
   });
   await invited.goto(verify.href);
-  await invited.waitForURL("/sign-in?verified=1");
+  // The sign-up kept the way back to the invitation for the verification in this browser (FIX-W69-SIGNUP, KI-008).
+  await invited.waitForURL("/sign-in?verified=1&next=%2Finvitations%2Faccept");
   await invited.getByLabel("E-mail address").fill(invitee.email);
   await invited.getByLabel("Password", { exact: true }).fill(invitee.password);
   await invited.getByRole("button", { name: "Sign in" }).click();
-  await invited.waitForURL("/dashboard");
-  await expect(invited.getByRole("heading", { name: "You have no OTA yet" })).toBeVisible();
-  await expectAccessible(invited, "My OTAs");
+  await invited.waitForURL("/invitations/accept");
+  await expect(invited.getByText(`You are signed in as ${invitee.email}.`)).toBeVisible();
+  await expectAccessible(invited, "Your invitation");
 });
 
 test("the invited person accepts and joins the OTA with the invited role [PFE-015 AC1, AC2]", async () => {
-  // As the accept page told them: open the link from the e-mail again, now signed in.
+  // Opening the link from the e-mail again, now signed in, shows the same invitation (the way from another browser).
   await invited.goto((await invitationLink()).href);
   await invited.waitForURL("/invitations/accept");
   await expect(invited.getByText(`You are signed in as ${invitee.email}.`)).toBeVisible();

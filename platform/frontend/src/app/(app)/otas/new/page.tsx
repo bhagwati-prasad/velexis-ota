@@ -12,6 +12,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { createPlatformApi, platformApi } from "@/lib/api";
 import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
+import { newOtaPath, planCodeOf } from "@/lib/plan-code";
 import {
   COUNTRY_CODES,
   CURRENCY_CODES,
@@ -51,7 +52,16 @@ interface PlanStep {
   readonly unavailable?: string;
 }
 
-function planStep(loaded: readonly Plan[] | undefined, stripeBilling: boolean): PlanStep {
+type Query = Record<string, string | string[] | undefined>;
+type SearchParams = Promise<Query>;
+
+const NO_QUERY: Query = Object.freeze({});
+
+/**
+ * The plan step. `requested` is the plan chosen on `/pricing` (`?plan=<code>`, KI-009): from M5 it is the default when
+ * the step offers it; otherwise the default stays as it was (before M5 always early access).
+ */
+function planStep(loaded: readonly Plan[] | undefined, stripeBilling: boolean, requested?: string): PlanStep {
   const plans = loaded === undefined ? [] : wizardPlans(loaded, stripeBilling);
   if (!stripeBilling) {
     // Before M5 the API puts every OTA on early access (PF-10 AC3); a failed listPlans hides only its details.
@@ -62,9 +72,10 @@ function planStep(loaded: readonly Plan[] | undefined, stripeBilling: boolean): 
       ...(plans.length === 0 ? { unavailable: WIZARD_STRINGS.plansUnavailable } : {}),
     };
   }
+  const offered = plans.some((plan) => plan.code === requested) ? requested : undefined;
   return {
     plans,
-    defaultPlanCode: plans.length === 1 ? (plans[0]?.code ?? "") : "",
+    defaultPlanCode: offered ?? (plans.length === 1 ? (plans[0]?.code ?? "") : ""),
     ...(plans.length === 0 ? { unavailable: WIZARD_STRINGS.plansMissing } : {}),
   };
 }
@@ -73,15 +84,21 @@ function planStep(loaded: readonly Plan[] | undefined, stripeBilling: boolean): 
  * `/otas/new` (README §2 Signed in; flow signup-and-create-ota.md step 5; PF-10): the create-OTA wizard for a
  * verified account. The page loads the account (`getMe`: the M5 switch and the time zone to preselect) and the
  * public plans, builds the country, currency and time zone lists, and makes the wizard's one `Idempotency-Key`
- * (a UUID): a new one each time the page opens, the same one for every submit of that wizard (PF-10 AC2).
+ * (a UUID): a new one each time the page opens, the same one for every submit of that wizard (PF-10 AC2). `plan` is the
+ * plan chosen on `/pricing` (a well-formed code only, FIX-W69-SIGNUP, KI-009), preselected when the plan step offers it.
  */
-export default async function NewOtaPage() {
+export default async function NewOtaPage({ searchParams }: { readonly searchParams?: SearchParams }) {
   const settings = getConfig();
   const api = await platformApi();
-  const [me, plans] = await Promise.all([api.GET("/v1/me"), listPlans()]);
+  const [me, plans, params] = await Promise.all([
+    api.GET("/v1/me"),
+    listPlans(),
+    searchParams ?? Promise.resolve(NO_QUERY),
+  ]);
+  const requestedPlan = planCodeOf(params.plan);
   if (me.error !== undefined) {
     if (SESSION_ENDED.has(me.error.code)) {
-      redirect(`/sign-in?${new URLSearchParams({ next: "/otas/new" }).toString()}`);
+      redirect(`/sign-in?${new URLSearchParams({ next: newOtaPath(requestedPlan) }).toString()}`);
     }
     return (
       <div className="mx-auto grid max-w-2xl gap-6">
@@ -104,7 +121,7 @@ export default async function NewOtaPage() {
   const defaultTimeZone = timeZones.some((zone) => zone.value === account.timeZone)
     ? account.timeZone
     : FALLBACK_TIME_ZONE;
-  const plan = planStep(plans.data?.data, account.features.stripeBilling);
+  const plan = planStep(plans.data?.data, account.features.stripeBilling, requestedPlan);
 
   return (
     <div className="mx-auto grid max-w-2xl gap-8">

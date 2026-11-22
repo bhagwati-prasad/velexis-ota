@@ -25,10 +25,19 @@ export const REFRESH_TOKEN_COOKIE = "__Host-vxp_rt";
 export const MFA_CHALLENGE_COOKIE = "__Host-vxp_mfa";
 /** A password reset token moved out of the URL (15 minutes). */
 export const PASSWORD_RESET_COOKIE = "__Host-vxp_reset";
-/** An invitation token moved out of the URL (15 minutes). */
+/**
+ * An invitation token moved out of the URL (15 minutes; a sign-up started from the invitation keeps it until the
+ * invitation expires, at most 24 hours: `keptInvitationCookie`).
+ */
 export const INVITATION_COOKIE = "__Host-vxp_invite";
 /** A validated relative return path (15 minutes). */
 export const NEXT_PATH_COOKIE = "__Host-vxp_next";
+/**
+ * The validated relative return path of a sign-up, kept for the e-mail verification that follows it (at most 24 hours,
+ * the verification link's lifetime): `/verify-email` continues there instead of to `/dashboard` (FIX-W69-SIGNUP,
+ * KI-008, KI-009). It holds a path only, never a token, an address or other personal data.
+ */
+export const VERIFY_NEXT_COOKIE = "__Host-vxp_verify_next";
 /**
  * The OTA whose Stripe Connect an owner or admin started (its `ten_` id, not a secret; 1 hour): Stripe's redirect back
  * to `/connect/stripe/callback` names no OTA, and a refused callback returns to that OTA's payments page (PFE-024).
@@ -41,12 +50,16 @@ const REFRESH_TOKEN_MAX_AGE = 30 * 24 * 60 * MINUTE;
 const MFA_CHALLENGE_MAX_AGE = 5 * MINUTE;
 const TOKEN_MOVE_MAX_AGE = 15 * MINUTE;
 const STRIPE_CONNECT_MAX_AGE = 60 * MINUTE;
+/** The lifetime of the link in the verification e-mail (platform document, `signUp`: "works once within 24 hours"). */
+export const VERIFY_NEXT_MAX_AGE = 24 * 60 * MINUTE;
 
 /**
  * `SameSite=Strict` for the cookies of a flow that starts from a link in an e-mail or another site (MFA, reset,
  * invitation): they are never sent with a cross-site request. The session and return-path cookies are `Lax`, so a
  * person who follows a link to the portal arrives signed in; so is the Stripe Connect cookie, because Stripe sends the
- * browser back to the callback with a top-level navigation from its own site.
+ * browser back to the callback with a top-level navigation from its own site. The sign-up's return path is `Lax` for
+ * the same reason: the verification link is opened from a mail client, a navigation another site starts, which would
+ * not carry a `Strict` cookie to `/verify-email`.
  */
 const SAME_SITE = {
   [ACCESS_TOKEN_COOKIE]: "lax",
@@ -55,6 +68,7 @@ const SAME_SITE = {
   [PASSWORD_RESET_COOKIE]: "strict",
   [INVITATION_COOKIE]: "strict",
   [NEXT_PATH_COOKIE]: "lax",
+  [VERIFY_NEXT_COOKIE]: "lax",
   [STRIPE_CONNECT_COOKIE]: "lax",
 } as const;
 
@@ -154,6 +168,35 @@ export function invitationCookie(token: string): CookieWrite {
 export function nextPathCookie(next: string | null | undefined): CookieWrite | undefined {
   const path = safeNextPath(next);
   return path === undefined ? undefined : portalCookie(NEXT_PATH_COOKIE, path, TOKEN_MOVE_MAX_AGE);
+}
+
+/**
+ * The return path of a sign-up, for the e-mail verification that follows it in the same browser: 24 hours, the
+ * verification link's lifetime; `undefined` when `next` is not a safe relative path, so only a path that
+ * `safeNextPath()` accepts is ever written (FIX-W69-SIGNUP).
+ */
+export function verifyNextCookie(next: string | null | undefined): CookieWrite | undefined {
+  const path = safeNextPath(next);
+  return path === undefined ? undefined : portalCookie(VERIFY_NEXT_COOKIE, path, VERIFY_NEXT_MAX_AGE);
+}
+
+/**
+ * The invitation token of a sign-up started from `/invitations/accept`, kept beyond `invitationCookie`'s 15 minutes so
+ * the invitee can still accept after the e-mail verification and the sign-in (FIX-W69-SIGNUP, KI-008): until the
+ * invitation expires (`expiresAt` of `lookupInvitation`), and never longer than the sign-up's return path (24 hours).
+ * The cookie keeps its other attributes: httpOnly, `Secure`, `SameSite=Strict`. `undefined` when `expiresAt` cannot be
+ * read or has passed, so the cookie keeps the lifetime it has.
+ */
+export function keptInvitationCookie(
+  token: string,
+  expiresAt: string,
+  now: number = Date.now(),
+): CookieWrite | undefined {
+  const seconds = Math.floor((Date.parse(expiresAt) - now) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 1) {
+    return undefined;
+  }
+  return portalCookie(INVITATION_COOKIE, token, Math.min(seconds, VERIFY_NEXT_MAX_AGE));
 }
 
 /**

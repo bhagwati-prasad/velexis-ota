@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Component, type ReactNode } from "react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Component, Suspense, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---- Mocks: the request scope of Next.js, the configuration and the platform API ---------------------------------
@@ -48,7 +48,13 @@ import { continueAfterVerification, resendVerificationLink } from "@/app/(auth)/
 import VerifyPendingPage from "@/app/(auth)/verify-pending/page";
 import { fieldId } from "@/components/form-field";
 import type { ApiError } from "@/lib/api";
-import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, type PortalSession } from "@/lib/session";
+import {
+  ACCESS_TOKEN_COOKIE,
+  INVITATION_COOKIE,
+  REFRESH_TOKEN_COOKIE,
+  VERIFY_NEXT_COOKIE,
+  type PortalSession,
+} from "@/lib/session";
 import { ERROR_MESSAGES, SIGN_UP_STRINGS, VERIFICATION_STRINGS } from "@/lib/strings";
 import { termsVersion } from "@/lib/terms";
 
@@ -340,6 +346,8 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
   it("[PFE-005 AC1] redirects to /sign-up/check-email when the API accepts the sign-up", async () => {
     // The redirect error of the action reaches the boundary; React reports it on the console.
     vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // The action reads this browser's cookies once the API accepted the sign-up (FIX-W69-SIGNUP).
+    const store = cookieStore();
     api.POST.mockResolvedValue({ data: { status: "verification_sent" } });
     render(
       <RedirectBoundary>
@@ -363,6 +371,8 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
         termsVersion,
       },
     });
+    // Without a return path nothing is kept for the verification.
+    expect(store.set).not.toHaveBeenCalled();
   });
 
   it("asks for every missing field and the terms before calling the API", async () => {
@@ -397,6 +407,7 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
   });
 
   it("[PFE-029 AC1] counts the full name in UTF-16 units, as its field's maxLength does, and checks the trimmed address", async () => {
+    cookieStore();
     api.POST.mockResolvedValue({ data: { status: "verification_sent" } });
     const idle: SignUpState = {
       status: "idle",
@@ -479,6 +490,234 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     expect(screen.getByRole("link", { name: SIGN_UP_STRINGS.signIn }).getAttribute("href")).toBe("/sign-in");
     expect(input(SIGN_UP_STRINGS.passwordLabel).getAttribute("autocomplete")).toBe("new-password");
     expect(input(SIGN_UP_STRINGS.passwordLabel).getAttribute("type")).toBe("password");
+  });
+});
+
+// ---- The return path of a sign-up (FIX-W69-SIGNUP, KI-008, KI-009) ----------------------------------------------
+
+describe("/sign-up: the return path kept for the e-mail verification", () => {
+  const IDLE: SignUpState = {
+    status: "idle",
+    fieldErrors: {},
+    values: { fullName: "", email: "", acceptTerms: false },
+  };
+  /** An invitation token as the invitation cookie holds it: a dummy, never a real one. */
+  const INVITATION_TOKEN = "Inv1tationTokenDummy0123456789abcdefghijkl";
+  const ACCEPTED = { data: { status: "verification_sent" } };
+  const HOUR_MS = 3_600_000;
+
+  /** Submits a valid sign-up with the hidden field `next` (when given) straight to the action. */
+  function submitted(next?: string): Promise<SignUpState> {
+    return signUp(
+      IDLE,
+      formData({
+        fullName: "Anna Berg",
+        email: "anna.berg@example.com",
+        password: LONG_PASSWORD,
+        acceptTerms: "on",
+        ...(next === undefined ? {} : { next }),
+      }),
+    );
+  }
+
+  /** The answer of `lookupInvitation` for an invitation that expires `expiresInMs` from now. */
+  function preview(expiresInMs: number) {
+    return {
+      data: {
+        tenantName: "Nordic Fares",
+        role: "agent",
+        email: "anna.berg@example.com",
+        inviterName: "Olga Owner",
+        expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
+      },
+    };
+  }
+
+  /** The API: `signUp` accepts; `lookupInvitation` answers `lookup` (and fails the test when it is not expected). */
+  function answers(lookup?: () => unknown): void {
+    api.POST.mockImplementation((path: string) => {
+      if (path === "/v1/auth/sign-up") {
+        return Promise.resolve(ACCEPTED);
+      }
+      if (path === "/v1/invitations/lookup" && lookup !== undefined) {
+        return Promise.resolve(lookup());
+      }
+      return Promise.reject(new Error(`unexpected call POST ${path}`));
+    });
+  }
+
+  /** The cookies the action wrote, by name: [value, options]. */
+  function written(store: ReturnType<typeof cookieStore>): Record<string, [string, unknown]> {
+    return Object.fromEntries(
+      store.set.mock.calls.map(([name, value, options]: unknown[]) => [name, [value, options]]),
+    ) as Record<string, [string, unknown]>;
+  }
+
+  it("[FIX-W69-SIGNUP AC1] keeps a safe next in __Host-vxp_verify_next (HttpOnly, Secure, SameSite=Lax, Path=/, 24 hours) once the API accepted the sign-up", async () => {
+    const store = cookieStore();
+    answers();
+    await expect(submitted("/otas/new?plan=growth")).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+
+    expect(written(store)).toEqual({
+      [VERIFY_NEXT_COOKIE]: [
+        "/otas/new?plan=growth",
+        { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 24 * 3600 },
+      ],
+    });
+    // Only the path: the request to the API carries no `next`, and nothing else is kept.
+    expect(api.POST).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(api.POST.mock.calls)).not.toContain("plan=growth");
+  });
+
+  it("[FIX-W69-SIGNUP AC1] keeps nothing when the sign-up is refused, by the form or by the API", async () => {
+    const store = cookieStore();
+    const refused = await signUp(
+      IDLE,
+      formData({
+        fullName: "",
+        email: "anna.berg@example.com",
+        password: LONG_PASSWORD,
+        next: "/invitations/accept",
+      }),
+    );
+    expect(refused.status).toBe("failed");
+    api.POST.mockResolvedValue(apiError("RATE_LIMITED", 429));
+    expect((await submitted("/invitations/accept")).code).toBe("RATE_LIMITED");
+
+    expect(store.set).not.toHaveBeenCalled();
+    expect(navigation.redirect).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W69-SIGNUP AC1] drops a next that leaves the portal, and deletes an older return path when the sign-up has none", async () => {
+    for (const unsafe of [
+      "https://evil.example/x",
+      "//evil.example",
+      "/\\evil.example",
+      "/a/..//evil.example",
+    ]) {
+      const store = cookieStore();
+      answers();
+      await expect(submitted(unsafe)).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+      expect(store.set).not.toHaveBeenCalled();
+    }
+
+    // The latest sign-up of this browser decides where its verification leads: no return path deletes the older one.
+    const store = cookieStore({ [VERIFY_NEXT_COOKIE]: "/invitations/accept" });
+    answers();
+    await expect(submitted()).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    expect(written(store)).toEqual({
+      [VERIFY_NEXT_COOKIE]: ["", { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 0 }],
+    });
+  });
+
+  it("[FIX-W69-SIGNUP AC2] a sign-up from the invitation keeps its cookie until the invitation expires, at most 24 hours, SameSite=Strict", async () => {
+    // An invitation that lives for days: the cookie lives as long as the return path.
+    let store = cookieStore({ [INVITATION_COOKIE]: INVITATION_TOKEN });
+    answers(() => preview(6 * 24 * HOUR_MS));
+    await expect(submitted("/invitations/accept")).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    expect(written(store)).toEqual({
+      [VERIFY_NEXT_COOKIE]: [
+        "/invitations/accept",
+        { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 24 * 3600 },
+      ],
+      [INVITATION_COOKIE]: [
+        INVITATION_TOKEN,
+        { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: 24 * 3600 },
+      ],
+    });
+    // lookupInvitation is public: the token in its body only (the end-user headers come from the request).
+    expect(api.POST).toHaveBeenLastCalledWith("/v1/invitations/lookup", {
+      body: { token: INVITATION_TOKEN },
+    });
+
+    // An invitation that expires in two hours: the cookie expires with it.
+    store = cookieStore({ [INVITATION_COOKIE]: INVITATION_TOKEN });
+    answers(() => preview(2 * HOUR_MS));
+    await expect(submitted("/invitations/accept")).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    const [, options] = written(store)[INVITATION_COOKIE] ?? [];
+    const maxAge = (options as { maxAge: number }).maxAge;
+    expect(maxAge).toBeLessThanOrEqual(2 * 3600);
+    expect(maxAge).toBeGreaterThan(2 * 3600 - 60);
+  });
+
+  it("[FIX-W69-SIGNUP AC2] leaves the invitation cookie alone when the API refuses it, when there is none, or for another return path", async () => {
+    let store = cookieStore({ [INVITATION_COOKIE]: INVITATION_TOKEN });
+    answers(() => apiError("INVITATION_INVALID", 400));
+    await expect(submitted("/invitations/accept")).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    expect(Object.keys(written(store))).toEqual([VERIFY_NEXT_COOKIE]);
+
+    store = cookieStore();
+    api.POST.mockClear();
+    answers();
+    await expect(submitted("/invitations/accept")).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    expect(Object.keys(written(store))).toEqual([VERIFY_NEXT_COOKIE]);
+    expect(api.POST.mock.calls.map(([path]: unknown[]) => path)).toEqual(["/v1/auth/sign-up"]);
+
+    store = cookieStore({ [INVITATION_COOKIE]: INVITATION_TOKEN });
+    api.POST.mockClear();
+    answers();
+    await expect(submitted("/otas/new?plan=growth")).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    expect(Object.keys(written(store))).toEqual([VERIFY_NEXT_COOKIE]);
+    // answers() without a lookup fails any lookupInvitation call: none was made.
+    expect(api.POST.mock.calls.map(([path]: unknown[]) => path)).not.toContain("/v1/invitations/lookup");
+  });
+});
+
+describe("/sign-up: the page's return path", () => {
+  /** The page for `query`, rendered as Next.js passes the query (a promise `use()` reads). */
+  async function renderSignUp(query: Record<string, string | string[]>): Promise<void> {
+    await act(async () => {
+      render(
+        <Suspense fallback={null}>
+          <SignUpPage searchParams={Promise.resolve(query)} />
+        </Suspense>,
+      );
+      await Promise.resolve();
+    });
+    await screen.findByLabelText(SIGN_UP_STRINGS.emailLabel, {}, ACTION_WAIT);
+  }
+
+  function hiddenNext(): string | undefined {
+    return document.querySelector<HTMLInputElement>('form input[type="hidden"][name="next"]')?.value;
+  }
+
+  function signInHref(): string | null {
+    return screen.getByRole("link", { name: SIGN_UP_STRINGS.signIn }).getAttribute("href");
+  }
+
+  it("[FIX-W69-SIGNUP AC3] carries the plan chosen on /pricing as next=/otas/new?plan=<code>, in the form and the sign-in link", async () => {
+    await renderSignUp({ plan: "growth" });
+    expect(hiddenNext()).toBe("/otas/new?plan=growth");
+    expect(signInHref()).toBe(`/sign-in?next=${encodeURIComponent("/otas/new?plan=growth")}`);
+  });
+
+  it("[FIX-W69-SIGNUP AC3] drops a plan that is not a well-formed plan code", async () => {
+    for (const plan of [
+      "Growth",
+      "g",
+      "growth&next=//evil.example",
+      "../admin",
+      `p${"x".repeat(40)}`,
+      ["growth", "scale"],
+    ]) {
+      cleanup();
+      await renderSignUp({ plan });
+      expect(hiddenNext()).toBeUndefined();
+      expect(signInHref()).toBe("/sign-in");
+    }
+  });
+
+  it("[FIX-W69-SIGNUP AC2] keeps the invitation's next in the form, and a next wins over a plan", async () => {
+    await renderSignUp({ email: "anna.berg@example.com", next: "/invitations/accept", plan: "growth" });
+    expect(hiddenNext()).toBe("/invitations/accept");
+    expect(signInHref()).toBe(
+      `/sign-in?next=${encodeURIComponent("/invitations/accept")}&email=${encodeURIComponent("anna.berg@example.com")}`,
+    );
+
+    // A next that leaves the portal is dropped, so the plan applies.
+    cleanup();
+    await renderSignUp({ next: "//evil.example", plan: "growth" });
+    expect(hiddenNext()).toBe("/otas/new?plan=growth");
   });
 });
 

@@ -115,6 +115,14 @@ function signedInRequest(): void {
   });
 }
 
+/** The request scope of a visitor without a session: the forwarded address and the user agent, no cookie. */
+function visitorRequest(): void {
+  nextHeaders.headers.mockResolvedValue(
+    new Headers({ "x-forwarded-for": FORWARDED_FOR, "user-agent": USER_AGENT }),
+  );
+  nextHeaders.cookies.mockResolvedValue({ get: () => undefined, set: vi.fn() });
+}
+
 async function renderPricing(): Promise<void> {
   render(<MarketingLayout>{await PricingPage()}</MarketingLayout>);
 }
@@ -270,7 +278,8 @@ describe("/pricing: the public plans of listPlans", () => {
     expect(scale.querySelectorAll("h2 + p")).toHaveLength(0);
   });
 
-  it("[PFE-004 AC1] 'Start' leads to /sign-up?plan=<code>, one link named after each plan", async () => {
+  it("[PFE-004 AC1] [FIX-W69-SIGNUP AC3] 'Start' leads a visitor to /sign-up?plan=<code>, one link named after each plan", async () => {
+    visitorRequest();
     answerPlans([GROWTH, EARLY_ACCESS, SCALE]);
     await renderPricing();
 
@@ -287,6 +296,22 @@ describe("/pricing: the public plans of listPlans", () => {
     ]);
     expect(screen.getByRole("link", { name: "Start with Early access" }).getAttribute("href")).toBe(
       "/sign-up?plan=early_access",
+    );
+  });
+
+  it("[FIX-W69-SIGNUP AC3] 'Start' leads a signed-in visitor straight to the wizard with the plan, /otas/new?plan=<code>", async () => {
+    // beforeEach: the request scope of a signed-in visitor (the middleware passes on only a fresh or renewed token).
+    answerPlans([GROWTH, EARLY_ACCESS, SCALE]);
+    await renderPricing();
+
+    const links = planCards().map((card) => within(card).getByRole("link"));
+    expect(links.map((link) => link.getAttribute("href"))).toEqual([
+      "/otas/new?plan=growth",
+      "/otas/new?plan=early_access",
+      "/otas/new?plan=scale",
+    ]);
+    expect(screen.getByRole("link", { name: "Start with Growth" }).getAttribute("href")).toBe(
+      "/otas/new?plan=growth",
     );
   });
 

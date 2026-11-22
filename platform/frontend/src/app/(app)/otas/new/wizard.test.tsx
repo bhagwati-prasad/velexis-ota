@@ -303,7 +303,7 @@ const ACTION_WAIT = { timeout: 3_000 } as const;
 /** Renders `/otas/new` inside the redirect boundary; React reports a caught redirect on the console. */
 async function openWizard(): Promise<void> {
   vi.spyOn(console, "error").mockImplementation(() => undefined);
-  const page = await NewOtaPage();
+  const page = await NewOtaPage({});
   render(<RedirectBoundary>{page}</RedirectBoundary>);
 }
 
@@ -972,9 +972,9 @@ describe("/otas/new: the wizard and the createOta action", () => {
       cleanup();
 
       routes({ "GET /v1/me": () => json(account({ emailVerified: false }), 200) });
-      await expect(NewOtaPage()).rejects.toThrow("NEXT_REDIRECT /verify-pending");
+      await expect(NewOtaPage({})).rejects.toThrow("NEXT_REDIRECT /verify-pending");
       routes({ "GET /v1/me": () => apiError("UNAUTHENTICATED", 401) });
-      await expect(NewOtaPage()).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Fotas%2Fnew");
+      await expect(NewOtaPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Fotas%2Fnew");
       // listPlans is public: no bearer token on it.
       for (const call of calls("GET", "/v1/plans")) {
         expect(call.headers.get("authorization")).toBeNull();
@@ -1054,7 +1054,7 @@ describe("/otas/new: the wizard and the createOta action", () => {
 
   it("renders on the server and hydrates in the browser without an error or a change", async () => {
     // The lists and the Idempotency-Key are made once, on the server, and reach the browser as props.
-    const { errors, root } = await serverRenderAndHydrate(await NewOtaPage());
+    const { errors, root } = await serverRenderAndHydrate(await NewOtaPage({}));
     expect(errors).toEqual([]);
     expect(idempotencyKey()).toMatch(UUID_V4);
     act(() => root.unmount());

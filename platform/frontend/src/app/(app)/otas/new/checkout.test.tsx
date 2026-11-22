@@ -550,7 +550,7 @@ function renderWizard(props: Partial<WizardProps> = {}): void {
 /** Renders `/otas/new` as the page builds it, inside the redirect boundary. */
 async function openNewOtaPage(): Promise<void> {
   vi.spyOn(console, "error").mockImplementation(() => undefined);
-  const page = await NewOtaPage();
+  const page = await NewOtaPage({});
   render(<RedirectBoundary>{page}</RedirectBoundary>);
 }
 
@@ -956,6 +956,110 @@ describe("/otas/new: the page and the M5 switch", () => {
       expect(post?.headers.get("idempotency-key")).toMatch(UUID_V4);
       expect(await post?.json()).toMatchObject({ planCode: "starter", billingInterval: "month" });
     });
+  });
+});
+
+// ---- The plan chosen on /pricing: /otas/new?plan=<code> (FIX-W69-SIGNUP, KI-009) ----------------------------------
+
+describe("/otas/new?plan=<code>: the plan chosen on /pricing", () => {
+  /** The plan the wizard starts with: its checked radio button (every step is in the one form), or none. */
+  function chosenPlan(): string | undefined {
+    return document.querySelector<HTMLInputElement>('input[name="planCode"]:checked')?.value;
+  }
+
+  /** Renders `/otas/new` for `query`, as Next.js passes it (a promise), inside the redirect boundary. */
+  async function openWithQuery(query: Record<string, string | string[]>): Promise<void> {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const page = await NewOtaPage({ searchParams: Promise.resolve(query) });
+    render(<RedirectBoundary>{page}</RedirectBoundary>);
+  }
+
+  describe("from M5, with a plan the plan step offers", () => {
+    beforeEach(async () => {
+      routes({ "GET /v1/me": () => json(account(FEATURES_M5), 200) });
+      await openWithQuery({ plan: "growth" });
+    }, OPEN_PAGE_TIMEOUT_MS);
+
+    it("[FIX-W69-SIGNUP AC3] preselects it, and the person can still choose another", async () => {
+      expect(chosenPlan()).toBe("growth");
+      await fillDetails();
+      press(WIZARD_STRINGS.next);
+      expect(currentStep()).toBe(WIZARD_STEP_LABELS.plan);
+      expect(planRadios()).toEqual([
+        ["starter", true, false],
+        ["early_access", false, false],
+        ["growth", true, true],
+      ]);
+      fireEvent.click(screen.getByRole("radio", { name: /^Starter/ }));
+      expect(chosenPlan()).toBe("starter");
+    });
+  });
+
+  describe("from M5, with a plan the plan step does not offer", () => {
+    beforeEach(async () => {
+      routes({ "GET /v1/me": () => json(account(FEATURES_M5), 200) });
+      await openWithQuery({ plan: "enterprise" });
+    }, OPEN_PAGE_TIMEOUT_MS);
+
+    it("[FIX-W69-SIGNUP AC3] keeps today's default: no plan chosen among several, so the plan step asks for one", async () => {
+      expect(chosenPlan()).toBeUndefined();
+      await fillDetails();
+      press(WIZARD_STRINGS.next);
+      press(WIZARD_STRINGS.next);
+      // The code that listPlans does not offer is never the wizard's choice: the plan step stops on a missing plan.
+      expect(currentStep()).toBe(WIZARD_STEP_LABELS.plan);
+      expect(
+        within(screen.getByRole("alert")).getByRole("link", { name: WIZARD_STRINGS.planRequired }),
+      ).toBeTruthy();
+    });
+  });
+
+  describe("from M5, with a malformed plan", () => {
+    beforeEach(async () => {
+      routes({ "GET /v1/me": () => json(account(FEATURES_M5), 200) });
+      await openWithQuery({ plan: "Growth" });
+    }, OPEN_PAGE_TIMEOUT_MS);
+
+    it("[FIX-W69-SIGNUP AC3] drops it", () => {
+      expect(chosenPlan()).toBeUndefined();
+    });
+  });
+
+  describe("from M5, with an offered plan Checkout cannot start monthly", () => {
+    beforeEach(async () => {
+      routes({ "GET /v1/me": () => json(account(FEATURES_M5), 200) });
+      await openWithQuery({ plan: "early_access" });
+    }, OPEN_PAGE_TIMEOUT_MS);
+
+    it("[FIX-W69-SIGNUP AC3] leaves the choice to the person, as for any default the interval cannot bill", () => {
+      expect(chosenPlan()).toBeUndefined();
+    });
+  });
+
+  describe("before M5 (features.stripeBilling off)", () => {
+    beforeEach(async () => {
+      await openWithQuery({ plan: "growth" });
+    }, OPEN_PAGE_TIMEOUT_MS);
+
+    it("[FIX-W69-SIGNUP AC3] keeps early access, the only plan the step offers", () => {
+      expect(chosenPlan()).toBe("early_access");
+      expect(
+        Array.from(
+          document.querySelectorAll<HTMLInputElement>('input[name="planCode"]'),
+          (radio) => radio.value,
+        ),
+      ).toEqual(["early_access"]);
+    });
+  });
+
+  it("[FIX-W69-SIGNUP AC3] sends an ended session to sign-in with the plan in its way back", async () => {
+    routes({ "GET /v1/me": () => apiError("UNAUTHENTICATED", 401) });
+    await expect(NewOtaPage({ searchParams: Promise.resolve({ plan: "growth" }) })).rejects.toThrow(
+      `NEXT_REDIRECT /sign-in?next=${encodeURIComponent("/otas/new?plan=growth")}`,
+    );
+    await expect(NewOtaPage({ searchParams: Promise.resolve({ plan: "../x" }) })).rejects.toThrow(
+      `NEXT_REDIRECT /sign-in?next=${encodeURIComponent("/otas/new")}`,
+    );
   });
 });
 

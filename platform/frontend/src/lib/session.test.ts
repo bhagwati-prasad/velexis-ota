@@ -19,6 +19,8 @@ import {
   PASSWORD_RESET_COOKIE,
   REFRESH_REUSE_MS,
   REFRESH_TOKEN_COOKIE,
+  VERIFY_NEXT_COOKIE,
+  VERIFY_NEXT_MAX_AGE,
   accessTokenClaims,
   clearSession,
   clearedCookie,
@@ -26,6 +28,7 @@ import {
   createRefresh,
   invitationCookie,
   isAccessTokenFresh,
+  keptInvitationCookie,
   mfaChallengeCookie,
   nextPathCookie,
   passwordResetCookie,
@@ -34,6 +37,7 @@ import {
   sessionCookies,
   sessionTokens,
   setSession,
+  verifyNextCookie,
   writeCookies,
   type CookieWrite,
   type PortalSession,
@@ -302,6 +306,60 @@ describe("session cookies", () => {
     });
     expect(nextPathCookie("https://evil.example/x")).toBeUndefined();
     expect(nextPathCookie("//evil.example")).toBeUndefined();
+  });
+
+  it("[FIX-W69-SIGNUP AC1] keeps only a safe relative return path for the e-mail verification: __Host-vxp_verify_next, HttpOnly, Secure, SameSite=Lax, Path=/, 24 hours", () => {
+    const write = verifyNextCookie("/otas/new?plan=growth");
+    expect(write).toEqual({
+      name: VERIFY_NEXT_COOKIE,
+      value: "/otas/new?plan=growth",
+      options: { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: VERIFY_NEXT_MAX_AGE },
+    });
+    // The verification link's lifetime (platform document, signUp: "works once within 24 hours").
+    expect(VERIFY_NEXT_MAX_AGE).toBe(24 * 3600);
+    const [line] = setCookieLines(write === undefined ? [] : [write]);
+    expect(line).toMatch(
+      /^__Host-vxp_verify_next=[^;]+; Path=\/; (Expires=[^;]+; )?Max-Age=86400; Secure; HttpOnly; SameSite=lax$/i,
+    );
+    expect(line).not.toMatch(/Domain=/i);
+
+    // The same normalisation as sign-in's `next`: what safeNextPath() refuses is never written.
+    expect(verifyNextCookie("/invitations/accept")?.value).toBe("/invitations/accept");
+    for (const unsafe of [
+      undefined,
+      null,
+      "",
+      "https://evil.example/x",
+      "//evil.example",
+      "/\\evil.example",
+      "/%2e//evil.example",
+      "javascript:alert(1)",
+      `/${"a".repeat(2048)}`,
+    ]) {
+      expect(verifyNextCookie(unsafe)).toBeUndefined();
+    }
+    // Deleting it keeps the attributes a browser requires for a __Host- cookie.
+    expect(setCookieLines([clearedCookie(VERIFY_NEXT_COOKIE)])).toEqual([
+      expect.stringMatching(
+        /^__Host-vxp_verify_next=; Path=\/; Max-Age=0; .*Secure; HttpOnly; SameSite=lax$/i,
+      ),
+    ]);
+  });
+
+  it("[FIX-W69-SIGNUP AC2] keeps an invitation cookie until the invitation expires, at most 24 hours, still SameSite=Strict", () => {
+    const inTwoHours = new Date(NOW + 2 * 3600_000).toISOString();
+    expect(keptInvitationCookie("invite-token", inTwoHours, NOW)).toEqual({
+      name: INVITATION_COOKIE,
+      value: "invite-token",
+      options: { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: 2 * 3600 },
+    });
+    // An invitation that lives for days: the cookie lives as long as the sign-up's return path, no longer.
+    const inSevenDays = new Date(NOW + 7 * 24 * 3600_000).toISOString();
+    expect(keptInvitationCookie("invite-token", inSevenDays, NOW)?.options.maxAge).toBe(VERIFY_NEXT_MAX_AGE);
+    // Expired, expiring now or unreadable: nothing to keep (the cookie keeps the lifetime it has).
+    expect(keptInvitationCookie("invite-token", new Date(NOW - 1000).toISOString(), NOW)).toBeUndefined();
+    expect(keptInvitationCookie("invite-token", new Date(NOW + 500).toISOString(), NOW)).toBeUndefined();
+    expect(keptInvitationCookie("invite-token", "not a date", NOW)).toBeUndefined();
   });
 
   it("deletes cookies with the same attributes and Max-Age=0, as a browser requires for __Host- cookies", () => {
