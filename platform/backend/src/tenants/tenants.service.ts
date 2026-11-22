@@ -1,10 +1,11 @@
 // The tenant use cases of the portal (platform/docs/api-inventory.md §7; scope PF-10 AC1, PF-13): the live key check
-// of the create-OTA wizard, the caller's list of OTAs, the OTA overview and the profile update. Who may call them is
-// TenantRoleGuard's (the membership arrives here already checked); this service owns the transaction of the update,
-// its audit row and the `tenant` invalidation after the commit (architecture §4).
+// of the create-OTA wizard, the OTA overview and the profile update. Who may call them is TenantRoleGuard's (the
+// membership arrives here already checked); this service owns the transaction of the update, its audit row and the
+// `tenant` invalidation after the commit (architecture §4).
 //
 // `toTenant` and `toTenantSummary` map rows to the `Tenant` and `TenantSummary` schemas of the OpenAPI document;
-// createTenant (PBE-018) answers its `tenant` with `toTenant` too.
+// createTenant (PBE-018) answers its `tenant` with `toTenant` too, and listTenants (LifecycleService since
+// FIX-W69-LIMIT, for its `tenantLimit`) maps the rows of `TenantsRepository.listForMember` with `toTenantSummary`.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
@@ -106,12 +107,6 @@ export class TenantsService {
     return reason === undefined
       ? { key, available: true, storefrontHost: host }
       : { key, available: false, reason, storefrontHost: host };
-  }
-
-  /** listTenants: the OTAs in which the account has an active membership, oldest first. */
-  async list(accountId: string): Promise<TenantList> {
-    const rows = await this.tenants.listForMember(accountId);
-    return { data: rows.map((row) => toTenantSummary(row, this.baseDomain)) };
   }
 
   /** getTenant: the OTA of the caller's membership, with the caller's role. */

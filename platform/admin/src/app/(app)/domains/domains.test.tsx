@@ -117,7 +117,8 @@ const UI_WAIT = { timeout: 3_000 } as const;
 
 /**
  * `LIVE_OFFICE_REQUESTS_LIMIT` of `(app)/page.tsx` (a page module exports nothing else): the `maxItems` of
- * `AdminDashboard.liveOfficeRequests`, at which the section says the oldest requests are shown.
+ * `AdminDashboard.liveOfficeRequests`. The section says the oldest requests are shown only when
+ * `liveOfficeRequestsMore` is true (FIX-W69-LIMIT, known issue KI-013), never because the list holds this many.
  */
 const LIVE_OFFICE_REQUESTS_LIMIT = 50;
 
@@ -352,6 +353,7 @@ function dashboard(overrides: Partial<Schemas["AdminDashboard"]> = {}): Schemas[
     stripeEventsFailed: 1,
     subscriptionsPastDue: 2,
     liveOfficeRequests: [],
+    liveOfficeRequestsMore: false,
     ...overrides,
   };
 }
@@ -1480,7 +1482,8 @@ describe("(app)/page.tsx: live office requests and the M5 counters", () => {
   });
 
   it("[FIX-W41-PLATFORM AC9] says when the oldest requests are shown, and replaces the audit notices", async () => {
-    // As many requests as the API answers at most: the section says the oldest ones are shown.
+    // As many requests as the API answers at most, and more waiting (`liveOfficeRequestsMore`, FIX-W69-LIMIT): the
+    // section says the oldest ones are shown.
     const requests = Array.from({ length: LIVE_OFFICE_REQUESTS_LIMIT }, (_, index) =>
       liveOfficeRequest(
         `ten_01JF0000000000000000000${String(index).padStart(3, "0")}`,
@@ -1491,6 +1494,7 @@ describe("(app)/page.tsx: live office requests and the M5 counters", () => {
       ),
     );
     platform.liveOfficeRequests = requests;
+    platform.dashboard = dashboard({ liveOfficeRequestsMore: true });
     await openDashboard();
     expect(callKeys()).toEqual(["GET /v1/admin/dashboard"]);
     const full = screen.getByRole("region", { name: D.liveRequestsTitle });
@@ -1507,10 +1511,40 @@ describe("(app)/page.tsx: live office requests and the M5 counters", () => {
 
     // One fewer: every waiting request is shown, nothing to say.
     platform.liveOfficeRequests = requests.slice(1);
+    platform.dashboard = dashboard();
     await openDashboard();
     const some = screen.getByRole("region", { name: D.liveRequestsTitle });
     expect(within(some).getAllByRole("row").slice(1)).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT - 1);
     expect(some.querySelector('[data-notice="live-requests-oldest"]')).toBeNull();
+  });
+
+  it("[FIX-W69-LIMIT AC4] shows the oldest-requests notice only when adminGetDashboard says more wait, never for exactly 50", async () => {
+    const requests = Array.from({ length: LIVE_OFFICE_REQUESTS_LIMIT }, (_, index) =>
+      liveOfficeRequest(
+        `ten_01JG0000000000000000000${String(index).padStart(3, "0")}`,
+        `otb${index}x`,
+        `OTA ${index}`,
+        `sc_01JG0000000000000000000${String(index).padStart(3, "0")}`,
+        new Date(Date.UTC(2027, 0, 2, 9, index)).toISOString(),
+      ),
+    );
+    // Exactly 50 wait: all of them are listed and nothing is hidden, so no notice.
+    platform.liveOfficeRequests = requests;
+    platform.dashboard = dashboard({ liveOfficeRequestsMore: false });
+    await openDashboard();
+    const exactly = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(exactly).getAllByRole("row").slice(1)).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT);
+    expect(exactly.querySelector('[data-notice="live-requests-oldest"]')).toBeNull();
+    cleanup();
+
+    // 51 or more wait: the same 50 rows, and the notice says the oldest are shown.
+    platform.dashboard = dashboard({ liveOfficeRequestsMore: true });
+    await openDashboard();
+    const more = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(more).getAllByRole("row").slice(1)).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT);
+    expect(more.querySelector('[data-notice="live-requests-oldest"]')?.textContent).toBe(
+      D.liveRequestsOldest(LIVE_OFFICE_REQUESTS_LIMIT),
+    );
   });
 
   it("[FIX-W41-PLATFORM AC9] leaves the section out without a live account and a request, and signs in again once the session ended", async () => {

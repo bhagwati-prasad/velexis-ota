@@ -15,7 +15,10 @@
 // - `liveOfficeRequests` (FIX-W41-PLATFORM, lead decision (2n) of 2026-11-04): the OTAs whose live Velexis connection
 //   waits for an office (`pending_verification`, no office, as `requestLiveAmadeus` inserted it), oldest request first,
 //   at most LIVE_OFFICE_REQUESTS_LIMIT, read from the connections themselves (never from the audit log), so the admin's
-//   dashboard shows them from this one call. Always present: an empty list when no OTA waits.
+//   dashboard shows them from this one call. Always present: an empty list when no OTA waits. With them,
+//   `liveOfficeRequestsMore` (FIX-W69-LIMIT, known issue KI-013, 2026-11-22): the repository reads one row more than
+//   the limit, and the flag is `true` only when that extra row exists, so exactly LIVE_OFFICE_REQUESTS_LIMIT waiting
+//   OTAs answer `false` and the admin's "oldest requests are shown" notice stays away.
 //
 // The database counts are one snapshot: one read-only `REPEATABLE READ` transaction, which never holds a lock and
 // writes nothing. The Redis counts run next to it, never inside it.
@@ -26,6 +29,7 @@ import type { components } from "@velexis/api-types/platform";
 import { AppError } from "@velexis/errors";
 import type { Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import type { PlatformTransaction } from "../audit/audit.repository";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { FeatureSwitches, type Feature } from "../common/features";
@@ -59,6 +63,7 @@ interface DatabaseCounts {
   readonly stripeEventsFailed: number | null;
   readonly subscriptionsPastDue: number | null;
   readonly liveOfficeRequests: LiveOfficeRequest[];
+  readonly liveOfficeRequestsMore: boolean;
 }
 
 @Injectable()
@@ -95,6 +100,7 @@ export class AdminDashboardService implements OnModuleInit {
       stripeEventsFailed: counts.stripeEventsFailed,
       subscriptionsPastDue: counts.subscriptionsPastDue,
       liveOfficeRequests: counts.liveOfficeRequests,
+      liveOfficeRequestsMore: counts.liveOfficeRequestsMore,
     };
   }
 
@@ -158,16 +164,28 @@ export class AdminDashboardService implements OnModuleInit {
           stripeEventsFailed:
             on("stripe_billing") || on("own_stripe") ? await this.counters.failedStripeEvents(trx) : null,
           subscriptionsPastDue: on("stripe_billing") ? await this.counters.pastDueSubscriptions(trx) : null,
-          liveOfficeRequests: (await this.counters.liveOfficeRequests(trx, LIVE_OFFICE_REQUESTS_LIMIT)).map(
-            (row): LiveOfficeRequest => ({
-              tenantId: row.tenant_id,
-              tenantKey: row.tenant_key,
-              tenantName: row.tenant_name,
-              connectionId: row.connection_id,
-              requestedAt: row.requested_at.toISOString(),
-            }),
-          ),
+          ...(await this.liveOfficeRequests(trx)),
         };
       });
+  }
+
+  /**
+   * The live office requests of the snapshot `trx`: at most LIVE_OFFICE_REQUESTS_LIMIT, and whether more wait. The
+   * repository reads one row past the limit; that row only sets `liveOfficeRequestsMore` and is never answered.
+   */
+  private async liveOfficeRequests(
+    trx: PlatformTransaction,
+  ): Promise<Pick<DatabaseCounts, "liveOfficeRequests" | "liveOfficeRequestsMore">> {
+    const waiting = await this.counters.liveOfficeRequests(trx, LIVE_OFFICE_REQUESTS_LIMIT + 1);
+    return {
+      liveOfficeRequests: waiting.slice(0, LIVE_OFFICE_REQUESTS_LIMIT).map((row): LiveOfficeRequest => ({
+        tenantId: row.tenant_id,
+        tenantKey: row.tenant_key,
+        tenantName: row.tenant_name,
+        connectionId: row.connection_id,
+        requestedAt: row.requested_at.toISOString(),
+      })),
+      liveOfficeRequestsMore: waiting.length > LIVE_OFFICE_REQUESTS_LIMIT,
+    };
   }
 }

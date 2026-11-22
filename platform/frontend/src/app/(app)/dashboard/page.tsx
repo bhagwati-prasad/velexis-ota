@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { OpenConsoleButton } from "@/components/open-console-button";
 import { StatusBadge } from "@/components/status-badge";
+import { TenantLimitNotice, tenantLimitReached } from "@/components/tenant-limit-notice";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,15 +13,25 @@ import { createPlatformApi, platformApi } from "@/lib/api";
 import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
 import { membershipHref } from "@/lib/roles";
-import { DASHBOARD_STRINGS, ROLE_LABELS } from "@/lib/strings";
+import { DASHBOARD_STRINGS, OTA_DASHBOARD_STRINGS, ROLE_LABELS } from "@/lib/strings";
 
 export const metadata: Metadata = { title: DASHBOARD_STRINGS.title };
 
 type TenantSummary = components["schemas"]["TenantSummary"];
 
-/** The storefront host of an OTA: `<key>.<STOREFRONT_BASE_DOMAIN>` (README §2 `/dashboard`). */
-function storefrontHost(key: string, baseDomain: string): string {
-  return `${key}.${baseDomain}`;
+/** The id of the tenant-limit reason, which the disabled "Create an OTA" names with `aria-describedby`. */
+const TENANT_LIMIT_REASON_ID = "dashboard-tenant-limit";
+
+/**
+ * The host of an OTA's `storefrontUrl` (`https://<primary host>/` of listTenants: the verified primary custom domain
+ * when there is one, else the key's sub-domain), as the overview shows its `primaryHost`.
+ */
+function hostOf(storefrontUrl: string): string {
+  try {
+    return new URL(storefrontUrl).host;
+  } catch {
+    return storefrontUrl;
+  }
 }
 
 /**
@@ -41,19 +52,14 @@ async function planNames(): Promise<ReadonlyMap<string, string>> {
 /**
  * One OTA: name (to its set-up page or overview), status, key, plan, the caller's role, its storefront and "Open
  * console" (every role may open it, scope §1.2; the launch explains on the OTA's overview why an OTA that is not
- * active has no console).
+ * active has no console). The storefront is the OTA's `storefrontUrl`, its primary host (FIX-W69-LIMIT, known issue
+ * KI-006); while the OTA is being set up or its set-up failed, the host is plain text with the overview's note that
+ * the storefront opens when the set-up is done, never a link that looks live.
  */
-function OtaCard({
-  tenant,
-  planName,
-  baseDomain,
-}: {
-  readonly tenant: TenantSummary;
-  readonly planName: string;
-  readonly baseDomain: string;
-}) {
+function OtaCard({ tenant, planName }: { readonly tenant: TenantSummary; readonly planName: string }) {
   const nameId = `ota-${tenant.id}`;
-  const host = storefrontHost(tenant.key, baseDomain);
+  const host = hostOf(tenant.storefrontUrl);
+  const open = tenant.status !== "provisioning" && tenant.status !== "failed";
   return (
     <li className="flex">
       <article
@@ -85,9 +91,16 @@ function OtaCard({
           <dd>{ROLE_LABELS[tenant.role]}</dd>
           <dt className="text-muted-foreground">{DASHBOARD_STRINGS.storefront}</dt>
           <dd className="min-w-0 break-all">
-            <a href={`https://${host}/`} className="underline underline-offset-4">
-              {host}
-            </a>
+            {open ? (
+              <a href={tenant.storefrontUrl} className="underline underline-offset-4">
+                {host}
+              </a>
+            ) : (
+              <span className="grid gap-1" data-storefront="pending">
+                <span>{host}</span>
+                <span className="text-muted-foreground">{OTA_DASHBOARD_STRINGS.storefrontPending}</span>
+              </span>
+            )}
           </dd>
         </dl>
         <div className="mt-auto flex">
@@ -100,16 +113,20 @@ function OtaCard({
 
 /**
  * `/dashboard` (README §2 Signed in): the account's OTAs (`listTenants`, oldest first) with status, plan, the
- * caller's role, the storefront link `https://<key>.<STOREFRONT_BASE_DOMAIN>/` and "Open console" (PFE-017); each
- * name opens the OTA (its set-up page while it is being set up or failed). "Create an OTA" shows only for a verified
- * account (`getMe`); the `(app)` layout already sends unverified accounts to `/verify-pending`, but the page does not
- * rely on it.
+ * caller's role, the storefront link `storefrontUrl` (the primary host; a note instead while the OTA is not open yet,
+ * FIX-W69-LIMIT, KI-006) and "Open console" (PFE-017); each name opens the OTA (its set-up page while it is being set
+ * up or failed). "Create an OTA" shows only for a verified account (`getMe`); the `(app)` layout already sends
+ * unverified accounts to `/verify-pending`, but the page does not rely on it. Once the account owns as many OTAs as
+ * its limit allows (`tenantLimit` of listTenants, FIX-W69-LIMIT, KI-010), "Create an OTA" is a disabled button, not a
+ * link, described by the visible reason in the wizard's words; the review's `tenant_limit` refusal stays the final
+ * guard (a limit that could not be read leaves the link as it was).
  */
 export default async function DashboardPage() {
-  const settings = getConfig();
   const api = await platformApi();
   const [me, tenants, names] = await Promise.all([api.GET("/v1/me"), api.GET("/v1/tenants"), planNames()]);
   const verified = me.data?.emailVerified === true;
+  const tenantLimit = tenants.data?.tenantLimit;
+  const atLimit = tenantLimitReached(tenantLimit);
 
   return (
     <div className="mx-auto grid max-w-5xl gap-8">
@@ -118,12 +135,18 @@ export default async function DashboardPage() {
           <h1 className="text-3xl font-semibold tracking-tight">{DASHBOARD_STRINGS.title}</h1>
           <p className="text-muted-foreground">{DASHBOARD_STRINGS.intro}</p>
         </div>
-        {verified ? (
+        {!verified ? null : atLimit ? (
+          // A button, not a link: disabled, it leaves the tab order; its reason is the visible notice below.
+          <Button type="button" disabled aria-describedby={TENANT_LIMIT_REASON_ID}>
+            {DASHBOARD_STRINGS.createOta}
+          </Button>
+        ) : (
           <Button asChild>
             <Link href="/otas/new">{DASHBOARD_STRINGS.createOta}</Link>
           </Button>
-        ) : null}
+        )}
       </div>
+      {verified ? <TenantLimitNotice limit={tenantLimit} id={TENANT_LIMIT_REASON_ID} /> : null}
       {me.data !== undefined && !verified ? (
         // A note, not an alert: nothing went wrong, the account has one step left.
         <p className="rounded-lg border px-4 py-3 text-sm">
@@ -143,7 +166,7 @@ export default async function DashboardPage() {
           <h2 id="dashboard-empty" className="text-lg font-semibold tracking-tight">
             {DASHBOARD_STRINGS.emptyTitle}
           </h2>
-          {verified ? <p className="text-muted-foreground">{DASHBOARD_STRINGS.empty}</p> : null}
+          {verified && !atLimit ? <p className="text-muted-foreground">{DASHBOARD_STRINGS.empty}</p> : null}
           <p className="text-sm text-muted-foreground">{DASHBOARD_STRINGS.emptyInvited}</p>
         </section>
       ) : (
@@ -153,7 +176,6 @@ export default async function DashboardPage() {
               key={tenant.id}
               tenant={tenant}
               planName={names.get(tenant.planCode) ?? tenant.planCode}
-              baseDomain={settings.STOREFRONT_BASE_DOMAIN}
             />
           ))}
         </ul>

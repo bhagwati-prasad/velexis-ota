@@ -1,10 +1,10 @@
 // The tenant routes of the portal (platform/docs/api-inventory.md §7, PBE-017): the key check of the create-OTA
-// wizard, the caller's OTAs, the OTA overview and the profile update. Thin: each handler binds its operation, reads
-// the validated request and makes one service call. Tenant routes declare their roles from the matrix
-// (memberships/tenant-roles.ts); TenantRoleGuard answers `404` to non-members before the handler runs.
+// wizard, the OTA overview and the profile update. Thin: each handler binds its operation, reads the validated request
+// and makes one service call. Tenant routes declare their roles from the matrix (memberships/tenant-roles.ts);
+// TenantRoleGuard answers `404` to non-members before the handler runs. The caller's OTAs (`listTenants`) are served by
+// LifecycleController since FIX-W69-LIMIT: their `tenantLimit` needs MembershipsModule's count, which this layer-1
+// module may not use (architecture §2.2).
 import { Controller, Get, Patch, Res } from "@nestjs/common";
-import type { AccessTokenClaims } from "../auth/token.service";
-import { AccessToken } from "../common/auth/decorators";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { etagOf, versionOfIfMatch } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
@@ -13,7 +13,6 @@ import {
   TenantsService,
   type KeyAvailability,
   type Tenant,
-  type TenantList,
   type UpdateTenantRequest,
 } from "./tenants.service";
 
@@ -31,12 +30,6 @@ export class TenantsController {
   @OpenApiOperation("checkTenantKey")
   checkTenantKey(@Validated("query") query: Readonly<Record<string, unknown>>): Promise<KeyAvailability> {
     return this.tenants.checkKey(query["key"] as string);
-  }
-
-  @Get()
-  @OpenApiOperation("listTenants")
-  listTenants(@AccessToken() token: AccessTokenClaims): Promise<TenantList> {
-    return this.tenants.list(token.sub);
   }
 
   @Get(":tenantId")

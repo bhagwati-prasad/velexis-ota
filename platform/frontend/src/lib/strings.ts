@@ -711,6 +711,15 @@ export const WIZARD_STRINGS = Object.freeze({
     limit === undefined
       ? "You already own the most OTAs one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more."
       : `You already own ${counted(limit, "OTA", "OTAs")}, the most one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more.`,
+  /**
+   * The limit as `listTenants` answers it (`tenantLimit`, FIX-W69-LIMIT, known issue KI-010), in the words of
+   * `tenantLimit` above: shown on the dashboard next to the disabled "Create an OTA" and above the wizard's first step
+   * once `owned` reaches `max`. `owned` can pass `max` (an owner invitation or a role change counts no limit, KI-046).
+   */
+  tenantLimitReached: (owned: number, max: number) =>
+    owned > max
+      ? `You own ${counted(owned, "OTA", "OTAs")}, and one account can have at most ${counted(max, "OTA", "OTAs")}. An OTA whose set-up failed does not count. Contact Velexis support if you need more.`
+      : `You already own ${counted(owned, "OTA", "OTAs")}, the most one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more.`,
   formExpired: "This form has expired. Reload the page and try again.",
   rateLimited: "Too many requests in a short time. Wait a minute, then try again.",
 });

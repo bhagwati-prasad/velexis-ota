@@ -444,6 +444,8 @@ export interface paths {
         /**
          * List my OTAs
          * @description The OTAs in which the account has an active membership, in any status (`provisioning`, `active`, `suspended`, `failed`), oldest first, with the caller's role, the plan and the storefront URL of the primary host. The list is short (one entry per membership), so it is not paginated. Works before the e-mail address is verified, so the portal can show an empty dashboard.
+         *
+         *     **Tenant limit** (2026-11-22, known issue KI-010, FIX-W69-LIMIT): `tenantLimit` answers the caller's limit (`max`, `MAX_TENANTS_PER_ACCOUNT`) and how many of its OTAs count against it (`owned`, counted as `createTenant` counts them), so the portal says before the create-OTA wizard that a new OTA would be refused. It is read when the list is read; `createTenant` counts again under the account's row lock and stays the final word (`422 UNPROCESSABLE`, `details.reason = tenant_limit`).
          */
         get: operations["listTenants"];
         put?: never;
@@ -1817,7 +1819,7 @@ export interface paths {
          *
          *     The M5 counters are always present and `null` while their milestone switch is off: `domainsPending` (pending custom domains, `custom_domains`), `settlementsToReview` (draft settlements, `settlements`), `stripeEventsFailed` (failed Stripe events, `stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`).
          *
-         *     **Live office requests** (2026-11-04, lead decision (2n), FIX-W41-PLATFORM): `liveOfficeRequests` lists the OTAs whose owner requested live access on the Velexis account (`requestLiveAmadeus`) and whose live connection still waits for an office, read from the connections themselves (not from the audit log), oldest request first, at most 50, so the admin assigns offices from one read of this page.
+         *     **Live office requests** (2026-11-04, lead decision (2n), FIX-W41-PLATFORM): `liveOfficeRequests` lists the OTAs whose owner requested live access on the Velexis account (`requestLiveAmadeus`) and whose live connection still waits for an office, read from the connections themselves (not from the audit log), oldest request first, at most 50, so the admin assigns offices from one read of this page. `liveOfficeRequestsMore` (2026-11-22, known issue KI-013, FIX-W69-LIMIT) says whether more OTAs wait than the list holds: `true` only from 51 waiting OTAs, never at exactly 50.
          */
         get: operations["adminGetDashboard"];
         put?: never;
@@ -3791,6 +3793,14 @@ export interface components {
         };
         TenantList: {
             data: components["schemas"]["TenantSummary"][];
+            tenantLimit: components["schemas"]["TenantLimit"];
+        };
+        /** @description The caller's tenant limit as `listTenants` answers it (scope PF-10 AC4; 2026-11-22, known issue KI-010, FIX-W69-LIMIT). The portal shows it before the create-OTA wizard: once `owned` reaches `max`, `createTenant` would answer `422 UNPROCESSABLE` with `details.reason = tenant_limit` and `details.limit` = `max`. It is a reading at the time of the call: `createTenant` counts again under the account's row lock and decides. */
+        TenantLimit: {
+            /** @description The most OTAs that are not `failed` one account may own (`MAX_TENANTS_PER_ACCOUNT`). */
+            max: number;
+            /** @description The caller's OTAs that count against `max`, counted exactly as `createTenant` counts them: its `owner` memberships that are not `removed` (a suspended membership still holds its OTA), of OTAs in any status but `failed`. It is not the number of `owner` entries in `data`, which lists active memberships only. It can be larger than `max`: accepting an invitation with the role `owner`, or being given the role `owner`, checks no limit (known issue KI-046); the limit is then reached all the same. */
+            owned: number;
         };
         /** @description Whether a key can be used for a new OTA. */
         KeyAvailability: {
@@ -4747,6 +4757,8 @@ export interface components {
             subscriptionsPastDue: number | null;
             /** @description The OTAs waiting for a live office (M5, 2026-11-04, FIX-W41-PLATFORM): each OTA whose `live` Amadeus connection on the Velexis account (`credentialSource` `velexis`) is `pending_verification` without an office, as `requestLiveAmadeus` inserted it, of an OTA that is not being deleted. Read from the connections themselves, never from the audit log. Oldest request first (then by connection id), at most 50; empty when no OTA waits. An admin serves a request with `adminAssignAmadeusOffice`, which takes it off this list. */
             liveOfficeRequests: components["schemas"]["LiveOfficeRequest"][];
+            /** @description Whether more OTAs wait for a live office than `liveOfficeRequests` lists (2026-11-22, known issue KI-013, FIX-W69-LIMIT), by the same rule and in the same snapshot: `true` only when at least 51 OTAs wait, so the list holds the 50 oldest and the others wait behind them; `false` whenever every waiting OTA is listed, exactly 50 included. */
+            liveOfficeRequestsMore: boolean;
         };
         /** @description An OTA waiting for a live office: its live Velexis Amadeus connection, inserted without an office by the owner's `requestLiveAmadeus`. */
         LiveOfficeRequest: {
@@ -7223,7 +7235,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The caller's OTAs. */
+            /** @description The caller's OTAs and its tenant limit. */
             200: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -7243,7 +7255,11 @@ export interface operations {
                      *           "storefrontUrl": "https://acme.ota.example.com/",
                      *           "storefrontEnvironment": "test"
                      *         }
-                     *       ]
+                     *       ],
+                     *       "tenantLimit": {
+                     *         "max": 3,
+                     *         "owned": 1
+                     *       }
                      *     }
                      */
                     "application/json": components["schemas"]["TenantList"];

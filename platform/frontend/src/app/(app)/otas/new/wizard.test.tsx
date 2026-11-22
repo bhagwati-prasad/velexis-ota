@@ -44,6 +44,7 @@ import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
 import {
   DASHBOARD_STRINGS,
   ERROR_MESSAGES,
+  OTA_DASHBOARD_STRINGS,
   ROLE_LABELS,
   WIZARD_STEP_LABELS,
   WIZARD_STRINGS,
@@ -220,12 +221,14 @@ function keyAvailability(request: Request): Response {
   return json({ key, available: true, storefrontHost: host }, 200);
 }
 
-/** Answers each call by `METHOD /path`, with the account, the plans and the key check by default. */
+/** Answers each call by `METHOD /path`, with the account, the plans, the key check and listTenants by default. */
 function routes(overrides: Record<string, Route> = {}): void {
   const table: Record<string, Route> = {
     "GET /v1/me": () => json(account(), 200),
     "GET /v1/plans": () => json({ data: PLANS }, 200),
     "GET /v1/tenants/key-availability": keyAvailability,
+    // listTenants: the account owns no OTA yet, so /otas/new shows no tenant-limit notice (FIX-W69-LIMIT).
+    "GET /v1/tenants": () => json({ data: [], tenantLimit: { max: 3, owned: 0 } }, 200),
     ...overrides,
   };
   fetchMock.mockImplementation(async (input) => {
@@ -1061,7 +1064,7 @@ describe("/otas/new: the wizard and the createOta action", () => {
 // ---- /dashboard ------------------------------------------------------------------------------------------------
 
 describe("/dashboard", () => {
-  it("lists my OTAs with status, plan, role and the storefront link https://<key>.<STOREFRONT_BASE_DOMAIN>/", async () => {
+  it("lists my OTAs with status, plan, role and the storefront of storefrontUrl (a note while set up, FIX-W69-LIMIT)", async () => {
     routes({
       "GET /v1/tenants": () =>
         json(
@@ -1078,6 +1081,7 @@ describe("/dashboard", () => {
                 storefrontUrl: "https://book.nordicfares.example/",
               }),
             ],
+            tenantLimit: { max: 3, owned: 1 },
           },
           200,
         ),
@@ -1107,16 +1111,16 @@ describe("/dashboard", () => {
       "https://acme.ota.example.com/",
     );
 
-    // An OTA in set-up opens its set-up page; an unknown plan shows its code; the link is the key's sub-domain.
+    // An OTA in set-up opens its set-up page; an unknown plan shows its code; its storefront is the primary host of
+    // storefrontUrl, as text with the overview's note until the set-up is done (FIX-W69-LIMIT, KI-006).
     expect(within(nordic).getByRole("link", { name: "Nordic Fares" }).getAttribute("href")).toBe(
       `/otas/${SECOND_TENANT_ID}/setup`,
     );
     expect(within(nordic).getByText("Setting up")).toBeTruthy();
     expect(within(nordic).getByText("legacy_plan")).toBeTruthy();
     expect(within(nordic).getByText(ROLE_LABELS.agent)).toBeTruthy();
-    expect(within(nordic).getByRole("link", { name: "nordic.ota.example.com" }).getAttribute("href")).toBe(
-      "https://nordic.ota.example.com/",
-    );
+    expect(within(nordic).getByText("book.nordicfares.example").closest("a")).toBeNull();
+    expect(within(nordic).getByText(OTA_DASHBOARD_STRINGS.storefrontPending)).toBeTruthy();
 
     // listTenants and getMe with the session; listPlans (for the names) as a public call.
     expect(calls("GET", "/v1/tenants")[0]?.headers.get("authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);

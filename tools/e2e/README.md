@@ -855,6 +855,22 @@ pnpm --filter @velexis/ota-admin build && \
 
 **Plan deviation.** The plan's not-booked booking shows its payment `cancelled` once the void has run, which is a Stripe authorisation's. This project runs without Stripe, so both bookings pay with the airline card: closed as not booked, an airline-card booking has nothing to void and its payment becomes `failed` (OBE-099); the Stripe outcomes (captured after "Order found", voided after "Not booked") are OBE-099's integration tests (`ota/backend/test/integration/console/review-closure.int.test.ts`).
 
+## Tests of FIX-W69-LIMIT
+
+The portal dashboard's storefront link and the tenant limit before the create-OTA wizard (guidebook known issues KI-006 and KI-010, 2026-11-22; [`platform/frontend/README.md`](../../platform/frontend/README.md) §2 `/dashboard`, [scope PF-10](../../platform/docs/scope.md) AC4 and its note of 2026-11-22), in the `portal` project with `E2E_WITH_OTA=1` (the first OTA is set up by the OTA worker; without it the arrangement fails at once):
+
+```bash
+pnpm exec turbo run build --filter=@velexis/platform-frontend && \
+  E2E_WITH_OTA=1 pnpm test:e2e -- --project=portal specs/portal-dashboard-limit.e2e.ts
+```
+
+| Step or acceptance criterion | Proof |
+|---|---|
+| Arrangement (`beforeAll`) | A verified account (`createVerifiedAccount`) and its OTAs through `createTenant` (`createOtaWithApi`) until `listTenants`' `tenantLimit.owned` reaches its `max` (`MAX_TENANTS_PER_ACCOUNT` of the stack's platform API), the first one set up by the OTA worker (`waitForOtaStatus`); all through the public API, no fixture |
+| AC1: the API answers the owner's limit and owned count | [`specs/portal-dashboard-limit.e2e.ts`](specs/portal-dashboard-limit.e2e.ts): every OTA of the account is its own and none failed, so `owned` equals `max` and the list holds `max` OTAs; the counting rule itself is the platform backend's `tenant-limit.int.test.ts` |
+| AC2: the dashboard links an open OTA's `storefrontUrl` | The journey: the active OTA's card links its host at the `storefrontUrl` `listTenants` answers. A storefront that is not open yet (the host as text with the overview's note) is the portal's unit test `dashboard.test.tsx`, since the OTA worker's speed decides when the other OTAs open |
+| AC3: at the limit, the reason before any wizard step | The journey: no "Create an OTA" link, a disabled button whose `aria-describedby` names the visible reason ("You already own … OTAs, the most one account can have."), then `/otas/new` with the same reason above its first step; axe on both pages. Below the limit and a limit that could not be read: `dashboard.test.tsx` |
+
 ## Tests of FIX-W67-KI003
 
 Two tabs of one browser refresh the storefront's cookie session (guidebook known issue KI-003, lead decision (36f) of 2026-11-21; [OADR-0006](../../ota/docs/adr/0006-storefront-cookie-sessions-and-csrf.md) point 5 and its note of 2026-11-21, [`ota/sdk/README.md`](../../ota/sdk/README.md) §4.1), in the `storefront` project:

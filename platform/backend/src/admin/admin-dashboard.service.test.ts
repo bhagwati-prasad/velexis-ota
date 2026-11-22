@@ -3,7 +3,8 @@
 // milestone switches on (read and answered as numbers, each only under its own switch), the 24-hour window of
 // `provisioningFailed24h` on the Clock, the office pool by environment, and `503 SERVICE_UNAVAILABLE` when the BullMQ
 // counts fail or take longer than QUEUE_COUNT_TIMEOUT_MS, and the live office requests mapped from the repository's
-// rows (FIX-W41-PLATFORM). The switches-off answer is proven over HTTP in
+// rows (FIX-W41-PLATFORM) with `liveOfficeRequestsMore` from the one row read past the limit (FIX-W69-LIMIT, known issue
+// KI-013). The switches-off answer is proven over HTTP in
 // test/integration/admin/admin-tenants.int.test.ts, the live office requests' rule in
 // test/integration/admin/admin-dashboard.int.test.ts.
 import type { ModuleRef } from "@nestjs/core";
@@ -58,7 +59,7 @@ const LIVE_ROWS = [
 function harness(options: {
   readonly features?: readonly Feature[];
   readonly failedCount?: (queue: string) => Promise<number>;
-  readonly liveRows?: typeof LIVE_ROWS;
+  readonly liveRows?: ReadonlyArray<(typeof LIVE_ROWS)[number]>;
 }): Harness {
   const calls: string[] = [];
   const since: Date[] = [];
@@ -177,6 +178,7 @@ describe("AdminDashboardService.get", () => {
       stripeEventsFailed: null,
       subscriptionsPastDue: null,
       liveOfficeRequests: [],
+      liveOfficeRequestsMore: false,
     });
     expect(calls).toEqual(["tenantsByStatus", "jobsFailedSince", "liveOfficeRequests"]);
     expect(since).toEqual([new Date(clock.now().getTime() - PROVISIONING_FAILED_WINDOW_MS)]);
@@ -229,10 +231,39 @@ describe("AdminDashboardService.get", () => {
         requestedAt: "2027-03-02T14:02:00.000Z",
       },
     ]);
-    // Bounded by the document's `maxItems`, and read in the dashboard's one read-only snapshot.
-    expect(liveLimits).toEqual([LIVE_OFFICE_REQUESTS_LIMIT]);
+    expect(dashboard.liveOfficeRequestsMore).toBe(false);
+    // Bounded by the document's `maxItems` (one row more is read, only to say whether more wait: FIX-W69-LIMIT), and
+    // read in the dashboard's one read-only snapshot.
+    expect(liveLimits).toEqual([LIVE_OFFICE_REQUESTS_LIMIT + 1]);
     expect(LIVE_OFFICE_REQUESTS_LIMIT).toBe(50);
     expect(transactions).toEqual(["repeatable read, read only"]);
+  });
+
+  it("[FIX-W69-LIMIT AC4] answers liveOfficeRequestsMore false at exactly 50 waiting OTAs, and true with the 50 oldest from 51", async () => {
+    /** `count` waiting OTAs, oldest first, as the repository answers them. */
+    const waiting = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        tenant_id: `ten_01JA2Z7Q4M9R2T6V0X3Z8B${String(index).padStart(4, "0")}`,
+        tenant_key: `ota${index}x`,
+        tenant_name: `OTA ${index}`,
+        connection_id: `sc_01JC4M2P6R0T4W8Y2A6C0E${String(index).padStart(4, "0")}`,
+        requested_at: new Date(Date.UTC(2027, 2, 1, 9, index)),
+      }));
+
+    const exactly = await harness({ liveRows: waiting(LIVE_OFFICE_REQUESTS_LIMIT) }).service.get();
+    expect(exactly.liveOfficeRequests).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT);
+    expect(exactly.liveOfficeRequestsMore).toBe(false);
+
+    const more = await harness({ liveRows: waiting(LIVE_OFFICE_REQUESTS_LIMIT + 1) }).service.get();
+    expect(more.liveOfficeRequestsMore).toBe(true);
+    // The extra row only sets the flag: the answer keeps the 50 oldest, in the repository's order.
+    expect(more.liveOfficeRequests.map((request) => request.tenantKey)).toEqual(
+      waiting(LIVE_OFFICE_REQUESTS_LIMIT).map((row) => row.tenant_key),
+    );
+
+    const fewer = await harness({ liveRows: waiting(LIVE_OFFICE_REQUESTS_LIMIT - 1) }).service.get();
+    expect(fewer.liveOfficeRequests).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT - 1);
+    expect(fewer.liveOfficeRequestsMore).toBe(false);
   });
 
   it("answers 503 SERVICE_UNAVAILABLE when a BullMQ count fails, and logs it without the counts", async () => {

@@ -307,6 +307,10 @@ describe("listTenants", () => {
           storefrontEnvironment: "test",
         },
       ],
+      // createTenant's own count (FIX-W69-LIMIT, KI-010): the owner memberships of `first` and of the deleted OTA,
+      // which countOwnedTenants counts as it counts every status but `failed`; the finance membership of `second` and
+      // the removed membership do not count. The limit's rules are tested in tenant-limit.int.test.ts.
+      tenantLimit: { max: 3, owned: 2 },
     });
   });
 
@@ -315,8 +319,11 @@ describe("listTenants", () => {
     const none = await t.http.get("/v1/tenants").set(await bearer("stranger"));
     const anonymous = await t.http.get("/v1/tenants");
 
-    expect([unverified.status, unverified.body]).toEqual([200, { data: [] }]);
-    expect([none.status, none.body]).toEqual([200, { data: [] }]);
+    expect([unverified.status, unverified.body]).toEqual([
+      200,
+      { data: [], tenantLimit: { max: 3, owned: 0 } },
+    ]);
+    expect([none.status, none.body]).toEqual([200, { data: [], tenantLimit: { max: 3, owned: 0 } }]);
     expect([anonymous.status, errorOf(anonymous)]).toEqual([401, "UNAUTHENTICATED"]);
     for (const res of [unverified, none, anonymous]) {
       expectResponseToMatch("listTenants", res, { document: "platform" });

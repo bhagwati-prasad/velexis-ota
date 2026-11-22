@@ -273,14 +273,16 @@ export class MembershipsRepository implements TenantMembershipLookup, MfaEnrolme
   }
 
   /**
-   * The number of OTAs that `accountId` owns and that are not `failed`, read in `trx`: its `owner` memberships that are
+   * The number of OTAs that `accountId` owns and that are not `failed`, read in `db`: its `owner` memberships that are
    * not `removed` (a suspended membership still holds its OTA) of tenants in any status but `failed` (scope PF-10
-   * AC4: a failed OTA keeps its key but no longer counts). The caller holds the account's row lock (createTenant's `FOR
-   * UPDATE`, or the `FOR NO KEY UPDATE` of the owner's retry since FIX-W67-KI002), so two creations or retries of one
-   * account count one after the other.
+   * AC4: a failed OTA keeps its key but no longer counts). createTenant and the owner's retry read it in their
+   * transaction, holding the account's row lock (createTenant's `FOR UPDATE`, or the `FOR NO KEY UPDATE` of the owner's
+   * retry since FIX-W67-KI002), so two creations or retries of one account count one after the other. listTenants
+   * (FIX-W69-LIMIT, known issue KI-010) reads the same count without a lock for its `tenantLimit`, which only informs
+   * the portal: the creation counts again.
    */
-  async countOwnedTenants(trx: PlatformTransaction, accountId: string): Promise<number> {
-    const row = await trx
+  async countOwnedTenants(db: PlatformDb | PlatformTransaction, accountId: string): Promise<number> {
+    const row = await db
       .selectFrom("platform.tenant_memberships as m")
       .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
       .select((eb) => eb.fn.countAll<string>().as("owned"))

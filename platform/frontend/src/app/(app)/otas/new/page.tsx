@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 
 import { EARLY_ACCESS_PLAN_CODE, wizardPlans, type Plan } from "@/app/(app)/otas/new/plan-picker";
 import { Wizard } from "@/app/(app)/otas/new/wizard";
+import { TenantLimitNotice, loadTenantLimit } from "@/components/tenant-limit-notice";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { createPlatformApi, platformApi } from "@/lib/api";
 import { getConfig } from "@/lib/config";
@@ -96,6 +97,8 @@ export default async function NewOtaPage() {
   if (!account.emailVerified) {
     redirect("/verify-pending");
   }
+  // FIX-W69-LIMIT (KI-010): at the tenant limit the reason shows above the first step; only a verified account asks.
+  const tenantLimit = await loadTenantLimit(api);
 
   const timeZones = timeZoneOptions(account.timeZone);
   const defaultTimeZone = timeZones.some((zone) => zone.value === account.timeZone)
@@ -109,6 +112,7 @@ export default async function NewOtaPage() {
         <h1 className="text-3xl font-semibold tracking-tight">{WIZARD_STRINGS.title}</h1>
         <p className="text-muted-foreground">{WIZARD_STRINGS.intro}</p>
       </div>
+      <TenantLimitNotice limit={tenantLimit} />
       <Wizard
         idempotencyKey={randomUUID()}
         storefrontBaseDomain={settings.STOREFRONT_BASE_DOMAIN}

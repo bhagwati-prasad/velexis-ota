@@ -810,6 +810,8 @@ describe("adminGetDashboard", () => {
         "subscriptionsPastDue",
         // Always present, whatever the switches say (FIX-W41-PLATFORM, admin-dashboard.int.test.ts).
         "liveOfficeRequests",
+        // With them, whether more wait than they list (FIX-W69-LIMIT, KI-013).
+        "liveOfficeRequestsMore",
       ].sort(),
     );
   });

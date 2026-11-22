@@ -1,5 +1,7 @@
 // The tenant lifecycle routes of the portal (platform/docs/api-inventory.md §7): `createTenant` (PBE-018), the setup
-// page's progress, retry and one-time key reveal (PBE-023), the onboarding checklist (PBE-024), and go-live (PBE-061).
+// page's progress, retry and one-time key reveal (PBE-023), the onboarding checklist (PBE-024), go-live (PBE-061), and
+// since FIX-W69-LIMIT `listTenants`, whose `tenantLimit` counts the caller's OTAs as createTenant does (it moved here
+// from TenantsController, because its answer joins TenantsModule's list and MembershipsModule's count).
 // Thin: each handler binds its operation, reads the validated request and makes one service call. `POST /v1/tenants`
 // is no tenant route (there is no tenant yet), so it has no `@TenantRoles`: PortalAuthGuard needs a verified portal
 // account (`x-scope: portal`), and the global IdempotencyInterceptor makes it idempotent (`x-idempotent: true`). The
@@ -17,7 +19,7 @@ import { IDEMPOTENCY_KEY_HEADER } from "../common/http/idempotency.interceptor";
 import { etagOf } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
-import type { Tenant } from "../tenants/tenants.service";
+import type { Tenant, TenantList } from "../tenants/tenants.service";
 import { GoLiveService } from "./go-live.service";
 import {
   LifecycleService,
@@ -41,6 +43,12 @@ export class LifecycleController {
     private readonly onboarding: OnboardingService,
     private readonly golive: GoLiveService,
   ) {}
+
+  @Get()
+  @OpenApiOperation("listTenants")
+  listTenants(@AccessToken() token: AccessTokenClaims): Promise<TenantList> {
+    return this.lifecycle.listTenants(token.sub);
+  }
 
   @Post()
   @HttpCode(202)

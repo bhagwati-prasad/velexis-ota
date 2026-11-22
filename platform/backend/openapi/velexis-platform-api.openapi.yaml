@@ -1568,6 +1568,13 @@ paths:
         `failed`), oldest first, with the caller's role, the plan and the storefront URL of the primary host. The list
         is short (one entry per membership), so it is not paginated. Works before the e-mail address is verified, so
         the portal can show an empty dashboard.
+
+
+        **Tenant limit** (2026-11-22, known issue KI-010, FIX-W69-LIMIT): `tenantLimit` answers the caller's limit
+        (`max`, `MAX_TENANTS_PER_ACCOUNT`) and how many of its OTAs count against it (`owned`, counted as
+        `createTenant` counts them), so the portal says before the create-OTA wizard that a new OTA would be refused.
+        It is read when the list is read; `createTenant` counts again under the account's row lock and stays the final
+        word (`422 UNPROCESSABLE`, `details.reason = tenant_limit`).
       tags:
         - Tenants
       security:
@@ -1584,7 +1591,7 @@ paths:
         - tenant_domains
       responses:
         '200':
-          description: The caller's OTAs.
+          description: The caller's OTAs and its tenant limit.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -1602,6 +1609,9 @@ paths:
                     planCode: early_access
                     storefrontUrl: https://acme.ota.example.com/
                     storefrontEnvironment: test
+                tenantLimit:
+                  max: 3
+                  owned: 1
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '429':
@@ -7051,7 +7061,9 @@ paths:
         **Live office requests** (2026-11-04, lead decision (2n), FIX-W41-PLATFORM): `liveOfficeRequests` lists the
         OTAs whose owner requested live access on the Velexis account (`requestLiveAmadeus`) and whose live connection
         still waits for an office, read from the connections themselves (not from the audit log), oldest request
-        first, at most 50, so the admin assigns offices from one read of this page.
+        first, at most 50, so the admin assigns offices from one read of this page. `liveOfficeRequestsMore`
+        (2026-11-22, known issue KI-013, FIX-W69-LIMIT) says whether more OTAs wait than the list holds: `true` only
+        from 51 waiting OTAs, never at exactly 50.
       tags:
         - Admin dashboard
       security:
@@ -7110,6 +7122,7 @@ paths:
                     stripeEventsFailed: null
                     subscriptionsPastDue: null
                     liveOfficeRequests: []
+                    liveOfficeRequestsMore: false
                 m5:
                   summary: From M5, every switch on
                   value:
@@ -7144,6 +7157,7 @@ paths:
                         tenantName: Acme Travel
                         connectionId: sc_01JC4M2P6R0T4W8Y2A6C0E4G8K
                         requestedAt: '2027-03-01T09:12:00Z'
+                    liveOfficeRequestsMore: false
         '401':
           $ref: '#/components/responses/AdminUnauthenticated'
         '429':
@@ -15959,11 +15973,39 @@ components:
       additionalProperties: false
       required:
         - data
+        - tenantLimit
       properties:
         data:
           type: array
           items:
             $ref: '#/components/schemas/TenantSummary'
+        tenantLimit:
+          $ref: '#/components/schemas/TenantLimit'
+    TenantLimit:
+      type: object
+      description: >-
+        The caller's tenant limit as `listTenants` answers it (scope PF-10 AC4; 2026-11-22, known issue KI-010,
+        FIX-W69-LIMIT). The portal shows it before the create-OTA wizard: once `owned` reaches `max`, `createTenant`
+        would answer `422 UNPROCESSABLE` with `details.reason = tenant_limit` and `details.limit` = `max`. It is a
+        reading at the time of the call: `createTenant` counts again under the account's row lock and decides.
+      additionalProperties: false
+      required:
+        - max
+        - owned
+      properties:
+        max:
+          type: integer
+          minimum: 1
+          description: The most OTAs that are not `failed` one account may own (`MAX_TENANTS_PER_ACCOUNT`).
+        owned:
+          type: integer
+          minimum: 0
+          description: >-
+            The caller's OTAs that count against `max`, counted exactly as `createTenant` counts them: its `owner`
+            memberships that are not `removed` (a suspended membership still holds its OTA), of OTAs in any status but
+            `failed`. It is not the number of `owner` entries in `data`, which lists active memberships only. It can
+            be larger than `max`: accepting an invitation with the role `owner`, or being given the role `owner`,
+            checks no limit (known issue KI-046); the limit is then reached all the same.
     KeyAvailability:
       type: object
       description: Whether a key can be used for a new OTA.
@@ -18155,6 +18197,7 @@ components:
         - stripeEventsFailed
         - subscriptionsPastDue
         - liveOfficeRequests
+        - liveOfficeRequestsMore
       properties:
         tenantsByStatus:
           type: object
@@ -18235,6 +18278,13 @@ components:
             no OTA waits. An admin serves a request with `adminAssignAmadeusOffice`, which takes it off this list.
           items:
             $ref: '#/components/schemas/LiveOfficeRequest'
+        liveOfficeRequestsMore:
+          type: boolean
+          description: >-
+            Whether more OTAs wait for a live office than `liveOfficeRequests` lists (2026-11-22, known issue KI-013,
+            FIX-W69-LIMIT), by the same rule and in the same snapshot: `true` only when at least 51 OTAs wait, so the
+            list holds the 50 oldest and the others wait behind them; `false` whenever every waiting OTA is listed,
+            exactly 50 included.
     LiveOfficeRequest:
       type: object
       description: >-

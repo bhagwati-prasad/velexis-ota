@@ -4,6 +4,12 @@
 // brings the setup progress, the owner's retry and the one-time reveal of the initial test keys (below); suspend,
 // resume, migrate and go-live (later tasks) follow.
 //
+// `listTenants` (FIX-W69-LIMIT, known issue KI-010, 2026-11-22) lives here too, because its answer joins two layer-1
+// modules (architecture §2.2: cross-module use cases live in ProvisioningModule): the caller's OTAs of TenantsModule
+// (`TenantsRepository.listForMember`, mapped by `toTenantSummary`) and its `tenantLimit`, `max` =
+// MAX_TENANTS_PER_ACCOUNT and `owned` = createTenant's own `MembershipsRepository.countOwnedTenants`, read without a
+// lock: the portal shows the limit before the wizard, and createTenant counts again under the account's lock.
+//
 // createTenant, in order:
 //
 // 1. The plan. Before M5 (`FEATURE_STRIPE_BILLING` off) it is always `early_access`, whatever the request says
@@ -130,7 +136,7 @@ import { DomainsRepository, HOSTNAME_UNIQUE_INDEX } from "../domains/domains.rep
 import { MembershipsRepository } from "../memberships/memberships.repository";
 import { isReservedTenantKey, isVelexisOwnTenantKey, storefrontHost } from "../tenants/tenant-key";
 import { TENANT_KEY_CONSTRAINTS, TenantsRepository } from "../tenants/tenants.repository";
-import { toTenant } from "../tenants/tenants.service";
+import { toTenant, toTenantSummary, type TenantList } from "../tenants/tenants.service";
 import { ProvisioningDispatcher } from "./dispatcher";
 import { revealPlace, type InitialKeys } from "./post-steps/issue-api-keys.step";
 import { stepLog } from "./post-steps/post-steps.runner";
@@ -397,6 +403,23 @@ export class LifecycleService {
       );
       return { ...created, checkoutUrl: null, checkoutError: checkoutErrorOf(error) };
     }
+  }
+
+  /**
+   * listTenants for the account `accountId` (see the file header): the OTAs of its active memberships, oldest first,
+   * and its tenant limit. `owned` is counted exactly as createTenant counts (its `owner` memberships that are not
+   * `removed`, of OTAs that are not `failed`), so it can exceed `max` for an account that became an owner through an
+   * invitation or a role change (known issue KI-046); it is answered as counted.
+   */
+  async listTenants(accountId: string): Promise<TenantList> {
+    const [rows, owned] = await Promise.all([
+      this.tenants.listForMember(accountId),
+      this.memberships.countOwnedTenants(this.db, accountId),
+    ]);
+    return {
+      data: rows.map((row) => toTenantSummary(row, this.baseDomain)),
+      tenantLimit: { max: this.maxTenantsPerAccount, owned },
+    };
   }
 
   /** getProvisioning for the caller's membership (see the file header). */

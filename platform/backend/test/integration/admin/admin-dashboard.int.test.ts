@@ -2,7 +2,9 @@
 // platform/docs/api-inventory-admin.md §2 `adminGetDashboard`, flows/platform-admin-operations.md §E,
 // flows/amadeus-connection.md §C): `adminGetDashboard` through the HTTP pipeline (createTestApp), every answer checked
 // against the platform document. `liveOfficeRequests` lists the OTAs whose live Velexis connection waits for an office,
-// read from `supplier_connections` (never from the audit log), oldest first, then by connection id, at most 50.
+// read from `supplier_connections` (never from the audit log), oldest first, then by connection id, at most 50, and
+// `liveOfficeRequestsMore` says whether more wait (FIX-W69-LIMIT, known issue KI-013): `false` at exactly 50, `true`
+// from 51.
 //
 // This file has its own database clone: the Velexis live account is one per environment, and the counters of the
 // dashboard read the whole clone. Rows are written with the builders; the admin token comes from the application's
@@ -64,6 +66,11 @@ interface LiveOfficeRequestBody {
 }
 
 async function liveOfficeRequests(): Promise<LiveOfficeRequestBody[]> {
+  return (await dashboard()).requests;
+}
+
+/** adminGetDashboard as the admin, checked against the document: its live office requests and whether more wait. */
+async function dashboard(): Promise<{ readonly requests: LiveOfficeRequestBody[]; readonly more: boolean }> {
   const { token } = await tokens.sign({
     aud: "platform_admin",
     sub: admin.id,
@@ -76,7 +83,8 @@ async function liveOfficeRequests(): Promise<LiveOfficeRequestBody[]> {
     .set({ Authorization: `Bearer ${token}`, ...t.bffHeaders(ADMIN_IP) });
   expect(res.status, JSON.stringify(res.body)).toBe(200);
   expectResponseToMatch("adminGetDashboard", res, { document: "platform" });
-  return (res.body as { liveOfficeRequests: LiveOfficeRequestBody[] }).liveOfficeRequests;
+  const body = res.body as { liveOfficeRequests: LiveOfficeRequestBody[]; liveOfficeRequestsMore: boolean };
+  return { requests: body.liveOfficeRequests, more: body.liveOfficeRequestsMore };
 }
 
 /** An instant `minutes` minutes before the FakeClock's now. */
@@ -135,8 +143,10 @@ describe("adminGetDashboard: liveOfficeRequests", () => {
     await waitingOta("Leaving", 60, { status: "deprovisioning" });
     await waitingOta("Gone", 60, { status: "deleted", deleted_at: minutesAgo(5) });
 
-    const requests = await liveOfficeRequests();
+    const { requests, more } = await dashboard();
 
+    // Four wait, all listed: nothing more waits behind them.
+    expect(more).toBe(false);
     expect(requests).toEqual([
       {
         tenantId: oldest.tenant.id,
@@ -179,6 +189,26 @@ describe("adminGetDashboard: liveOfficeRequests", () => {
     ]);
   });
 
+  it("[FIX-W69-LIMIT AC4] answers liveOfficeRequestsMore false at exactly 50 waiting OTAs, and true with the 50 oldest at 51", async () => {
+    // The requests left by the test above still wait; this test fills up to exactly LIVE_OFFICE_REQUESTS_LIMIT.
+    const before = (await dashboard()).requests.length;
+    expect(before).toBeLessThan(LIVE_OFFICE_REQUESTS_LIMIT);
+    for (let index = 0; index < LIVE_OFFICE_REQUESTS_LIMIT - before; index += 1) {
+      await waitingOta(`Fifty ${index}`, 5000 - index);
+    }
+
+    const exactly = await dashboard();
+    expect(exactly.requests).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT);
+    expect(exactly.more).toBe(false);
+
+    // One more, the newest of all: the list keeps the 50 oldest, and says that one more waits.
+    const newest = await waitingOta("Fifty-first", 1);
+    const more = await dashboard();
+    expect(more.more).toBe(true);
+    expect(more.requests).toEqual(exactly.requests);
+    expect(more.requests.map((request) => request.tenantId)).not.toContain(newest.tenant.id);
+  });
+
   it("[FIX-W41-PLATFORM AC9] answers at most 50 requests, the oldest ones", async () => {
     // 51 more OTAs waiting, older than every request above.
     const ids: string[] = [];
@@ -187,9 +217,10 @@ describe("adminGetDashboard: liveOfficeRequests", () => {
       ids.push(tenant.id);
     }
 
-    const requests = await liveOfficeRequests();
+    const { requests, more } = await dashboard();
 
     expect(requests).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT);
     expect(requests.map((request) => request.tenantId)).toEqual(ids.slice(0, LIVE_OFFICE_REQUESTS_LIMIT));
+    expect(more).toBe(true);
   });
 });

@@ -37,8 +37,9 @@ const OFFICE_POOL_LOW = 3;
 const ENVIRONMENT_LABELS: Readonly<Record<Schemas["Environment"], string>> = SUPPLIER_ENVIRONMENT_LABELS;
 
 /**
- * The most live office requests `adminGetDashboard` answers (`maxItems` of `AdminDashboard.liveOfficeRequests`): at
- * this many, the section says that the oldest ones are shown.
+ * The most live office requests `adminGetDashboard` answers (`maxItems` of `AdminDashboard.liveOfficeRequests`). The
+ * section says that the oldest ones are shown only when the API says more wait (`liveOfficeRequestsMore`,
+ * FIX-W69-LIMIT, known issue KI-013): never at exactly this many.
  */
 const LIVE_OFFICE_REQUESTS_LIMIT = 50;
 
@@ -239,9 +240,16 @@ function assignOfficeHref(request: LiveOfficeRequest): string {
  * The live office requests (PAD-014, flows/amadeus-connection.md §C, PF-90) as `adminGetDashboard` answers them
  * (`liveOfficeRequests`, FIX-W41-PLATFORM, lead decision (2n) of 2026-11-04): the OTAs whose live Velexis connection
  * waits for an office, oldest request first, read by the API from the connections themselves, so this page asks for
- * nothing else. Each links to the OTA's connections, where "Assign office" serves it.
+ * nothing else. Each links to the OTA's connections, where "Assign office" serves it. The notice that the oldest
+ * requests are shown appears only when `more` (`liveOfficeRequestsMore`) says more wait than the list holds.
  */
-function LiveOfficeRequests({ requests }: { readonly requests: readonly LiveOfficeRequest[] }) {
+function LiveOfficeRequests({
+  requests,
+  more,
+}: {
+  readonly requests: readonly LiveOfficeRequest[];
+  readonly more: boolean;
+}) {
   return (
     <Section
       id="dashboard-live-requests"
@@ -283,7 +291,7 @@ function LiveOfficeRequests({ requests }: { readonly requests: readonly LiveOffi
           </TableBody>
         </Table>
       )}
-      {requests.length >= LIVE_OFFICE_REQUESTS_LIMIT ? (
+      {more ? (
         <p className="text-sm" data-notice="live-requests-oldest">
           {DASHBOARD_STRINGS.liveRequestsOldest(LIVE_OFFICE_REQUESTS_LIMIT)}
         </p>
@@ -385,7 +393,9 @@ function DashboardView({ dashboard }: { readonly dashboard: Dashboard }) {
         )}
       </Section>
 
-      {showLiveRequests ? <LiveOfficeRequests requests={dashboard.liveOfficeRequests} /> : null}
+      {showLiveRequests ? (
+        <LiveOfficeRequests requests={dashboard.liveOfficeRequests} more={dashboard.liveOfficeRequestsMore} />
+      ) : null}
     </div>
   );
 }
