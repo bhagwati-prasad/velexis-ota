@@ -822,6 +822,16 @@ export const SETUP_STRINGS = Object.freeze({
   notRetryable:
     "The set-up is no longer failed: someone may have retried it already. Here is where it stands now.",
   paymentFormExpired: "The payment form had expired. Try again.",
+  /**
+   * A retry refused over the tenant limit (`UNPROCESSABLE` with `details.reason = "tenant_limit"`, PF-10 AC4), with
+   * `details.limit` when the API sent it. The owner the API counted may be the caller or another owner of the OTA, so
+   * the words name neither (lead decision (37j), FIX-W69-PAGES); the wizard's `WIZARD_STRINGS.tenantLimit` counts the
+   * caller and says "You".
+   */
+  tenantLimit: (limit: number | undefined) =>
+    limit === undefined
+      ? "One of this OTA's owners already owns the most OTAs one account can have, so the set-up cannot be retried. An OTA whose set-up failed does not count. Contact Velexis support if you need more."
+      : `One of this OTA's owners already owns ${counted(limit, "OTA", "OTAs")}, the most one account can have, so the set-up cannot be retried. An OTA whose set-up failed does not count. Contact Velexis support if you need more.`,
 });
 
 // ---- OTA dashboard, onboarding checklist and settings (PFE-010) ----------------------------------------------
@@ -2838,4 +2848,38 @@ export const CONSOLE_STRINGS = Object.freeze({
   /** A billing suspension, for roles that cannot open the billing page. */
   billingAskOwner: "Ask an owner or a finance member of this OTA to settle the payment.",
   openAgain: "Open the console again",
+});
+
+// ---- Not-found and error pages (FIX-W69-PAGES, known issue KI-007) ---------------------------------------------
+
+/**
+ * The portal's not-found pages: `app/not-found.tsx` for an address that matches no page, and `app/(app)/not-found.tsx`
+ * inside the signed-in shell for `notFound()` from a page of the shell (an OTA the account is not a member of, or an
+ * id that is none; the API answers both with `404`, so the words do not say which).
+ */
+export const NOT_FOUND_STRINGS = Object.freeze({
+  /** The page title and its `h1`. */
+  title: "Page not found",
+  /** An address that matches no page of the portal. */
+  text: "There is no page at this address. It may have been mistyped, or the page may have moved.",
+  /** Inside the signed-in shell. */
+  signedInText: "This page does not exist, or you are not a member of the OTA it belongs to.",
+  dashboardLink: "Go to My OTAs",
+  homeLink: "Go to the home page",
+});
+
+/**
+ * The portal's error pages (`error.tsx` of each area, `app/error.tsx` and `app/global-error.tsx`): an unexpected
+ * failure while a page rendered. They never show the error's message or stack; only the digest Next.js gives a
+ * server error (the reference its log line carries), as Next.js's own production page does.
+ */
+export const ERROR_PAGE_STRINGS = Object.freeze({
+  title: "Something went wrong",
+  text: "This page could not be shown just now. Try again, and contact Velexis support if it keeps happening.",
+  tryAgain: "Try again",
+  /** The digest of a server error, for support. */
+  reference: (digest: string) => `Reference for support: ${digest}`,
+  dashboardLink: "Go to My OTAs",
+  signInLink: "Go to sign-in",
+  homeLink: "Go to the home page",
 });

@@ -17,8 +17,21 @@ The OTA backend and the platform worker reach it through `AMADEUS_BASE_URL_TEST=
 | Variable | Default | Read by |
 |---|---|---|
 | `STUB_PORT` | `4900` | `src/cli.ts`, through `@velexis/config`, after the development env files (root and package `.env.local`); commented out in the root `.env.example` |
+| `AMADEUS_STUB_CLIENT_ID` | unset | `src/cli.ts`, the same way. With `AMADEUS_STUB_CLIENT_SECRET`: the only client id the token endpoint accepts ([below](#refuse-credentials-locally)) |
+| `AMADEUS_STUB_CLIENT_SECRET` | unset | `src/cli.ts`, the same way. With `AMADEUS_STUB_CLIENT_ID`: the only client secret it accepts. Never printed |
 
-The CLI binds `127.0.0.1` only. It prints one line when it listens and one line per request (`amadeus-stub: GET /v2/shopping/flight-offers 200 [rate-limited] 3 ms`): method, path without the query string, status (`-` when the client went away first), scenario and duration. It never prints a header, a query string, a body or a token. `Ctrl-C` (SIGINT) or SIGTERM stops it. Exit codes: `0` stopped, `1` could not start (port in use, invalid `STUB_PORT`, production).
+The CLI binds `127.0.0.1` only. It prints one line when it listens (which credentials it accepts, named by their variables, never their values) and one line per request (`amadeus-stub: GET /v2/shopping/flight-offers 200 [rate-limited] 3 ms`): method, path without the query string, status (`-` when the client went away first), scenario and duration. It never prints a header, a query string, a body or a token. `Ctrl-C` (SIGINT) or SIGTERM stops it. Exit codes: `0` stopped, `1` could not start (port in use, invalid `STUB_PORT`, production), `2` usage (an unknown command, or only one of `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`).
+
+### Refuse credentials locally
+
+By default the token endpoint accepts any non-empty client id and secret, so the dummy credentials of the local database work. To try what wrong credentials do, such as the platform admin's "Invalid credentials" state of the Velexis Amadeus account (known issue KI-011, FIX-W69-PAGES), start the stub with **both** `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`, from your shell or the package's git-ignored `tools/amadeus-stub/.env.local`: it then gives a token to that pair only and answers any other with `401 invalid_client` in Amadeus's format, as `createStubServer({ credentials })` does. One of the two alone stops the CLI with exit code `2`, naming both variables; an empty value counts as unset. The values are dummies of your choosing, never real Amadeus credentials.
+
+```bash
+# The client id dev:seed gives the local test account (DEV_SEED_AMADEUS_CLIENT_ID), and a dummy secret of your own.
+AMADEUS_STUB_CLIENT_ID=velexis-dev-seed AMADEUS_STUB_CLIENT_SECRET=local-stub-secret pnpm stub:amadeus
+```
+
+With the platform worker running, open the platform admin's `/amadeus/accounts`: **Verify now** on the test account (whose secret `dev:seed` chose at random) or **Rotate secret** to any other value makes it "Invalid credentials" once the verification job ran; **Rotate secret** to `local-stub-secret` makes it "Active" again. While the stub is restricted every other pair is refused, the OTA's searches through that account included, and `dev:seed` cannot verify a new account: run `dev:seed` against the default stub, and restart the stub without the two variables to go back to it. [Local development §5](../../docs/mvp/local-development.md#5-amadeus-stub) has the same steps.
 
 ## Use it from tests
 
@@ -40,7 +53,7 @@ await stub.close();                                         // frees the port, d
 | `port` | (required) | `0` picks a free port |
 | `host` | `127.0.0.1` | The interface to bind |
 | `defaultScenario` | `success` | The scenario of requests without `X-Stub-Scenario`; `setDefaultScenario()` changes it later |
-| `credentials` | any non-empty pair | `{ clientId, clientSecret }`: only this pair gets a token, others get `401 invalid_client` |
+| `credentials` | any non-empty pair | `{ clientId, clientSecret }`: only this pair gets a token, others get `401 invalid_client` (the CLI passes `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`) |
 | `clock` | system clock | `{ now(): Date }` (the `FakeClock` of `@velexis/testing` fits): token expiry, `receivedAt`, the creation time of [orders](#orders) and when their `DELAYED` queue placements fall due |
 | `timers` | global timers | `{ setTimeout, clearTimeout }` of the `timeout` scenario, so a test fires the 30 s hold itself |
 | `specs` | one `AmadeusSpecs` per process | The loaded specifications and compiled validators; pass `new AmadeusSpecs()` for a cold start |

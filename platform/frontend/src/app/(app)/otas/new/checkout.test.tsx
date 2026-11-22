@@ -1281,7 +1281,7 @@ describe("/otas/[tenantId]/setup from M5: the payment of a new OTA", () => {
     expect(navigation.redirect).not.toHaveBeenCalled();
   });
 
-  it("[FIX-W67-KI002 AC5] retryPayment over the tenant limit comes back with its reason and limit, and the page says it as the wizard does", async () => {
+  it("[FIX-W67-KI002 AC5] [FIX-W69-PAGES AC2] retryPayment over the tenant limit comes back with its reason and limit, and the page says it owner-neutrally", async () => {
     // A redirect keeps no details, so the reason and the limit travel in the query.
     routes({
       [`POST ${RETRY_PATH}`]: () =>
@@ -1297,12 +1297,16 @@ describe("/otas/[tenantId]/setup from M5: the payment of a new OTA", () => {
       `NEXT_REDIRECT ${SETUP_PATH}?payment=UNPROCESSABLE&reason=tenant_limit`,
     );
 
-    // The page: the wizard's message for the same refusal, with the limit when the query carries a usable one.
+    // The page: the retry's owner-neutral message (lead decision (37j)), with the limit when the query carries a
+    // usable one; never the wizard's "You already own…", since the owner at the limit may be another owner.
     await openSetup({ payment: "UNPROCESSABLE", reason: "tenant_limit", limit: "3" });
-    expect(screen.getByRole("alert").textContent).toContain(WIZARD_STRINGS.tenantLimit(3));
+    expect(screen.getByRole("alert").textContent).toContain(SETUP_STRINGS.tenantLimit(3));
+    expect(screen.getByRole("alert").textContent).toContain("One of this OTA's owners already owns 3 OTAs");
+    expect(screen.getByRole("alert").textContent).not.toContain("You already own");
     cleanup();
     await openSetup({ payment: "UNPROCESSABLE", reason: "tenant_limit", limit: "lots" });
-    expect(screen.getByRole("alert").textContent).toContain(WIZARD_STRINGS.tenantLimit(undefined));
+    expect(screen.getByRole("alert").textContent).toContain(SETUP_STRINGS.tenantLimit(undefined));
+    expect(screen.getByRole("alert").textContent).not.toContain("You already own");
     cleanup();
     // Without the reason, UNPROCESSABLE keeps the catalogue's message.
     await openSetup({ payment: "UNPROCESSABLE" });

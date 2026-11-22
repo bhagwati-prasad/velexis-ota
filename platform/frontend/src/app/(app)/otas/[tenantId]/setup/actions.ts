@@ -8,7 +8,7 @@ import type { SecretValue } from "@/components/secret-reveal-panel";
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage, isTenantLimit, TENANT_LIMIT_REASON, tenantLimitOf } from "@/lib/errors";
 import { otaPath } from "@/lib/roles";
-import { SETUP_STRINGS, WIZARD_STRINGS } from "@/lib/strings";
+import { SETUP_STRINGS } from "@/lib/strings";
 
 /**
  * The server actions of the set-up page (README §2 `/otas/[tenantId]/setup` and §5; flow provisioning.md §4 and
@@ -18,7 +18,8 @@ import { SETUP_STRINGS, WIZARD_STRINGS } from "@/lib/strings";
  *   every 2 seconds until the set-up reaches a final state;
  * - `retrySetup` calls `retryProvisioning` (owners; only for a failed OTA), which starts a new set-up job; when an
  *   owner of the OTA already owns as many OTAs as one account may (`422 UNPROCESSABLE`, `details.reason =
- *   tenant_limit`, FIX-W67-KI002) its message is the wizard's for the same refusal, with the limit;
+ *   tenant_limit`, FIX-W67-KI002) its message says so with the limit, without saying which owner it is (lead decision
+ *   (37j), FIX-W69-PAGES);
  * - `revealSetupKeys` calls `revealInitialKeys` (owners) and returns the two test keys exactly once.
  *
  * From M5 (PFE-020; flow signup-and-create-ota.md step 7 and "Failure handling", billing flow §B and §H, PF-71) two
@@ -130,14 +131,17 @@ function failure(error: Pick<ApiError, "code">): SetupFailure {
 
 /**
  * A refused retry in the portal's words: the tenant limit (scope PF-10 AC4: a retry makes the failed OTA count again
- * for its owners) gets the wizard's message for the same refusal, with the limit; any other code its catalogue message.
+ * for its owners) gets the retry's own message, with the limit; any other code its catalogue message. The owner at
+ * the limit may be the caller or another owner of the OTA, and the API does not say which, so the message is
+ * owner-neutral (`SETUP_STRINGS.tenantLimit`, lead decision (37j), FIX-W69-PAGES), unlike the wizard's "You already
+ * own…", where the caller is the one counted.
  */
 function retryFailure(error: ApiError): SetupFailure {
   return isTenantLimit(error)
     ? {
         status: "failed",
         code: error.code,
-        message: WIZARD_STRINGS.tenantLimit(tenantLimitOf(error.details)),
+        message: SETUP_STRINGS.tenantLimit(tenantLimitOf(error.details)),
       }
     : failure(error);
 }
@@ -226,7 +230,7 @@ function checkoutTarget(value: string | null | undefined): string | undefined {
 /**
  * The set-up page, with `?payment=<code>` when a payment attempt did not leave for Stripe. A refused retry over the
  * tenant limit also carries `reason=tenant_limit` and, when the API sent it, `limit=<n>` (FIX-W67-KI002), because a
- * redirect keeps no details: the page words it as the wizard does.
+ * redirect keeps no details: the page words it as `retrySetup` does (owner-neutral, lead decision (37j)).
  */
 function setupPath(
   tenantId: string,
@@ -308,7 +312,7 @@ export async function retryPayment(tenantId: unknown, _formData: FormData): Prom
   });
   if (result.error !== undefined) {
     leaveOnSessionEnd(result.error, tenantId);
-    // The tenant limit comes back with its reason and limit (setupPath), worded as the wizard words it.
+    // The tenant limit comes back with its reason and limit (setupPath), worded as retrySetup words it.
     redirect(setupPath(tenantId, result.error));
   }
   const target = checkoutTarget(result.data.checkoutUrl);

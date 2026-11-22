@@ -69,8 +69,9 @@ export function leaveForMfaEnrolment(error: CodedError, next?: string): void {
 //
 // `createTenant` and, since FIX-W67-KI002 (lead decision (36e)), the owner's `retryProvisioning` answer `422
 // UNPROCESSABLE` with `details.reason = tenant_limit` and `details.limit` when an account owns as many OTAs that are
-// not failed as `MAX_TENANTS_PER_ACCOUNT` allows. The wizard and the set-up page both word it with
-// `WIZARD_STRINGS.tenantLimit` (lib/strings.ts).
+// not failed as `MAX_TENANTS_PER_ACCOUNT` allows. The wizard words it with `WIZARD_STRINGS.tenantLimit` ("You already
+// own…": the caller is the one counted), the set-up page's retry with the owner-neutral `SETUP_STRINGS.tenantLimit`
+// (the owner at the limit may be another owner of the OTA; lead decision (37j), FIX-W69-PAGES), both in lib/strings.ts.
 
 /** `details.reason` of the API's tenant limit answer. */
 export const TENANT_LIMIT_REASON = "tenant_limit";

@@ -254,8 +254,16 @@ test("the owner removes the member, who loses the OTA [PFE-015 AC1, AC2]", async
   // In the portal at once: the OTA is not found for them any more, and their dashboard lists no OTA.
   const response = await invited.goto(otaPath);
   expect(response?.status()).toBe(404);
-  await expect(invited.getByText("This page could not be found.")).toBeVisible();
-  await expectAccessible(invited, /404/);
+  // The portal's own not-found page, inside the signed-in shell, with the way back to My OTAs (KI-007).
+  await expect(
+    invited.getByRole("main").getByRole("heading", { level: 1, name: "Page not found" }),
+  ).toBeVisible();
+  await expect(invited.getByRole("navigation", { name: "Portal" })).toBeVisible();
+  await expect(invited.getByRole("main").getByRole("link", { name: "Go to My OTAs" })).toHaveAttribute(
+    "href",
+    "/dashboard",
+  );
+  await expectAccessible(invited, "Page not found");
   await invited.goto("/dashboard");
   await expect(invited.getByRole("heading", { name: "You have no OTA yet" })).toBeVisible();
   await expectAccessible(invited, "My OTAs");

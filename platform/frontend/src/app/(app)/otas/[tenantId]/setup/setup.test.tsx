@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { components } from "@velexis/api-types/platform";
 import type * as NextNavigation from "next/navigation";
+import type * as ReactModule from "react";
 import { Component, type ReactElement, type ReactNode } from "react";
 import { hydrateRoot, type Root } from "react-dom/client";
 import { renderToString } from "react-dom/server";
@@ -34,6 +35,40 @@ vi.mock("next/navigation", () => ({
   unstable_rethrow: navigation.unstable_rethrow,
 }));
 
+/**
+ * React's `cache()` as Next.js runs it on the server: one memo per request. The client build of React that a
+ * component test loads makes `cache()` a pass-through, so without this no test could see the OTA layout and the set-up
+ * page of one request share their `getTenant` call (KI-005). Every `routes()` call starts a new request.
+ */
+const requestScope = vi.hoisted(() => {
+  const memos = new Set<Map<string, unknown>>();
+  return {
+    memos,
+    next(): void {
+      for (const memo of memos) {
+        memo.clear();
+      }
+    },
+  };
+});
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof ReactModule>();
+  return {
+    ...actual,
+    cache: <Args extends unknown[], Result>(fn: (...args: Args) => Result) => {
+      const memo = new Map<string, unknown>();
+      requestScope.memos.add(memo);
+      return (...args: Args): Result => {
+        const key = JSON.stringify(args);
+        if (!memo.has(key)) {
+          memo.set(key, fn(...args));
+        }
+        return memo.get(key) as Result;
+      };
+    },
+  };
+});
+
 const settings = vi.hoisted(() => ({
   APP_ENV: "test" as const,
   PLATFORM_API_URL: "http://127.0.0.1:3100",
@@ -44,6 +79,7 @@ const settings = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/config", () => ({ getConfig: () => settings }));
 
+import OtaLayout from "@/app/(app)/otas/[tenantId]/layout";
 import { getSetupProgress, retrySetup, revealSetupKeys } from "@/app/(app)/otas/[tenantId]/setup/actions";
 import SetupPage from "@/app/(app)/otas/[tenantId]/setup/page";
 import { SETUP_POLL_INTERVAL_MS } from "@/components/provisioning-progress";
@@ -242,8 +278,12 @@ function sequence(...answers: Route[]): Route {
   };
 }
 
-/** Answers each call by `METHOD /path`: by default an owner's OTA in set-up, four steps done. */
+/**
+ * Answers each call by `METHOD /path`: by default an owner's OTA in set-up, four steps done. A new answer table is a
+ * new request, with nothing cached from the one before.
+ */
 function routes(overrides: Record<string, Route> = {}): void {
+  requestScope.next();
   const table: Record<string, Route> = {
     [`GET ${TENANT_PATH}`]: () => json(tenant(), 200),
     [`GET ${PROVISIONING_PATH}`]: () => json(running(4), 200),
@@ -942,7 +982,7 @@ describe("/otas/[tenantId]/setup: a failed set-up", () => {
     expect(summary()).toBe(SETUP_STRINGS.summaryFailed);
   });
 
-  it("[FIX-W67-KI002 AC5] a retry refused over the tenant limit shows the wizard's limit message, with the limit, where its errors appear", async () => {
+  it("[FIX-W67-KI002 AC5] [FIX-W69-PAGES AC2] a retry refused over the tenant limit shows the owner-neutral limit message, with the limit, where its errors appear", async () => {
     routes({
       [`GET ${TENANT_PATH}`]: () => json(tenant({ status: "failed" }), 200),
       [`GET ${PROVISIONING_PATH}`]: () => json(failed(), 200),
@@ -952,7 +992,13 @@ describe("/otas/[tenantId]/setup: a failed set-up", () => {
     fireEvent.click(retryButton() as HTMLElement);
 
     const alert = await screen.findByRole("alert", {}, ACTION_WAIT);
-    expect(alert.textContent).toBe(WIZARD_STRINGS.tenantLimit(3));
+    expect(alert.textContent).toBe(SETUP_STRINGS.tenantLimit(3));
+    // The owner at the limit may be another owner of the OTA (lead decision (37j)): the words never say "You".
+    expect(alert.textContent).toBe(
+      "One of this OTA's owners already owns 3 OTAs, the most one account can have, so the set-up cannot be retried. An OTA whose set-up failed does not count. Contact Velexis support if you need more.",
+    );
+    expect(alert.textContent).not.toContain("You already own");
+    expect(alert.textContent).not.toBe(WIZARD_STRINGS.tenantLimit(3));
     expect(alert.textContent).not.toBe(ERROR_MESSAGES.UNPROCESSABLE);
     expect(document.body.textContent).not.toContain("The API's own text, never shown");
     // Nothing started: the set-up is still failed, the button is back and nothing else was asked.
@@ -960,7 +1006,7 @@ describe("/otas/[tenantId]/setup: a failed set-up", () => {
     expect(summary()).toBe(SETUP_STRINGS.summaryFailed);
     expect(calls("POST", RETRY_PATH)).toHaveLength(1);
 
-    // retrySetup itself: the limit when the API sent a usable one, the wizard's wording without it otherwise.
+    // retrySetup itself: the limit when the API sent a usable one, the same owner-neutral words without it otherwise.
     resetPlatformApi();
     routes({
       [`POST ${RETRY_PATH}`]: () => apiError("UNPROCESSABLE", 422, {}, { reason: "tenant_limit" }),
@@ -968,8 +1014,18 @@ describe("/otas/[tenantId]/setup: a failed set-up", () => {
     expect(await retrySetup(TENANT_ID)).toEqual({
       status: "failed",
       code: "UNPROCESSABLE",
-      message: WIZARD_STRINGS.tenantLimit(undefined),
+      message: SETUP_STRINGS.tenantLimit(undefined),
     });
+    expect(SETUP_STRINGS.tenantLimit(undefined)).toBe(
+      "One of this OTA's owners already owns the most OTAs one account can have, so the set-up cannot be retried. An OTA whose set-up failed does not count. Contact Velexis support if you need more.",
+    );
+    // The wizard's message stays as it is: there the caller is the one counted.
+    expect(WIZARD_STRINGS.tenantLimit(3)).toBe(
+      "You already own 3 OTAs, the most one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more.",
+    );
+    expect(WIZARD_STRINGS.tenantLimit(undefined)).toBe(
+      "You already own the most OTAs one account can have. An OTA whose set-up failed does not count. Contact Velexis support if you need more.",
+    );
   });
 });
 
@@ -1139,6 +1195,29 @@ describe("/otas/[tenantId]/setup: the page", () => {
     expect(calls("POST", REVEAL_PATH)).toHaveLength(0);
   });
 
+  it("[FIX-W69-PAGES AC1] reads the OTA once per request: the page shares the OTA layout's getTenant call", async () => {
+    // The layout above the page loads the OTA first; the page of the same request reads that answer (requireTenant,
+    // the cached loadTenant) instead of calling getTenant again.
+    const layout = await OtaLayout({
+      children: await setupPage(),
+      params: Promise.resolve({ tenantId: TENANT_ID }),
+    });
+    render(<RedirectBoundary>{layout}</RedirectBoundary>);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Acme Travel");
+    expect(calls("GET", TENANT_PATH)).toHaveLength(1);
+    expectPortalHeaders(calls("GET", TENANT_PATH)[0]);
+    expect(calls("GET", PROVISIONING_PATH)).toHaveLength(1);
+    cleanup();
+
+    // In the layout's order too (the layout first, then the page), and the next request reads the OTA again, once.
+    routes();
+    const before = calls("GET", TENANT_PATH).length;
+    const element = await OtaLayout({ children: null, params: Promise.resolve({ tenantId: TENANT_ID }) });
+    expect(element).not.toBeNull();
+    await setupPage();
+    expect(calls("GET", TENANT_PATH)).toHaveLength(before + 1);
+  });
+
   it("renders the not-found page for an OTA the account is not a member of, or for what is not an OTA id", async () => {
     routes({
       [`GET ${TENANT_PATH}`]: () => apiError("NOT_FOUND", 404),
@@ -1151,13 +1230,25 @@ describe("/otas/[tenantId]/setup: the page", () => {
   });
 
   it("sends an ended session to sign-in with the way back, and shows the portal's message when the API is unavailable", async () => {
+    // The OTA's answer comes first, as in the layout above the page, which signs in again with the way back to the
+    // OTA's overview (requireTenant: the layout never knows which page it wraps).
     routes({
       [`GET ${TENANT_PATH}`]: () => apiError("TOKEN_EXPIRED", 401),
       [`GET ${PROVISIONING_PATH}`]: () => apiError("TOKEN_EXPIRED", 401),
     });
     await expect(setupPage()).rejects.toThrow(
+      new RegExp(`^NEXT_REDIRECT /sign-in\\?next=%2Fotas%2F${TENANT_ID}$`),
+    );
+    // A session that ends between the OTA and the progress comes back to the set-up page.
+    routes({ [`GET ${PROVISIONING_PATH}`]: () => apiError("TOKEN_EXPIRED", 401) });
+    await expect(setupPage()).rejects.toThrow(
       `NEXT_REDIRECT /sign-in?${new URLSearchParams({ next: SETUP_PATH }).toString()}`,
     );
+    // The API unavailable for the OTA: the portal's message, never the API's text.
+    routes({ [`GET ${TENANT_PATH}`]: () => apiError("SERVICE_UNAVAILABLE", 503) });
+    await openSetup();
+    expect(screen.getByRole("alert").textContent).toContain(ERROR_MESSAGES.SERVICE_UNAVAILABLE);
+    cleanup();
 
     routes({ [`GET ${PROVISIONING_PATH}`]: () => apiError("SERVICE_UNAVAILABLE", 503) });
     await openSetup();

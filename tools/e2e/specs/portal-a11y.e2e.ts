@@ -401,8 +401,11 @@ test("the public pages pass axe signed out: the landing page, the pricing, the t
   });
   const missing = await page.goto("/pfe028-no-such-page");
   expect(missing?.status()).toBe(404);
-  await expect(page.getByRole("heading", { name: "This page could not be found." })).toBeVisible();
-  await expectNoSeriousA11yViolations(page);
+  // The portal's own not-found page, with its title and the ways back (KI-007).
+  await expect(main(page).getByRole("heading", { level: 1, name: "Page not found" })).toBeVisible();
+  await expect(main(page).getByRole("link", { name: "Go to the home page" })).toHaveAttribute("href", "/");
+  await expect(main(page).getByRole("link", { name: "Go to My OTAs" })).toHaveAttribute("href", "/dashboard");
+  await expectAccessible(page, "Page not found");
   visited.add("/_not-found");
 });
 

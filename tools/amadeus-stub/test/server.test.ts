@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { ConfigError } from "@velexis/config";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { readStubCliConfig, startStubCli } from "../src/cli";
+import { exitCodeOf, readStubCliConfig, startStubCli, StubCliUsageError } from "../src/cli";
 import {
   AMADEUS_SPEC_FILES,
   AmadeusSpecs,
@@ -977,5 +977,90 @@ describe("server lifecycle and CLI", () => {
     );
     expect(output).not.toContain(token);
     expect(output).not.toContain("MAD");
+  });
+
+  it("[FIX-W69-PAGES AC4] reads AMADEUS_STUB_CLIENT_ID and AMADEUS_STUB_CLIENT_SECRET together, and refuses one alone as a usage error", () => {
+    const pair = { AMADEUS_STUB_CLIENT_ID: CLIENT.id, AMADEUS_STUB_CLIENT_SECRET: CLIENT.secret };
+    expect(readStubCliConfig(pair)).toEqual({
+      host: "127.0.0.1",
+      port: 4900,
+      credentials: { clientId: CLIENT.id, clientSecret: CLIENT.secret },
+    });
+    // Neither (or empty values, which count as unset): any non-empty pair, as before.
+    expect(readStubCliConfig({})).not.toHaveProperty("credentials");
+    expect(
+      readStubCliConfig({ AMADEUS_STUB_CLIENT_ID: "", AMADEUS_STUB_CLIENT_SECRET: "" }),
+    ).not.toHaveProperty("credentials");
+    for (const alone of [
+      { AMADEUS_STUB_CLIENT_ID: CLIENT.id },
+      { AMADEUS_STUB_CLIENT_SECRET: CLIENT.secret },
+      { AMADEUS_STUB_CLIENT_ID: CLIENT.id, AMADEUS_STUB_CLIENT_SECRET: "" },
+    ]) {
+      let thrown: unknown;
+      try {
+        readStubCliConfig(alone);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(StubCliUsageError);
+      expect(String(thrown)).toMatch(/AMADEUS_STUB_CLIENT_ID and AMADEUS_STUB_CLIENT_SECRET/);
+      // The message names the variables, never a value.
+      expect(String(thrown)).not.toContain(CLIENT.id);
+      expect(String(thrown)).not.toContain(CLIENT.secret);
+      // The process exits with the usage code, not 0 and not the could-not-start code.
+      expect(exitCodeOf(thrown)).toBe(2);
+    }
+    expect(exitCodeOf(new Error("listen EADDRINUSE"))).toBe(1);
+  });
+
+  it("[FIX-W69-PAGES AC4] with both variables the CLI's stub gives a token to that pair only and refuses a wrong secret with 401 invalid_client", async () => {
+    let output = "";
+    const port = await freePort();
+    const stub = await startStubCli({
+      env: {
+        STUB_PORT: String(port),
+        AMADEUS_STUB_CLIENT_ID: CLIENT.id,
+        AMADEUS_STUB_CLIENT_SECRET: CLIENT.secret,
+      },
+      stdout: { write: (c: string) => (output += c) },
+    });
+    servers.push(stub);
+    const wrong = await tokenRequest(
+      stub,
+      `grant_type=client_credentials&client_id=${CLIENT.id}&client_secret=wrong-secret`,
+    );
+    expect(wrong.status).toBe(401);
+    expect(await json<OAuthErrorBody>(wrong)).toMatchObject({ error: "invalid_client" });
+    const otherClient = await tokenRequest(
+      stub,
+      `grant_type=client_credentials&client_id=other-client&client_secret=${CLIENT.secret}`,
+    );
+    expect(otherClient.status).toBe(401);
+    expect((await tokenRequest(stub, CREDENTIALS_FORM)).status).toBe(200);
+    await vi.waitFor(() => expect(output.split("\n")).toHaveLength(5));
+    // The listening line names the restriction by its variables; no line carries the id or the secret.
+    expect(output.split("\n")[0]).toContain(
+      "credentials: only AMADEUS_STUB_CLIENT_ID and AMADEUS_STUB_CLIENT_SECRET",
+    );
+    expect(output).not.toContain(CLIENT.id);
+    expect(output).not.toContain(CLIENT.secret);
+    expect(output).not.toContain("wrong-secret");
+
+    // Without the variables, the default stays: any non-empty pair gets a token.
+    let plain = "";
+    const open = await startStubCli({
+      env: { STUB_PORT: String(await freePort()) },
+      stdout: { write: (c: string) => (plain += c) },
+    });
+    servers.push(open);
+    expect(
+      (
+        await tokenRequest(
+          open,
+          `grant_type=client_credentials&client_id=${CLIENT.id}&client_secret=wrong-secret`,
+        )
+      ).status,
+    ).toBe(200);
+    expect(plain.split("\n")[0]).toContain("credentials: any non-empty client id and secret");
   });
 });

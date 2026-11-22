@@ -1,5 +1,5 @@
 import { NextRequest, type NextResponse } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const settings = vi.hoisted(() => ({
   APP_ENV: "production" as "development" | "test" | "production",
@@ -12,7 +12,7 @@ const settings = vi.hoisted(() => ({
 vi.mock("@/lib/config", () => ({ getConfig: () => settings }));
 
 import { contentSecurityPolicy } from "./lib/csp";
-import { APP_ROUTE_PREFIXES, config, middleware, signInUrl } from "./middleware";
+import { APP_ROUTE_PREFIXES, config, developmentHostRedirect, middleware, signInUrl } from "./middleware";
 
 const fetchMock = vi.fn<(input: Request) => Promise<Response>>();
 
@@ -713,6 +713,77 @@ describe("request id", () => {
 
     expect(forwardedHeader(kept, "x-request-id")).toBe("req_from_caddy_0001");
     expect(forwardedHeader(created, "x-request-id")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("the address of local development (KI-012)", () => {
+  const LOCAL_URL = "http://localhost:3000";
+  let publicUrl: string;
+
+  beforeEach(() => {
+    publicUrl = settings.PUBLIC_PORTAL_URL;
+  });
+
+  afterEach(() => {
+    settings.PUBLIC_PORTAL_URL = publicUrl;
+  });
+
+  it("[FIX-W69-PAGES AC5] with APP_ENV=development, sends the address next dev prints to the same path and query on PUBLIC_PORTAL_URL with 307", async () => {
+    settings.APP_ENV = "development";
+    settings.PUBLIC_PORTAL_URL = LOCAL_URL;
+    for (const [path, method] of [
+      ["/sign-in?next=%2Fdashboard", "GET"],
+      ["/sign-out", "POST"],
+      ["/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/setup?payment=UNPROCESSABLE", "GET"],
+      ["//other.example/x?y=1", "GET"],
+    ] as const) {
+      // The address as the browser sent it (a string, so `//other.example/x` stays the path of 127.0.0.1).
+      const response = await middleware(
+        new NextRequest(`http://127.0.0.1:3000${path}`, { method, headers: { host: "127.0.0.1:3000" } }),
+      );
+      expect(response.status, path).toBe(307);
+      const location = new URL(response.headers.get("location") ?? "");
+      // The path is set on the configured origin, never resolved against it: a protocol-relative path stays on it.
+      expect(location.origin, path).toBe(LOCAL_URL);
+      expect(`${location.pathname}${location.search}`, path).toBe(path);
+      expect(response.headers.get("cache-control"), path).toBe("no-store");
+      // Nothing of the session on the wrong address: no refresh call, no cookie.
+      expect(setCookies(response), path).toEqual([]);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W69-PAGES AC5] with APP_ENV=development, passes the configured address through, in any letter case, and a request without a Host header", async () => {
+    settings.APP_ENV = "development";
+    settings.PUBLIC_PORTAL_URL = LOCAL_URL;
+    for (const host of ["localhost:3000", "LOCALHOST:3000"]) {
+      const response = await middleware(
+        new NextRequest(new URL("/sign-in", LOCAL_URL), { headers: { host } }),
+      );
+      expect(response.status, host).not.toBe(307);
+      expect(response.headers.get("content-security-policy"), host).toContain("'unsafe-eval'");
+    }
+    expect((await middleware(request("/sign-in"))).status).not.toBe(307);
+  });
+
+  it("[FIX-W69-PAGES AC5] changes nothing with APP_ENV=test or production: 127.0.0.1 and any other host are served as before", async () => {
+    for (const appEnv of ["test", "production"] as const) {
+      settings.APP_ENV = appEnv;
+      for (const configured of [LOCAL_URL, publicUrl]) {
+        settings.PUBLIC_PORTAL_URL = configured;
+        const response = await middleware(
+          new NextRequest(new URL("/sign-in", "http://127.0.0.1:3000"), {
+            headers: { host: "127.0.0.1:3000" },
+          }),
+        );
+        expect(response.status, `${appEnv} ${configured}`).not.toBe(307);
+        expect(isPassedThrough(response), `${appEnv} ${configured}`).toBe(true);
+        expect(response.headers.get("content-security-policy"), appEnv).toContain("'nonce-");
+      }
+      expect(
+        developmentHostRedirect(request("/sign-in", { headers: { host: "127.0.0.1:3000" } }), settings),
+      ).toBeUndefined();
+    }
   });
 });
 

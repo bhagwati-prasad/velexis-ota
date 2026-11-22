@@ -175,8 +175,46 @@ function cookieHeader(request: NextRequest, forward: ReadonlyMap<string, string 
   return [...cookies].map(([name, value]) => `${name}=${encodeURIComponent(value)}`).join("; ");
 }
 
+// ---- Development: browse the configured address (known issue KI-012) ----------------------------------------
+
+/**
+ * With `APP_ENV=development` only: a request whose `Host` header is not the host of
+ * `PUBLIC_PLATFORM_ADMIN_URL`, such as `127.0.0.1:3001`, the address `next dev --hostname 127.0.0.1` prints, is
+ * sent with `307` to the same path and query on that URL (`http://localhost:3001` in `.env.example`). The admin's
+ * cookies, the `Origin` checks of its route handlers and its own redirects all use that URL, so on another address
+ * sign-out answered `403` and the session's cookies seemed lost (KI-012, FIX-W69-PAGES). The browser's `Host`
+ * header decides: Next.js reports `127.0.0.1` as `localhost` in `nextUrl`. A request without one is left alone,
+ * and nothing changes with `APP_ENV=test` (the e2e stack browses `127.0.0.1` with `PUBLIC_*` URLs of its own) or
+ * `production` (Caddy). The path is set on the configured origin, never resolved against it, so
+ * `//other.example/x` stays on it.
+ */
+export function developmentHostRedirect(
+  request: NextRequest,
+  settings: { readonly APP_ENV: string; readonly PUBLIC_PLATFORM_ADMIN_URL: string },
+): NextResponse | undefined {
+  if (settings.APP_ENV !== "development") {
+    return undefined;
+  }
+  const host = request.headers.get("host");
+  const target = new URL(new URL(settings.PUBLIC_PLATFORM_ADMIN_URL).origin);
+  if (host === null || host.toLowerCase() === target.host) {
+    return undefined;
+  }
+  target.pathname = request.nextUrl.pathname;
+  target.search = request.nextUrl.search;
+  const response = NextResponse.redirect(target, 307);
+  response.headers.set("Cache-Control", "no-store");
+  response.headers.set("X-Robots-Tag", "noindex");
+  return response;
+}
+
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   const settings = getConfig();
+  // Before anything else: no refresh and no cookie on an address the admin does not use (KI-012).
+  const developmentRedirect = developmentHostRedirect(request, settings);
+  if (developmentRedirect !== undefined) {
+    return developmentRedirect;
+  }
   const nonce = createNonce();
   const csp = contentSecurityPolicy({ nonce, development: settings.APP_ENV === "development" });
 

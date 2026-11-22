@@ -67,10 +67,12 @@ pnpm dev                                                  # every app in watch m
 pnpm --filter @velexis/ota-backend dev                    # or one app only
 ```
 
+Browse the apps at the URLs below (the `PUBLIC_*` URLs of `.env.example`), not at the `127.0.0.1` address a dev server prints: the portal's and the platform admin's cookies, the `Origin` checks of "Sign out" and "Open console" and their redirects use `PUBLIC_PORTAL_URL` and `PUBLIC_PLATFORM_ADMIN_URL`. With `APP_ENV=development` both apps send a request for another host to the same path on their `PUBLIC_*` URL with `307`, so `http://127.0.0.1:3000/dashboard` lands on `http://localhost:3000/dashboard` (known issue KI-012, FIX-W69-PAGES). If you change a `PUBLIC_*` URL in `.env.local`, browse that address instead.
+
 | What | Local URL | Notes |
 |---|---|---|
-| Portal | <http://localhost:3000> | `platform/frontend` |
-| Platform admin | <http://localhost:3001> | `platform/admin`; MFA required even locally |
+| Portal | <http://localhost:3000> | `platform/frontend`; `127.0.0.1:3000` is sent here |
+| Platform admin | <http://localhost:3001> | `platform/admin`; MFA required even locally; `127.0.0.1:3001` is sent here |
 | OTA admin | <http://localhost:3002> | `ota/admin`; reach it through the portal's "Open console" (SSO) |
 | Platform API | <http://localhost:3100> | worker health on 3101 |
 | OTA API | <http://localhost:4000> | worker health on 4001; SDK users send `X-Api-Key` with a `pk_test_`/`sk_test_` key |
@@ -102,6 +104,13 @@ To start over: `sudo -u postgres dropdb --force velexis` (macOS: `dropdb --force
 [`tools/amadeus-stub`](../../tools/) (task X-026, M1) is a small Node server that implements the Amadeus OAuth token endpoint and the flight operations of [`docs/amadeus-api/`](../amadeus-api/) from recorded, scrubbed fixtures ([ADR-0015](adr/0015-testing-strategy.md)).
 
 - Point the OTA backend at it: `AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900` (already in `.env.example`). The Velexis test Amadeus account in the local database can hold any dummy client id and secret.
+- **Wrong credentials, locally** (known issue KI-011, FIX-W69-PAGES). To see the platform admin's "Invalid credentials" state of the Velexis Amadeus account, start the stub with both `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET` (dummies of your own; from your shell or the git-ignored `tools/amadeus-stub/.env.local`). The stub then gives a token to that pair only and answers any other with `401 invalid_client`; one variable alone stops it with exit code 2.
+
+  ```bash
+  AMADEUS_STUB_CLIENT_ID=velexis-dev-seed AMADEUS_STUB_CLIENT_SECRET=local-stub-secret pnpm stub:amadeus   # velexis-dev-seed: the client id dev:seed uses
+  ```
+
+  With the platform worker running, **Verify now** on `/amadeus/accounts` (the seed's secret is random) or **Rotate secret** to any other value shows "Invalid credentials" once the verification job ran; **Rotate secret** to `local-stub-secret` makes the account "Active" again. While restricted, the stub refuses every other pair (the OTA's searches through the account too, and `dev:seed`'s verification of a new account), so run `dev:seed` against the default stub and restart the stub without the two variables afterwards. Details: [`tools/amadeus-stub/README.md`](../../tools/amadeus-stub/README.md#refuse-credentials-locally).
 - Choose a scenario per request with the header `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `version-conflict`, `server-error`, `rate-limited`, `timeout`, `timeout-lost`), or with magic values in end-to-end runs (destination `ZZZ` returns no offers; a credit card numbered `4000000000000002` is refused).
 - Every request is validated against the Amadeus specification, so a malformed request from our client fails loudly.
 - **Recording fixtures** from the real Amadeus Enterprise test environment (task X-034; the human step of OBE-027) uses your own test credentials and is **never** run in CI: the command refuses to start when `CI` is set (or `APP_ENV`/`NODE_ENV` is `production`).
@@ -186,3 +195,4 @@ The smoke test runs the real Caddyfile on `127.0.0.1:8443` with Caddy's local CA
 | Integration tests hang at start | PostgreSQL or Redis not running, or `TEST_DATABASE_ADMIN_URL` wrong | `pg_isready`, `redis-cli ping`, check `.env.local` |
 | Stale types after an OpenAPI or migration change | Generated files not rebuilt | `pnpm contracts:generate`, `pnpm db:codegen`, `pnpm build` |
 | Webhook signature errors | `whsec_` changed after restarting `stripe listen` | Copy the new secret into `.env.local` and restart the backend |
+| "Sign out" or "Open console" answers `403`, or the portal or the platform admin seems to forget the session after a redirect | The app was browsed on another host than its `PUBLIC_*` URL (`127.0.0.1` against `localhost`) while `APP_ENV` is not `development`, which redirects to it ([§3](#3-daily-work), KI-012) | Browse the `PUBLIC_PORTAL_URL` / `PUBLIC_PLATFORM_ADMIN_URL` address (`http://localhost:3000`, `http://localhost:3001`) |

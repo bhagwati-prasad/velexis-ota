@@ -22,7 +22,8 @@ import { Button } from "@/components/ui/button";
 import { platformApi } from "@/lib/api";
 import { errorMessage, isPlatformErrorCode, TENANT_LIMIT_REASON } from "@/lib/errors";
 import { can, otaPath, type TenantRole } from "@/lib/roles";
-import { SETUP_STRINGS, WIZARD_STRINGS } from "@/lib/strings";
+import { SETUP_STRINGS } from "@/lib/strings";
+import { isTenantId, requireTenant } from "@/lib/tenant";
 
 export const metadata: Metadata = { title: SETUP_STRINGS.title };
 
@@ -34,16 +35,16 @@ type Subscription = components["schemas"]["Subscription"];
  */
 type SearchParams = Record<string, string | string[] | undefined>;
 
-/** An OTA id as the platform issues it (`ten_` + ULID); anything else is not an OTA of the account. */
-const TENANT_ID = /^ten_[0-9A-HJKMNP-TV-Z]{26}$/;
-
 /** Answers that mean the session is over. */
 const SESSION_ENDED: ReadonlySet<PlatformErrorCode> = new Set<PlatformErrorCode>([
   "UNAUTHENTICATED",
   "TOKEN_EXPIRED",
 ]);
 
-/** Leaves the page for an ended session, an unverified account or an OTA the account is no member of. */
+/**
+ * Leaves the page for an ended session, an unverified account or an OTA the account is no member of, when the
+ * progress or the subscription answers so (the OTA itself is read through `requireTenant`, which does the same).
+ */
 function leaveOn(code: PlatformErrorCode, tenantId: string): void {
   if (SESSION_ENDED.has(code)) {
     redirect(`/sign-in?${new URLSearchParams({ next: otaPath(tenantId, "/setup") }).toString()}`);
@@ -179,8 +180,9 @@ function limitOf(value: string | undefined): number | undefined {
  * Why the last payment attempt did not leave for Stripe (`?payment=<code>`, written by the wizard and the page's
  * actions). Only a code of the catalogue counts, and only the portal's text for it is shown; a plan that is no
  * longer available links to the billing page for the roles that see it. A retry refused over the tenant limit
- * (`UNPROCESSABLE` with `reason=tenant_limit`, PF-10 AC4, FIX-W67-KI002) reads as the wizard's message for the same
- * refusal, with the limit when the query carries one.
+ * (`UNPROCESSABLE` with `reason=tenant_limit`, PF-10 AC4, FIX-W67-KI002) reads as the retry's own message, with the
+ * limit when the query carries one: owner-neutral, because the owner at the limit may be another owner of the OTA
+ * (lead decision (37j), FIX-W69-PAGES).
  */
 function PaymentNotice({
   code,
@@ -196,7 +198,7 @@ function PaymentNotice({
 }) {
   const message =
     code === "UNPROCESSABLE" && tenantLimit !== undefined
-      ? WIZARD_STRINGS.tenantLimit(tenantLimit.limit)
+      ? SETUP_STRINGS.tenantLimit(tenantLimit.limit)
       : (PAYMENT_NOTICES[code] ?? errorMessage(code));
   const informative = INFORMATIVE.has(code);
   return (
@@ -293,11 +295,12 @@ function AbandonedPanel({ tenantId, canRetry }: { readonly tenantId: string; rea
 
 /**
  * `/otas/[tenantId]/setup` (README §2 Signed in; flow provisioning.md §4 and "Failure handling"; PF-11): the set-up
- * progress of a new OTA for any member. The page reads the OTA (`getTenant`: its name, primary host and the caller's
- * role) and the progress (`getSetupProgress`, i.e. `getProvisioning`) on the server; `ProvisioningProgress` then polls
- * every 2 seconds until the set-up is over. Owners get "Retry the set-up" on a failed OTA and "Reveal the test keys"
- * once it is active. The keys are never read here: they come only from the owner's click, so a reload never shows
- * them again.
+ * progress of a new OTA for any member. The page reads the OTA (its name, primary host and the caller's role) through
+ * `requireTenant`, the cached `loadTenant` that the OTA layout has read already, so a request makes one `getTenant`
+ * call (KI-005, FIX-W69-PAGES), and the progress (`getSetupProgress`, i.e. `getProvisioning`) on the server;
+ * `ProvisioningProgress` then polls every 2 seconds until the set-up is over. Owners get "Retry the set-up" on a
+ * failed OTA and "Reveal the test keys" once it is active. The keys are never read here: they come only from the
+ * owner's click, so a reload never shows them again.
  *
  * From M5 (PFE-020; flow signup-and-create-ota.md steps 7–8 and "Failure handling", PF-71), for owners and finance
  * members (the roles that read the subscription):
@@ -317,30 +320,32 @@ export default async function SetupPage({
   readonly searchParams?: Promise<SearchParams>;
 }) {
   const { tenantId } = await params;
-  if (!TENANT_ID.test(tenantId)) {
+  if (!isTenantId(tenantId)) {
     notFound();
   }
-  const api = await platformApi();
-  const [tenant, progress, query] = await Promise.all([
-    api.GET("/v1/tenants/{tenantId}", { params: { path: { tenantId } } }),
-    getSetupProgress(tenantId),
+  // The progress is read while the OTA is; the OTA's outcome is handled first, as the layout above the page handles
+  // it: a missing or foreign OTA renders the not-found page, an ended session signs in again (`requireTenant`). The
+  // progress's own redirect waits for that (its rejection is handled here, then thrown by the await below).
+  const progressRead = getSetupProgress(tenantId);
+  void progressRead.catch(() => undefined);
+  const loaded = await requireTenant(tenantId);
+  const [progress, query] = await Promise.all([
+    progressRead,
     searchParams ?? Promise.resolve<SearchParams>({}),
   ]);
-  if (tenant.error !== undefined) {
-    leaveOn(tenant.error.code, tenantId);
-  }
   if (progress.status === "failed") {
     leaveOn(progress.code, tenantId);
   }
   // Rate limit, API unavailable and the like: the portal's message for the code, never the API's text.
-  if (tenant.error !== undefined) {
-    return <SetupUnavailable message={errorMessage(tenant.error)} />;
+  if (loaded.error !== undefined) {
+    return <SetupUnavailable message={errorMessage(loaded.error)} />;
   }
+  const { tenant } = loaded;
   if (progress.status === "failed") {
-    return <SetupUnavailable name={tenant.data.name} message={progress.message} />;
+    return <SetupUnavailable name={tenant.name} message={progress.message} />;
   }
 
-  const role = tenant.data.myRole;
+  const role = tenant.myRole;
   const checkoutReturn = single(query["checkout"]) === "success";
   if (
     checkoutReturn &&
@@ -369,7 +374,7 @@ export default async function SetupPage({
 
   if (payment.kind === "waiting") {
     return (
-      <SetupFrame name={tenant.data.name}>
+      <SetupFrame name={tenant.name}>
         {notice}
         <PaymentPanel
           tenantId={tenantId}
@@ -383,7 +388,7 @@ export default async function SetupPage({
   }
   if (payment.kind === "abandoned") {
     return (
-      <SetupFrame name={tenant.data.name}>
+      <SetupFrame name={tenant.name}>
         {notice}
         <AbandonedPanel tenantId={tenantId} canRetry={can(role, "manageBilling")} />
       </SetupFrame>
@@ -391,7 +396,7 @@ export default async function SetupPage({
   }
 
   return (
-    <SetupFrame name={tenant.data.name}>
+    <SetupFrame name={tenant.name}>
       {notice}
       {checkoutReturn && progress.progress.tenantStatus === "provisioning" ? (
         <Alert role="status" data-checkout="success">
@@ -402,8 +407,8 @@ export default async function SetupPage({
       ) : null}
       <ProvisioningProgress
         initial={progress.progress}
-        isOwner={tenant.data.myRole === "owner"}
-        storefrontUrl={`https://${tenant.data.primaryHost}/`}
+        isOwner={tenant.myRole === "owner"}
+        storefrontUrl={`https://${tenant.primaryHost}/`}
         dashboardHref={otaPath(tenantId)}
         apiKeysHref={otaPath(tenantId, "/api-keys")}
         poll={getSetupProgress.bind(null, tenantId)}
