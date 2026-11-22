@@ -23,7 +23,7 @@
     {
       "from": "ui",
       "to": "api",
-      "label": "GET /v1/admin/dashboard (liveOfficeRequests ≤ 50, oldest first)",
+      "label": "GET /v1/admin/dashboard (liveOfficeRequests ≤ 50, oldest first; liveOfficeRequestsMore)",
       "kind": "call"
     },
     {

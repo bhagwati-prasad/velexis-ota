@@ -36,8 +36,8 @@
       "app": "portal",
       "title": "The invited person signs up and accepts",
       "url": "http://localhost:3000/invitations/accept",
-      "actions": "In the member's browser open the link and press **Create an account** (the invited address is prefilled). Verify through Mailpit, sign in on `/sign-in?verified=1`, then open the invitation link from Mailpit again (the first visit's 15-minute cookie may have expired) and press **Accept the invitation**.",
-      "expect": "The page \"Join `<OTA>`\" shows the OTA, the role, the inviter, the invited address and the link's expiry (the token is moved into a 15-minute httpOnly cookie and removed from the URL). After verifying, the browser lands on `/sign-in?verified=1` with no way back to the invitation (the page's hint says to open the link again). After **Accept the invitation** the member lands on the OTA's overview `/otas/ten_…` with the role *Agent*, and `/dashboard` lists the OTA.",
+      "actions": "In the member's browser open the link and press **Create an account** (the invited address is prefilled). Verify through Mailpit in the same browser, sign in on `/sign-in?verified=1&next=%2Finvitations%2Faccept` and press **Accept the invitation** on the invitation page you are back on.",
+      "expect": "The page \"Join `<OTA>`\" shows the OTA, the role, the inviter, the invited address and the link's expiry (the token is moved into a 15-minute httpOnly cookie and removed from the URL). After verifying, the browser lands on `/sign-in?verified=1&next=%2Finvitations%2Faccept`, and signing in returns to the invitation (\"You are signed in as …\"). After **Accept the invitation** the member lands on the OTA's overview `/otas/ten_…` with the role *Agent*, and `/dashboard` lists the OTA.",
       "data": "`tenant_memberships` row (`agent`, `active`); invitation `accepted`; audit `membership.created`; `vx:invalidate {type: \"membership\"}` published.",
       "code": [
         "platform/backend/src/memberships/invitations.service.ts",

@@ -321,7 +321,7 @@
       "method": "GET",
       "path": "/v1/tenants",
       "operationId": "listTenants",
-      "purpose": "List my OTAs [Tenants; portal_unverified]"
+      "purpose": "List my OTAs and my tenant limit [Tenants; portal_unverified]"
     },
     {
       "method": "POST",

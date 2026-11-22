@@ -14,8 +14,8 @@
     {
       "title": "No account yet",
       "actor": "Invited person",
-      "body": "**Create an account** (address prefilled), verify through Mailpit, sign in, open the link again.",
-      "expect": "After verification the browser lands on `/sign-in?verified=1` (sign-up and `/verify-email` drop `next`): sign in, then open the invitation link from the e-mail again (the invitation cookie lasts 15 minutes, the link 7 days)."
+      "body": "**Create an account** (address prefilled), verify through Mailpit in the same browser, sign in: back on the invitation.",
+      "expect": "After verification the browser lands on `/sign-in?verified=1&next=%2Finvitations%2Faccept`; signing in returns to the invitation, whose cookie the sign-up kept until the invitation expires (at most 24 hours). From another browser: sign in, then open the link again (the link lasts 7 days)."
     },
     {
       "title": "Wrong account",

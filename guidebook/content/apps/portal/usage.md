@@ -58,9 +58,11 @@ expect: The landing page; http://localhost:3000/health/ready answers {"status":"
 
 ```warning
 Browse **http://localhost:3000**, the origin of `PUBLIC_PORTAL_URL` in the root `.env.example`, even though the dev
-server binds `127.0.0.1:3000`. On `http://127.0.0.1:3000` the cookies belong to another host than the middleware's
-redirects (`localhost`), and **Sign out** and **Open console** answer `403` because their `Origin` check compares with
-`PUBLIC_PORTAL_URL` (development only; the same trap exists in the [[app:platform-admin]]).
+server binds and prints `127.0.0.1:3000`. With `APP_ENV=development` the middleware sends a request for any other host
+to the same path and query on `PUBLIC_PORTAL_URL` with `307`, so the cookies, **Sign out** and **Open console** work
+there. With another `APP_ENV`, or after changing `PUBLIC_PORTAL_URL`, browse that URL yourself: on another host **Sign
+out** and **Open console** answer `403`, because their `Origin` check compares with `PUBLIC_PORTAL_URL` (the
+[[app:platform-admin]] does the same).
 ```
 
 ```note
@@ -84,7 +86,7 @@ API's per-IP limit (5 sign-ups an hour).
 | Route | What it shows | Try | Should happen |
 |---|---|---|---|
 | `/` | Landing: "Your own online travel agency, ready to sell flights.", three steps, what every OTA gets | Click **Get started**, **See pricing** (and the header's **Pricing**, **Sign in**) | One `h1`; links to `/sign-up` and `/pricing`; no API call |
-| `/pricing` | Public plans of `listPlans` in `sort_order`: monthly/annual price, trial days, limits | Stop the platform API and reload | Plans with **Start** → `/sign-up?plan=<code>` (sign-up ignores `plan`: the plan is chosen again in the wizard); with the API down the portal's message and a sign-up link, never the API's text |
+| `/pricing` | Public plans of `listPlans` in `sort_order`: monthly/annual price, trial days, limits | Stop the platform API and reload | Plans with **Start** → `/sign-up?plan=<code>` (signed in: `/otas/new?plan=<code>`); sign-up keeps the plan through the e-mail verification in the same browser, and the wizard preselects it when its plan step offers it; with the API down the portal's message and a sign-up link, never the API's text |
 | `/legal/terms`, `/legal/privacy` | Placeholder texts under "Version `termsVersion`" | Compare the version with `accounts.terms_version` after a sign-up | Same version string (`repo:platform/frontend/src/lib/terms.ts`) |
 
 ### Sign-in pages (`(auth)`)
@@ -93,7 +95,7 @@ API's per-IP limit (5 sign-ups an hour).
 |---|---|---|---|
 | `/sign-up` | "Create your Velexis account": full name, e-mail, password, terms | 11-character password; untick terms; an existing address | Errors at the fields and a focused summary; existing address answers exactly like a new one |
 | `/sign-up/check-email` | "Check your e-mail", ask for a new link | Ask 4 times in an hour | Same confirmation for any address; the 4th says 3 links per hour |
-| `/verify-email?token=…` | Route handler, no page | Open the link twice | 1st: `/sign-in?verified=1` (signed in: `/dashboard`); 2nd: `/verify-pending?error=token` ("This verification link has expired or was already used…"), or straight on to `/dashboard` when this browser is signed in and verified |
+| `/verify-email?token=…` | Route handler, no page | Open the link twice | 1st: `/sign-in?verified=1`, with `&next=<path>` when this browser's sign-up kept a return path (signed in: `/dashboard`, or that path); 2nd: `/verify-pending?error=token` ("This verification link has expired or was already used…"), or straight on to `/dashboard` when this browser is signed in and verified |
 | `/verify-pending` | "Verify your e-mail address": the only page of an unverified account | Sign in before verifying, then open `/dashboard` | Always back here; **Send a new link**; after verifying in another tab "Your e-mail address is verified" with **Continue to your dashboard** |
 | `/sign-in` | "Sign in to Velexis" | `?next=https://evil.example/x`, wrong password ×5 | Unsafe `next` ignored ([[safe-next-path]]); lock-out message with the wait |
 | `/sign-in/mfa` | "Two-factor authentication": code or recovery code | Wrong code; wait 5 min | Error at the field; expired challenge → `/sign-in?mfa=expired` |
@@ -106,8 +108,8 @@ API's per-IP limit (5 sign-ups an hour).
 
 | Route | What it shows | Try | Should happen |
 |---|---|---|---|
-| `/dashboard` | "My OTAs": each OTA with status, Test mode, key, plan name, your role, storefront link, **Open console**; **Create an OTA** | No OTA yet; a provisioning OTA | "You have no OTA yet"; a provisioning or failed OTA links to its set-up page; the storefront link is always `https://<key>.<STOREFRONT_BASE_DOMAIN>/` (see the bug-hunt below) |
-| `/otas/new` | "Create an OTA" wizard: OTA details → Plan → Review | Taken key, reserved key `admin`, 4th OTA | Live key check; limit message on the review (`MAX_TENANTS_PER_ACCOUNT=3` locally) |
+| `/dashboard` | "My OTAs": each OTA with status, Test mode, key, plan name, your role, storefront link, **Open console**; **Create an OTA** | No OTA yet; a provisioning OTA; 3 OTAs that are not failed | "You have no OTA yet"; a provisioning or failed OTA links to its set-up page and shows its storefront host as text with "The storefront opens when the set-up is done."; an open OTA links its primary host (`storefrontUrl`); at the limit **Create an OTA** is a disabled button with "You already own 3 OTAs, the most one account can have…" |
+| `/otas/new` | "Create an OTA" wizard: OTA details → Plan → Review | Taken key, reserved key `admin`, 4th OTA | Live key check; at the limit (`MAX_TENANTS_PER_ACCOUNT=3` locally) the reason shows above the first step, and the review's limit message remains for a race |
 | `/console?tenant=<id>` | "Open the OTA admin": your OTAs with **Open console** | A tenant you are not in | Note, nothing selected; a single OTA is selected by default |
 | `/account` | "Your profile": name, language, time zone; e-mail read-only | Save in two tabs | Second tab: "Reload the page" (`If-Match` refused) |
 | `/account/security` | "Security": password, two-factor, "Where you are signed in" (portal and platform admin sessions), **Sign out everywhere** | Set up MFA, revoke a session | QR code + key; ten recovery codes once; "This browser" cannot be revoked |
@@ -116,8 +118,7 @@ API's per-IP limit (5 sign-ups an hour).
 
 Every page sits under the OTA layout, which shows the [[tenant-banner]] ([[suspension]], payment failed or trial
 ending from the [[billing-notice]], and test mode while the [[storefront-environment]] is `test`). A page your role may not open shows the [[not-allowed-page]]; an OTA you are not a member of (or a malformed id) shows
-Next.js's default, unstyled "404 This page could not be found." without the portal's shell (the app has no
-`not-found.tsx`).
+the portal's "Page not found" page inside the shell (status `404`) with **Go to My OTAs** (`app/(app)/not-found.tsx`).
 
 | Route | Roles | What it shows | Try | Should happen |
 |---|---|---|---|---|
@@ -164,7 +165,8 @@ flow-reset-password
 
 ### Create an OTA
 
-1. **Create an OTA** on `/dashboard` (only for a verified account).
+1. **Create an OTA** on `/dashboard` (only for a verified account; a disabled button with the reason once you own
+   `MAX_TENANTS_PER_ACCOUNT` OTAs that are not failed).
 2. Fill *OTA details*. The key follows the name until you type your own; the field checks it as you type (the
    [[tenant-key]] must match `^[a-z][a-z0-9]{2,29}$` and not be reserved: `platform`, `admin`, `api`, `www`, `app`,
    `console`, `test`, `demo`, …).
@@ -301,7 +303,8 @@ an admin seeing "owner" or "admin" in the role selector, and agents/viewers call
 ```bug-hunt
 **Sessions and cookies**
 - DevTools → Application → Cookies: `__Host-vxp_at` (≤15 min) and `__Host-vxp_rt` are HttpOnly, Secure, `Lax`;
-  `__Host-vxp_mfa`, `__Host-vxp_reset`, `__Host-vxp_invite` are `Strict`. `document.cookie` in the console shows none.
+  `__Host-vxp_mfa`, `__Host-vxp_reset`, `__Host-vxp_invite` are `Strict`; `__Host-vxp_verify_next` (after a sign-up
+  with a return path, 24 h) is `Lax`. `document.cookie` in the console shows none.
 - Leave a tab 20 minutes, then click: the page must load without a sign-in (the middleware's
   [[single-flight-refresh]]). Open 5 tabs at once after expiry: no "session ended" (no refresh-token reuse).
 - `select family_id, audience, revoked_at, revoke_reason from platform.account_sessions where account_id='<acc_…>' order by created_at desc;`
@@ -317,9 +320,14 @@ an admin seeing "owner" or "admin" in the role selector, and agents/viewers call
   `select key, status, plan_code, storefront_environment from platform.tenants order by created_at desc limit 3;`
 - Keys `ab` (too short), `1abc`, `acme-travel`, `admin` are refused at the field (`Acme` is lower-cased as you type, so it
   becomes `acme`); a key taken in another browser between check and submit → back to step 1.
-- With 3 OTAs that are not `failed`, **Create an OTA** is still offered; the limit shows only on the review after all
-  three steps ("You already own 3 OTAs, the most one account can have…").
-- `/pricing` → **Start** opens `/sign-up?plan=<code>`, but neither sign-up nor the wizard reads `plan`.
+- With 3 OTAs that are not `failed`, the dashboard's **Create an OTA** is a disabled button with the reason ("You
+  already own 3 OTAs, the most one account can have…"), and `/otas/new` opened directly shows the same reason above
+  the first step; the review still refuses (`422 tenant_limit`) if another tab created one meanwhile.
+- `/pricing` → **Start** opens `/sign-up?plan=<code>`; after sign-up, verification in the same browser and sign-in,
+  the wizard opens at `/otas/new?plan=<code>` with that plan chosen when its plan step offers it (with
+  `FEATURE_STRIPE_BILLING` off: early access); an unknown or malformed code leaves the default.
+- Let OTA A fail, own 3 others, then **Retry** A's set-up: "One of this OTA's owners already owns 3 OTAs…" (the owner
+  the API counted may be a co-owner, so the words name no one), and A stays failed.
 - After set-up: `select status, step, attempt, jsonb_array_length(steps) from platform.provisioning_jobs where tenant_id='<ten_…>';`
   should be `succeeded`; `supplier_connections` and `payment_provider_connections` have a `test` row; `api_keys` two rows.
 - Reveal the keys; reload: no reveal button. `select revealed_at, reveal_ciphertext is null from platform.provisioning_jobs where tenant_id='<ten_…>';`
@@ -346,10 +354,12 @@ an admin seeing "owner" or "admin" in the role selector, and agents/viewers call
 - Seat count includes pending invitations: `select status, count(*) from platform.tenant_invitations where tenant_id='<ten_…>' group by 1;`
 - The invitation link opened after 15 minutes in the same browser (cookie expired) or in another browser: the page must
   explain, not crash. A revoked or resent (old) link → "cannot be used".
-- After a new account verifies its e-mail it lands on `/sign-in?verified=1` with no way back to the invitation (sign-up
-  and `/verify-email` drop `next`): the invitation page's hint "…verify it, then sign in and open the invitation link
-  again" is the only guidance.
-- Removed member: `tenant_memberships.status = 'removed'`; their OTA pages show "This page could not be found." and the
+- A new account created from the invitation and verified in the same browser goes to
+  `/sign-in?verified=1&next=%2Finvitations%2Faccept` and back to the invitation after sign-in (the sign-up keeps the
+  invitation cookie until the invitation expires, at most 24 hours); a verification link opened in another browser
+  lands on `/sign-in?verified=1`, and the page's hint says to sign in and open the invitation link again.
+- Removed member: `tenant_memberships.status = 'removed'`; their OTA pages show "Page not found" (`404`, inside the
+  shell, with **Go to My OTAs**) and the
   OTA admin ends their session within 60 s.
 ```
 
@@ -364,9 +374,9 @@ an admin seeing "owner" or "admin" in the role selector, and agents/viewers call
 
 ```bug-hunt
 **Domains, Amadeus, payments**
-- The dashboard card links `https://<key>.<STOREFRONT_BASE_DOMAIN>/` even when a verified custom domain is primary or the
-  OTA is still provisioning, failed or suspended; the OTA overview links `https://<primaryHost>/` and says "The
-  storefront opens when the set-up is done" while provisioning or failed.
+- The dashboard card and the OTA overview both use `https://<primaryHost>/` (a verified primary custom domain
+  included); while the OTA is provisioning or failed both say "The storefront opens when the set-up is done." instead
+  of a link.
 - Custom domain inputs: `https://travel.acme.example`, `travel.acme.example/path`, a 254-character host, a host under
   `ota.example.com`, `github.io` sub-domains → refused (some by the portal, the rest by the API at the field).
 - **Check now** twice within a minute → "try again in …" from `Retry-After`.
@@ -409,8 +419,10 @@ an admin seeing "owner" or "admin" in the role selector, and agents/viewers call
   `strict-origin` on the console hand-off), `Permissions-Policy`, no `X-Powered-By`. Behind Caddy (production) these
   policies stay: the shared `security_headers` snippet sets `strict-origin-when-cross-origin` only on answers without
   one; the token and hand-off pages also carry `<meta name="referrer">`.
-- An unknown OTA id or a removed member's OTA shows Next.js's default "404 This page could not be found." page (no
-  shell, no way back); an unexpected server error shows Next.js's default error page (no `error.tsx` exists).
+- An unknown OTA id or a removed member's OTA shows "Page not found" inside the shell (`404`, **Go to My OTAs**); an
+  address that matches no page shows the same heading on its own page with **Go to the home page** and **Go to My
+  OTAs**; an unexpected error shows the area's "Something went wrong" page with **Try again** and a way back, never
+  the error's message (a server error's digest as "Reference for support").
 - Keyboard only: the skip link, every error summary takes the focus, dialogs trap focus and Escape cancels.
 - Narrow window (360 px): the shell, tables and dialogs must not scroll sideways.
 ```

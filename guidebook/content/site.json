@@ -2,8 +2,8 @@
   "title": "Velexis Guidebook",
   "tagline": "Usage and architecture guide to every Velexis application, with a glossary, taxonomy, knowledge graph and ontology of the system.",
   "repoBase": "https://github.com/bhagwati-prasad/velexis-ota/blob/HEAD/",
-  "commit": "e20868df",
-  "date": "2026-11-21",
+  "commit": "585f9eb3",
+  "date": "2026-11-22",
   "version": "1.0.0",
   "apps": [
     "portal",

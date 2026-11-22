@@ -227,7 +227,7 @@ The platform's milestone switches are `false` in `.env.example`. To test a featu
 | `FEATURE_SETTLEMENTS` | Payout account, settlements | `STRIPE_SECRET_KEY` (a test-mode value) |
 | `FEATURE_STRIPE_BILLING` | Stripe Checkout at create-OTA, Customer Portal, invoices | Real test `STRIPE_SECRET_KEY`, the billing webhook secret, the Stripe CLI |
 | `FEATURE_OWN_STRIPE` | Connect Standard or the OTA's own Stripe keys | Connect client id and webhook secret |
-| `FEATURE_OWN_AMADEUS` | The OTA's own Amadeus credentials | A verifiable credential (the stub accepts any) |
+| `FEATURE_OWN_AMADEUS` | The OTA's own Amadeus credentials | A verifiable credential (the stub accepts any unless started with `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`) |
 
 ## Resetting data
 

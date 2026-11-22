@@ -168,7 +168,7 @@ Every route of the stub, what to try and what should happen (fixtures under `rep
 
 | Route | Try | Expected |
 |---|---|---|
-| `POST /v1/security/oauth2/token` | `-d 'grant_type=client_credentials&client_id=x&client_secret=y'` | `200`, `expires_in: 1799`; no `grant_type` → `400` 38187; empty secret → `401 invalid_client` |
+| `POST /v1/security/oauth2/token` | `-d 'grant_type=client_credentials&client_id=x&client_secret=y'` | `200`, `expires_in: 1799`; no `grant_type` → `400` 38187; empty secret → `401 invalid_client`; started with `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`, any other pair → `401 invalid_client` |
 | `GET /v2/shopping/flight-offers` | `?originLocationCode=MAD&destinationLocationCode=PAR&departureDate=2027-01-15&adults=1&max=2` | `200`, 2 offers; destination `ZZZ` → `meta.count: 0` |
 | `POST /v2/shopping/flight-offers` | body with `searchCriteria.maxFlightOffers`, header `X-HTTP-Method-Override: GET` | Same fixture, cut to the max |
 | `POST /v1/shopping/availability/flight-availabilities` | any valid body | Seats by class; `ZZZ` → none |

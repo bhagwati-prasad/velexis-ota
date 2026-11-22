@@ -81,7 +81,7 @@
     {
       "from": "failed",
       "to": "running",
-      "label": "owner retries (retryProvisioning; at the tenant limit the set-up stays failed and shows the limit message)"
+      "label": "owner retries (retryProvisioning; at the tenant limit the set-up stays failed and says that one of this OTA's owners already owns the most OTAs one account can have)"
     },
     {
       "from": "payment",

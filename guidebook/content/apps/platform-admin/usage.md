@@ -62,9 +62,10 @@ expect: Password step, then a 6-digit code from the otpauth:// URI dev:seed prin
 | Redis | `.env.example` | `redis-cli -a dev_redis` |
 
 ```warning
-Browse **http://localhost:3001**, the origin of `PUBLIC_PLATFORM_ADMIN_URL` in the root `.env.example`. On
-`http://127.0.0.1:3001` the middleware's redirects go to `localhost` (cookies set on the other host are lost) and
-**Sign out** answers `403 Forbidden` because the `Origin` header is not the admin's.
+Browse **http://localhost:3001**, the origin of `PUBLIC_PLATFORM_ADMIN_URL` in the root `.env.example`. With
+`APP_ENV=development` the middleware sends `http://127.0.0.1:3001` (the address `next dev` prints) to the same path on
+`PUBLIC_PLATFORM_ADMIN_URL` with `307`; with another `APP_ENV` browse that address yourself, or **Sign out** answers
+`403 Forbidden` because the `Origin` header is not the admin's.
 ```
 
 ```note
@@ -100,7 +101,7 @@ flow-sign-in
 | Failed provisioning | Tenant jobs failed in the last 24 h | `/provisioning-jobs?status=failed` (every failed job: that list has no time filter, so it can show more) |
 | Failed jobs per queue | Failed BullMQ jobs of each [[platform-queue]] | `/queues/<queue>` |
 | Amadeus office pool | Available / assigned per environment; warning below 3 available | `/amadeus/offices?environment=…&status=…`; "Set up the Amadeus accounts" without an account |
-| Live office requests | OTAs waiting for a live office, oldest first, at most 50 ([[live-office-request]]); at 50 rows "The 50 oldest requests are shown…" appears, also when there are exactly 50 | **Assign office** → `/tenants/<id>?tab=connections#connection-<id>` |
+| Live office requests | OTAs waiting for a live office, oldest first, at most 50 ([[live-office-request]]); "The 50 oldest requests are shown…" appears only when more than 50 wait (`liveOfficeRequestsMore`) | **Assign office** → `/tenants/<id>?tab=connections#connection-<id>` |
 | To review (M5) | Pending custom domains, draft settlements, failed Stripe events, past-due subscriptions (only switched-on counters) | The filtered list of each |
 
 Try stopping Redis: the dashboard should show "The dashboard could not be loaded" (`503 SERVICE_UNAVAILABLE`), not
@@ -169,7 +170,7 @@ flow-stripe-events
 
 | Route | What it shows | Try | Should happen |
 |---|---|---|---|
-| `/amadeus/accounts` | One section per environment (Test, Live): name, status, host, client id (last 4), "Stored encrypted, never shown", last verification and error, pool counts; **Set up the … account**, **Verify now** / **Verify and enable**, **Edit details**, **Rotate secret**, **Disable account** | Create, rotate, disable; a host that is neither `https` nor the loopback stub | Verification job on `platform-connections` turns the status Active (the local stub accepts any non-empty id and secret, so `invalid_credentials` needs real Amadeus test credentials); secret fields never pre-filled and emptied after every answer; disabling cuts every OTA on that shared account; bad host refused at the field |
+| `/amadeus/accounts` | One section per environment (Test, Live): name, status, host, client id (last 4), "Stored encrypted, never shown", last verification and error, pool counts; **Set up the … account**, **Verify now** / **Verify and enable**, **Edit details**, **Rotate secret**, **Disable account** | Create, rotate, disable; a host that is neither `https` nor the loopback stub | Verification job on `platform-connections` turns the status Active (the local stub accepts any non-empty id and secret unless started with `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`; then **Verify now**, or **Rotate secret** to another value, shows Invalid credentials); secret fields never pre-filled and emptied after every answer; disabling cuts every OTA on that shared account; bad host refused at the field |
 | `/amadeus/offices` | Environment and Status filters; [[amadeus-office]] id, status (since when releasing), OTA, assigned, notes, added; **Add offices**, **Assign**, **Retire**, **Edit notes**, **Release** ([[office-release]]) | 501 lines; a 10-character id; assign by a key that is also a substring of other keys | "at most 500" message alone; line numbers named; exact key match only (up to 5 pages of 200 looked up) |
 
 ```diagram

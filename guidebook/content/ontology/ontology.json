@@ -3171,6 +3171,13 @@
       "term": "safe-next-path"
     },
     {
+      "id": "ck-vxp-verify-next",
+      "label": "__Host-vxp_verify_next",
+      "class": "Cookie",
+      "app": "portal",
+      "term": "return-path"
+    },
+    {
       "id": "ck-vxp-connect",
       "label": "__Host-vxp_connect",
       "class": "Cookie",
@@ -13574,6 +13581,11 @@
     {
       "subject": "proc-portal",
       "property": "writes",
+      "object": "ck-vxp-verify-next"
+    },
+    {
+      "subject": "proc-portal",
+      "property": "writes",
       "object": "ck-vxp-reset"
     },
     {
@@ -14770,6 +14782,11 @@
       "subject": "sg-portal-auth",
       "property": "writes",
       "object": "ck-vxp-next"
+    },
+    {
+      "subject": "sg-portal-auth",
+      "property": "writes",
+      "object": "ck-vxp-verify-next"
     },
     {
       "subject": "sg-portal-auth",

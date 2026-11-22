@@ -9,7 +9,7 @@
       "actor": "Verified account",
       "screen": "My OTAs",
       "url": "http://localhost:3000/dashboard",
-      "body": "Click **Create an OTA**.",
+      "body": "Click **Create an OTA** (disabled with the reason once you own MAX_TENANTS_PER_ACCOUNT OTAs that are not failed).",
       "expect": "`/otas/new`, step 1 \"OTA details\"; the time zone is the account's own."
     },
     {
@@ -22,7 +22,7 @@
     {
       "title": "Plan",
       "actor": "Owner",
-      "body": "Before M5: early access is preselected. With `FEATURE_STRIPE_BILLING` on: pick a plan and the Annual billing switch.",
+      "body": "Before M5: early access is preselected. With `FEATURE_STRIPE_BILLING` on: pick a plan (the one chosen on `/pricing` is preselected when offered) and the Annual billing switch.",
       "expect": "Plans in `sort_order`; a plan without a Stripe price for the interval is disabled with the reason."
     },
     {

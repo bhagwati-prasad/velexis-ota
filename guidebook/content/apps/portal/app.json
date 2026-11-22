@@ -32,7 +32,7 @@
     "url": "http://localhost:3000",
     "port": 3000,
     "command": "pnpm --filter @velexis/platform-frontend dev",
-    "notes": "Binds 127.0.0.1:3000. Needs the platform API on 127.0.0.1:3100 (and its worker), Mailpit on :8025 for e-mail links, and for provisioning the OTA worker and the Amadeus stub. Configuration comes from the root .env.local (or platform/frontend/.env.local)."
+    "notes": "Binds 127.0.0.1:3000. Needs the platform API on 127.0.0.1:3100 (and its worker), Mailpit on :8025 for e-mail links, and for provisioning the OTA worker and the Amadeus stub. Configuration comes from the root .env.local (or platform/frontend/.env.local). Browse http://localhost:3000 (PUBLIC_PORTAL_URL); with APP_ENV=development the middleware redirects 127.0.0.1:3000 there (307)."
   },
   "production": {
     "host": "platform.example.com"
@@ -49,7 +49,7 @@
     },
     {
       "app": "storefront",
-      "how": "Links only: the dashboard links https://<key>.<STOREFRONT_BASE_DOMAIN>/, the OTA overview and set-up page https://<primaryHost>/"
+      "how": "Links only: the dashboard (listTenants' storefrontUrl), the OTA overview and the set-up page link https://<primaryHost>/; while an OTA is provisioning or failed the dashboard shows the host as text with 'The storefront opens when the set-up is done.'"
     },
     {
       "app": "deploy",
@@ -154,7 +154,7 @@
     {
       "route": "/pricing",
       "title": "Pricing",
-      "purpose": "Public plans from listPlans; Start links to /sign-up?plan=<code> (sign-up ignores plan)",
+      "purpose": "Public plans from listPlans; Start links to /sign-up?plan=<code> (signed in: /otas/new?plan=<code>); the plan reaches the wizard",
       "code": "platform/frontend/src/app/(marketing)/pricing/page.tsx"
     },
     {
@@ -172,7 +172,7 @@
     {
       "route": "/sign-up",
       "title": "Sign up",
-      "purpose": "Name, e-mail, password (12+ with letter and digit), terms; signUp",
+      "purpose": "Name, e-mail, password (12+ with letter and digit), terms; signUp; keeps a safe next (or /otas/new?plan=<code>) in __Host-vxp_verify_next for the verification",
       "code": "platform/frontend/src/app/(auth)/sign-up/page.tsx"
     },
     {
@@ -184,7 +184,7 @@
     {
       "route": "/verify-email",
       "title": "Verify e-mail (route handler)",
-      "purpose": "GET consumes ?token= (verifyEmail), 303 to /sign-in?verified=1 or /dashboard",
+      "purpose": "GET consumes ?token= (verifyEmail), 303 to /sign-in?verified=1 (&next= the sign-up's return path) or /dashboard (or the return path)",
       "code": "platform/frontend/src/app/verify-email/route.ts"
     },
     {
@@ -238,13 +238,13 @@
     {
       "route": "/dashboard",
       "title": "My OTAs",
-      "purpose": "OTAs of the account with status, plan, role, storefront link (<key>.<STOREFRONT_BASE_DOMAIN>), Open console; Create an OTA",
+      "purpose": "OTAs of the account with status, plan, role, storefront link (storefrontUrl, the primary host; a note instead while provisioning or failed), Open console; Create an OTA (a disabled button with the reason once listTenants' tenantLimit.owned reaches max)",
       "code": "platform/frontend/src/app/(app)/dashboard/page.tsx"
     },
     {
       "route": "/otas/new",
       "title": "Create an OTA",
-      "purpose": "Wizard: details (live key check), plan, review; one Idempotency-Key",
+      "purpose": "Wizard: details (live key check), plan (?plan=<code> preselects an offered plan), review; one Idempotency-Key; at the tenant limit the reason above the first step",
       "code": "platform/frontend/src/app/(app)/otas/new/page.tsx"
     },
     {

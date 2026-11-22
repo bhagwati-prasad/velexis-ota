@@ -280,6 +280,7 @@ e2e-run-states
 | `STORAGE_DRIVER`, `STORAGE_DIR` | OTA backend → `createStorage` | `local` only (`STORAGE_DRIVERS = ["local"]`): the configuration check refuses `s3` (`STORAGE_DRIVER must be one of local`); `s3` is a planned driver (`PLANNED_STORAGE_DRIVERS`) that `createStorage` refuses as not implemented yet (ADR-0017) |
 | `MIGRATE_TENANT_CONCURRENCY`, `MIGRATE_TENANT_MAX_FAILURE_RATIO` | `deploy.sh` (from `migrator.env`) | Fan-out defaults 4 and 0.1 |
 | `STUB_PORT` | stub CLI | default 4900 |
+| `AMADEUS_STUB_CLIENT_ID`, `AMADEUS_STUB_CLIENT_SECRET` | stub CLI | Optional, both or neither: the only client credentials the token endpoint accepts (otherwise any non-empty pair); one alone exits 2 |
 | `AMADEUS_RECORD_CLIENT_ID`, `AMADEUS_RECORD_CLIENT_SECRET`, `AMADEUS_RECORD_BASE_URL` | `record` | Developer's own test credentials; never committed |
 | `E2E_WITH_OTA`, `E2E_REDIS_DB`, `E2E_STRIPE`, `E2E_STRIPE_BILLING`, `E2E_STRIPE_CLI`, `E2E_CHROMIUM_EXECUTABLE`, `E2E_RESULTS_SUBDIR` | e2e harness | Which stack parts run, where results go |
 | `E2E_DATABASE_NAME` | e2e test workers | Set by the global setup (`velexis_e2e_<run>`), never by hand: the workers read the stack's database from it |

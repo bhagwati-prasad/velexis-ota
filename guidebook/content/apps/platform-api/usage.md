@@ -118,7 +118,7 @@ all 144 operations). Each operation has an [[operation-scope]] (`public`, `porta
 |---|---|---|
 | `GET /v1/plans` (public) | — | Public active plans with limits and prices |
 | `GET /v1/tenants/key-availability?key=` | `demo`, `www`, `Acme`, a used key | `200 {key, available: false, reason, storefrontHost}` with `reason` `invalid` (breaks `^[a-z][a-z0-9]{2,29}$`, never a `400`), `reserved` or `taken` (any tenant row, also failed ones); 30/min per account |
-| `GET /v1/tenants` (`portal_unverified`) | Account with no OTA | Only OTAs where the caller is an active member |
+| `GET /v1/tenants` (`portal_unverified`) | Account with no OTA; an owner at the limit | Only OTAs where the caller is an active member, and `tenantLimit` `{max, owned}` (`owned` counted as `createTenant` counts; it can exceed `max` after an owner invitation or a role change) |
 | `POST /v1/tenants` (`Idempotency-Key`, 16-128 characters `[A-Za-z0-9_-]`) | Unverified account; 4th OTA; same key twice | `202`; `403 EMAIL_NOT_VERIFIED`; `409 TENANT_KEY_UNAVAILABLE`; `422 UNPROCESSABLE tenant_limit` (OTAs the caller owns that are not `failed`, MAX_TENANTS_PER_ACCOUNT); replay returns the stored `202`. With `FEATURE_STRIPE_BILLING` on, `planCode` is required and its plan needs a Stripe Price (`422 PLAN_NOT_AVAILABLE`) |
 | `GET/PATCH /v1/tenants/{tenantId}` | As non-member; invalid country | `404 NOT_FOUND` for non-members (never 403); profile edits by owner/admin; publishes `vx:invalidate tenant` |
 | `GET …/provisioning`, `POST …/provisioning/retry` | Retry an active OTA | Step log and status; retry (owner) only for `failed` (`409 PROVISIONING_NOT_RETRYABLE`), `202` with a **new** job, or `422 UNPROCESSABLE tenant_limit` (createTenant's error; nothing changes) while an owner of the OTA already owns `MAX_TENANTS_PER_ACCOUNT` OTAs that are not `failed`; the admin's job retry and billing sync's reopen after a paid Checkout are exempt (see the bug-hunt below) |
@@ -181,7 +181,7 @@ connection's [[account-mode]] is `velexis`, `connect_standard` or `api_keys`.
 | Group | Endpoints | Try / should happen |
 |---|---|---|
 | Admin auth | `POST /v1/admin/auth/sign-in`, `/mfa/verify`, `/refresh`, `/step-up`, `/sign-out`, `GET /v1/admin/me` | A portal token is refused and vice versa; a non-admin gets the same failure as a wrong password; admin families end after 12 h |
-| Dashboard | `GET /v1/admin/dashboard` | `tenantsByStatus`, `provisioningFailed24h`, `jobsFailedByQueue`, `officePool`, `liveOfficeRequests`; M5 counters `null` while switched off; `503` if Redis is down |
+| Dashboard | `GET /v1/admin/dashboard` | `tenantsByStatus`, `provisioningFailed24h`, `jobsFailedByQueue`, `officePool`, `liveOfficeRequests` (at most 50) and `liveOfficeRequestsMore`; M5 counters `null` while switched off; `503` if Redis is down |
 | Tenants | `GET /v1/admin/tenants`, `GET/PATCH …/{tenantId}`, `POST …/suspend`, `…/resume`, `…/migrate`, `…/connections/{kind}/{environment}/status` | [[suspension]] with reason 5-500 characters (blank → `400`); `billing` refused as suspension reason; migrate queues `tenant.migrate` |
 | Provisioning jobs | `GET /v1/admin/provisioning-jobs`, `GET …/{jobId}`, `POST …/retry`, `…/cancel` | Retry only `failed` (new job), cancel only `queued`; no ciphertext ever in answers |
 | Queues | `GET /v1/admin/queues`, `GET …/{queue}/failed`, `POST …/{queue}/jobs/{jobId}/retry` | Both backends' queues listed; retry only platform queues; audit `queue_job.retried` |

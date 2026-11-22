@@ -107,7 +107,7 @@
       "id": "live-amadeus",
       "app": "platform-admin",
       "title": "Live Amadeus access",
-      "actions": "As owner request live access on the portal's **Amadeus** page. As admin: enter the Velexis **live** Amadeus account on **Amadeus → Accounts** (the stub accepts any client id and secret, development only), add live offices to its pool, then assign one to the request from the dashboard.",
+      "actions": "As owner request live access on the portal's **Amadeus** page. As admin: enter the Velexis **live** Amadeus account on **Amadeus → Accounts** (the stub accepts any client id and secret unless started with `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`, development only), add live offices to its pool, then assign one to the request from the dashboard.",
       "expect": "The request appears on the admin dashboard; after assignment the OTA's live connection is active and the owner gets \"Live Amadeus access is ready for `<OTA>`\".",
       "data": "`platform.amadeus_accounts` (`live`, `active`), `amadeus_offices` assigned, `supplier_connections` (`live`, `active`).",
       "code": [

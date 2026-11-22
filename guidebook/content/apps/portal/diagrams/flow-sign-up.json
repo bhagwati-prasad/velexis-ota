@@ -23,7 +23,7 @@
       "actor": "Visitor",
       "url": "http://localhost:8025",
       "body": "Open \"Confirm your e-mail address for Velexis\" and click the link (`/verify-email?token=…`).",
-      "expect": "303 to `/sign-in?verified=1` with \"Your e-mail address is verified. Sign in to continue.\" The URL no longer holds the token. A second click lands on `/verify-pending?error=token`."
+      "expect": "303 to `/sign-in?verified=1` (with `&next=<path>` when the sign-up kept a return path: the invitation or `/otas/new?plan=<code>`) with \"Your e-mail address is verified. Sign in to continue.\" The URL no longer holds the token. A second click lands on `/verify-pending?error=token`."
     },
     {
       "title": "Same address again",

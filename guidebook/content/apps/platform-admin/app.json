@@ -23,7 +23,7 @@
     "url": "http://localhost:3001",
     "port": 3001,
     "command": "pnpm --filter @velexis/platform-admin dev",
-    "notes": "Binds 127.0.0.1:3001. Needs the platform API on 127.0.0.1:3100 (and its worker), PostgreSQL, Redis and Mailpit. Configuration comes from platform/admin/.env.local, then the root .env.local. Browse http://localhost:3001 (the origin of PUBLIC_PLATFORM_ADMIN_URL), not 127.0.0.1, or Sign out answers 403. Sign in as admin@example.com from the platform's dev:seed (password and TOTP URI printed once; development only)."
+    "notes": "Binds 127.0.0.1:3001. Needs the platform API on 127.0.0.1:3100 (and its worker), PostgreSQL, Redis and Mailpit. Configuration comes from platform/admin/.env.local, then the root .env.local. Browse http://localhost:3001 (the origin of PUBLIC_PLATFORM_ADMIN_URL); with APP_ENV=development the middleware redirects 127.0.0.1:3001 there (307). Sign in as admin@example.com from the platform's dev:seed (password and TOTP URI printed once; development only)."
   },
   "production": { "host": "admin.platform.example.com" },
   "dependsOn": ["platform-api", "packages"],

@@ -27,7 +27,7 @@ components
 
 | Folder / file | Job |
 |---|---|
-| `repo:platform/admin/src/middleware.ts` | [[admin-middleware]]: deny by default (public: `/sign-in`, `/sign-in/mfa`, `/sign-out`), refresh near-expiry tokens (single-flight), CSP with a per-request nonce, `X-Robots-Tag: noindex`, `303` to `/sign-in?next=` |
+| `repo:platform/admin/src/middleware.ts` | [[admin-middleware]]: with `APP_ENV=development`, first a `307` of another host to `PUBLIC_PLATFORM_ADMIN_URL`; deny by default (public: `/sign-in`, `/sign-in/mfa`, `/sign-out`), refresh near-expiry tokens (single-flight), CSP with a per-request nonce, `X-Robots-Tag: noindex`, `303` to `/sign-in?next=` |
 | `repo:platform/admin/src/app/(auth)` | Sign-in (`signIn`) and code step (`verifyMfa`) server actions and forms; `form-controls.tsx` |
 | `repo:platform/admin/src/app/(app)/layout.tsx` | `adminGetMe` once per request; `AdminShell` with the nav filtered by milestone switches; `UNAUTHENTICATED`/`TOKEN_EXPIRED` (revoked rights, disabled account) → plain `/sign-in` |
 | `repo:platform/admin/src/app/(app)` | One folder per area: `tenants`, `provisioning-jobs`, `queues`, `plans`, `subscriptions`, `invoices`, `stripe-events`, `amadeus/accounts`, `amadeus/offices`, `settlements`, `domains`, `accounts`, `admins`, `audit`; each with `page.tsx`, client `*-form.tsx` / `*-table.tsx`, `actions.ts` and a `*.test.tsx` |

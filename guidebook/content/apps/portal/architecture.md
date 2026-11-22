@@ -28,11 +28,11 @@ components
 
 | Folder / file | Job |
 |---|---|
-| `repo:platform/frontend/src/middleware.ts` | Refresh an expiring access token ([[single-flight-refresh]]), move `?token=` of reset and invitation links into cookies ([[token-link]]), redirect the `(app)` area (`/dashboard`, `/otas`, `/console`, `/account`) to `/sign-in?next=` or `/verify-pending`, set the per-request CSP, hand on `x-velexis-requested-page` |
+| `repo:platform/frontend/src/middleware.ts` | With `APP_ENV=development`, first send a request for another host than `PUBLIC_PORTAL_URL`'s to the same path and query there (`307`); refresh an expiring access token ([[single-flight-refresh]]), move `?token=` of reset and invitation links into cookies ([[token-link]]), redirect the `(app)` area (`/dashboard`, `/otas`, `/console`, `/account`) to `/sign-in?next=` or `/verify-pending`, set the per-request CSP, hand on `x-velexis-requested-page` |
 | `repo:platform/frontend/src/app/(marketing)` | `/`, `/pricing`, `/legal/*` |
 | `repo:platform/frontend/src/app/(auth)` | Sign-up, check-email, verify-pending, sign-in, MFA, forgot/reset password, invitations, MFA enrolment; each page with its `actions.ts` |
 | `repo:platform/frontend/src/app/(app)/layout.tsx` | Signed-in shell: one `getMe`; `UNAUTHENTICATED`/`TOKEN_EXPIRED` → plain `/sign-in` (no `next`; in practice a disabled or erased account), unverified → `/verify-pending`, `mfaEnrolmentRequired` → `/mfa-enrolment?next=` ([[mfa-enrolment-gate]]) |
-| `repo:platform/frontend/src/app/(app)/otas/[tenantId]/layout.tsx` | Loads the OTA once (`requireTenant`), renders the [[tenant-banner]], not-found for non-members (Next.js's default 404 page: the app has no `not-found.tsx` or `error.tsx`). The set-up page still calls `getTenant` itself, a second call per request |
+| `repo:platform/frontend/src/app/(app)/otas/[tenantId]/layout.tsx` | Loads the OTA once (`requireTenant`), renders the [[tenant-banner]], not-found for non-members (`app/(app)/not-found.tsx`, inside the shell, status `404`). The set-up page reads the same cached answer (`requireTenant`): one `getTenant` per request |
 | `repo:platform/frontend/src/app/(app)/step-up-actions.ts` | The [[step-up]] action behind `StepUpDialog` |
 | Route handlers | `repo:platform/frontend/src/app/sign-out/route.ts`, `repo:platform/frontend/src/app/verify-email/route.ts`, `repo:platform/frontend/src/app/(app)/otas/[tenantId]/console/launch/route.ts`, `repo:platform/frontend/src/app/connect/stripe/callback/route.ts`, `repo:platform/frontend/src/app/(app)/otas/[tenantId]/payments/settlements/[settlementId]/lines.csv/route.ts`, `repo:platform/frontend/src/app/health/ready/route.ts` |
 | `repo:platform/frontend/src/lib/api.ts` | `platformApi()` / `createPlatformApi()`: base URL, Bearer from `__Host-vxp_at`, [[end-user-headers]], `X-Request-Id`, `cache: no-store`, `redirect: manual`; answers `{data}` or `{error: {code, status, fieldErrors, details, retryAfterSeconds}}`, never the API's `message` |
@@ -80,8 +80,9 @@ portal-er
 | `__Host-vxp_at` | Platform access token (JWT, claims `exp`, `ev`) | as the token, ≤ 15 min | Lax |
 | `__Host-vxp_rt` | Refresh token of the [[refresh-family]] | idle expiry, ≤ family's 30 days | Lax |
 | `__Host-vxp_mfa` | MFA challenge token | ≤ 5 min | Strict |
-| `__Host-vxp_reset`, `__Host-vxp_invite` | Token moved out of an e-mail link | 15 min | Strict |
+| `__Host-vxp_reset`, `__Host-vxp_invite` | Token moved out of an e-mail link | 15 min (`__Host-vxp_invite`: until the invitation expires, at most 24 h, after a sign-up from it) | Strict |
 | `__Host-vxp_next` | Validated return path during MFA | 15 min | Lax |
+| `__Host-vxp_verify_next` | The sign-up's return path for the e-mail verification | 24 h | Lax |
 | `__Host-vxp_connect` | OTA id of a Stripe Connect in progress (not a secret) | 1 h | Lax |
 
 The refresh single-flight map (`refresh()`, keyed by the SHA-256 of the refresh token, outcomes reused for 10 s) lives
@@ -300,12 +301,10 @@ Journeys that create an OTA need `E2E_WITH_OTA=1` (OTA worker and Amadeus stub);
 - `repo:docs/mvp/local-development.md`, `repo:tools/e2e/README.md`
 
 ```note
-Known differences between the docs and the code at this commit: the README's §5 promises an `error.tsx` per area,
-but the app has no `error.tsx` or `not-found.tsx` (Next.js's default "This page could not be found." is shown);
-ADR-0014 puts the CSP in `next.config` `headers()`, while the code sets it in `middleware.ts` with `lib/csp.ts`;
-the sign-up flow says the set-up page polls with `router.refresh()`, while `ProvisioningProgress` calls the
-`getSetupProgress` server action every 2 s; the same flow calls the unverified account's page "check your e-mail",
-while the code shows `/verify-pending` ("Verify your e-mail address"); the README's route table says `/pricing`'s
-"Start" preselects the plan, while sign-up ignores `?plan=`; the team flow says the invitation link "redirects", while
-the middleware answers a `200` script-free refresh page (a `303` would lose the `SameSite=Strict` cookie).
+Known differences between the docs and the code at this commit: ADR-0014 puts the CSP in `next.config` `headers()`,
+while the code sets it in `middleware.ts` with `lib/csp.ts`; the sign-up flow says the set-up page polls with
+`router.refresh()`, while `ProvisioningProgress` calls the `getSetupProgress` server action every 2 s; the same flow
+calls the unverified account's page "check your e-mail", while the code shows `/verify-pending` ("Verify your e-mail
+address"); the team flow says the invitation link "redirects", while the middleware answers a `200` script-free
+refresh page (a `303` would lose the `SameSite=Strict` cookie).
 ```

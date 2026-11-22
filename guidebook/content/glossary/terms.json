@@ -158,7 +158,7 @@
     "term": "Admin middleware",
     "aliases": ["middleware.ts"],
     "category": "security",
-    "definition": "`platform/admin/src/middleware.ts`, run before every page, server action and route handler of the platform admin: deny by default (only `/sign-in`, `/sign-in/mfa` and `/sign-out` are public; everything else redirects to `/sign-in` with a safe `next`), a single-flight `adminRefresh` when the access token expires within 30 s, and a per-request nonce CSP plus `X-Robots-Tag: noindex`.",
+    "definition": "`platform/admin/src/middleware.ts`, run before every page, server action and route handler of the platform admin: deny by default (only `/sign-in`, `/sign-in/mfa` and `/sign-out` are public; everything else redirects to `/sign-in` with a safe `next`), a single-flight `adminRefresh` when the access token expires within 30 s, and a per-request nonce CSP plus `X-Robots-Tag: noindex`. With `APP_ENV=development` it first sends a request whose `Host` is not the host of `PUBLIC_PLATFORM_ADMIN_URL` there with `307`.",
     "apps": ["platform-admin"],
     "related": [
       "admin-session",
@@ -342,7 +342,7 @@
       "tools/amadeus-stub"
     ],
     "category": "engineering",
-    "definition": "`tools/amadeus-stub` (`pnpm stub:amadeus`), a local Node HTTP double of Amadeus Enterprise on `127.0.0.1:4900` for development, tests and e2e: the OAuth token endpoint and the 12 operations validated against the Amadeus specifications, recorded fixtures, and scenarios chosen per request with `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `server-error`, `timeout`, …), which the OTA API forwards outside production. Destination `ZZZ` returns no offers and card `4000000000000002` is declined; the stub never runs on the VM and refuses to start in production.",
+    "definition": "`tools/amadeus-stub` (`pnpm stub:amadeus`), a local Node HTTP double of Amadeus Enterprise on `127.0.0.1:4900` for development, tests and e2e: the OAuth token endpoint and the 12 operations validated against the Amadeus specifications, recorded fixtures, and scenarios chosen per request with `X-Stub-Scenario` (`sold-out`, `price-changed`, `ticketing-failed`, `server-error`, `timeout`, …), which the OTA API forwards outside production. Destination `ZZZ` returns no offers and card `4000000000000002` is declined; the stub never runs on the VM and refuses to start in production. It accepts any non-empty client credentials unless started with `AMADEUS_STUB_CLIENT_ID` and `AMADEUS_STUB_CLIENT_SECRET`.",
     "apps": ["packages", "ota-api", "platform-api", "storefront", "ota-admin"],
     "related": [
       "amadeus-enterprise",
@@ -2189,7 +2189,7 @@
     "term": "Live office request",
     "aliases": ["live access request", "requestLiveAmadeus", "amadeus.live_requested", "liveOfficeRequests"],
     "category": "travel",
-    "definition": "An owner's request for live Amadeus access on the shared Velexis account (`requestLiveAmadeus`), which appears as a live `velexis` [[supplier-connection]] in `pending_verification` without an office. The platform admin dashboard lists up to 50, oldest first; assigning a live office from the [[office-pool]] serves it and e-mails the owners.",
+    "definition": "An owner's request for live Amadeus access on the shared Velexis account (`requestLiveAmadeus`), which appears as a live `velexis` [[supplier-connection]] in `pending_verification` without an office. The platform admin dashboard lists up to 50, oldest first, and says when more wait; assigning a live office from the [[office-pool]] serves it and e-mails the owners.",
     "apps": ["portal", "platform-api", "platform-admin"],
     "related": [
       "office-pool",
@@ -2530,7 +2530,7 @@
     "term": "Node major pin",
     "aliases": ["NODE_MAJOR", "node_24.x"],
     "category": "operations",
-    "definition": "The production VM runs exactly one Node.js major (24, ADR-0029): `provision-vm.sh` installs NodeSource's `node_24.x` line from `NODE_MAJOR` and pins `nodejs` to it at apt priority 1001, and the deploy refuses a release whose recorded Node major differs.",
+    "definition": "The production VM runs exactly one Node.js major (24, ADR-0029): `provision-vm.sh` installs NodeSource's `node_24.x` line from `NODE_MAJOR` and pins `nodejs` to it at apt priority 1001, and the deploy refuses a release whose recorded Node major differs on its first activation; a rollback across majors is only noted in `deploy.log` (ADR-0029 D12, confirmed on 2026-11-22).",
     "apps": ["deploy"],
     "related": ["provision-vm", "velexis-deploy", "single-vm", "release-folder"],
     "see": [
@@ -4021,7 +4021,7 @@
     "term": "Return path",
     "aliases": ["next", "safeNextPath", "next parameter"],
     "category": "security",
-    "definition": "Same as [[safe-next-path]]. The `next` query parameter that brings a person back to the page they asked for after sign-in (portal, platform admin, the OTA admin's `/auth/refresh`, storefront); only a same-origin relative path survives the check, anything else falls back to the app's default page.",
+    "definition": "Same as [[safe-next-path]]. The `next` query parameter that brings a person back to the page they asked for after sign-in (portal, platform admin, the OTA admin's `/auth/refresh`, storefront); only a same-origin relative path survives the check, anything else falls back to the app's default page. Through sign-up and the e-mail verification the portal keeps it in `__Host-vxp_verify_next` (24 h, `Lax`).",
     "apps": ["platform-admin", "portal", "ota-admin", "storefront"],
     "related": ["safe-next-path", "admin-middleware", "token-link", "mfa-enrolment-gate"],
     "see": ["platform/admin/src/lib/session.ts"]
@@ -5473,7 +5473,7 @@
     "term": "Token link",
     "aliases": ["TOKEN_LINKS", "invitation link", "reset link"],
     "category": "security",
-    "definition": "An e-mailed portal link that carries `?token=` (`/reset-password`, `/invitations/accept`). The portal middleware moves the token into a 15-minute `SameSite=Strict` cookie and answers a script-free page that refreshes to the clean URL, so the token never stays in the address bar, the history or a Referer.",
+    "definition": "An e-mailed portal link that carries `?token=` (`/reset-password`, `/invitations/accept`). The portal middleware moves the token into a 15-minute `SameSite=Strict` cookie (a sign-up started from an invitation keeps the invitation's cookie until the invitation expires, at most 24 hours) and answers a script-free page that refreshes to the clean URL, so the token never stays in the address bar, the history or a Referer.",
     "apps": ["portal"],
     "related": ["invitation", "host-cookie", "safe-next-path", "account", "show-once-secret"],
     "see": ["platform/frontend/src/middleware.ts"],
