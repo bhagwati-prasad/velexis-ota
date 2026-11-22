@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when a second VM, a managed database, or more than one person on call makes a hosted log and metrics service worth its cost.
-**Revisions:** 2026-10-12 (planning review): card objects are censored at every depth and bodies never reach the `err` serializer; security logs are kept 12 months off the VM ([ADR-0027](0027-pci-scope-and-vm-controls.md)). 2026-10-28 (lead decision (1j) of the OTA, recording FIX-W32-OTA): the OTA reports the ages of its queues from its worker only (dated note under Health). 2026-11-06 (lead decision (11d), recording FIX-W46-PLATFORM): the platform worker reports its queues in the OTA worker's shape (dated note under Health).
+**Revisions:** 2026-10-12 (planning review): card objects are censored at every depth and bodies never reach the `err` serializer; security logs are kept 12 months off the VM ([ADR-0027](0027-pci-scope-and-vm-controls.md)). 2026-10-28 (lead decision (1j) of the OTA, recording FIX-W32-OTA): the OTA reports the ages of its queues from its worker only (dated note under Health). 2026-11-06 (lead decision (11d), recording FIX-W46-PLATFORM): the platform worker reports its queues in the OTA worker's shape (dated note under Health). 2026-11-22 (lead decision (38k) of 2026-11-22, approved by the owner; FIX-W69-DOCS): a dated note under the error-tracking bullet says error tracking is not implemented until M6 (the Next.js apps only validate `SENTRY_DSN`, neither backend reads it) and that the client, the backend templates' `SENTRY_DSN` line and the ingest host's egress entry come together.
 
 ## Context
 
@@ -69,6 +69,7 @@ M6 includes "monitoring and alerting". The stack must be cheap and simple to run
   It sends an e-mail to the operator through the configured SMTP when something fails.
 - systemd `OnFailure=` on every unit sends the same alert when a unit enters `failed`.
 - **Error tracking (optional):** the backends and Next.js apps initialise Sentry only when `SENTRY_DSN` is set, with the same redaction applied in `beforeSend`. It is off by default.
+  - *Note (2026-11-22, lead decision (38k), approved by the owner; FIX-W69-DOCS):* not implemented until M6; the bullet above is the target design and stays. Today no app sends errors anywhere: the three Next.js apps (portal, platform admin, OTA admin) validate `SENTRY_DSN` in their configuration (a URL, `https:` for the portal and the platform admin, or empty) but have no Sentry client, and neither backend reads it, so the backend env templates no longer list it (KI-043, FIX-W68-OPS). The client, the backend templates' `SENTRY_DSN` line and the ingest host's entry in the egress allow-list ([`deploy/egress/allowed-hosts.conf`](../../../deploy/egress/allowed-hosts.conf)) come together, in one change. Until then the journal and the alerts above are the error record ([`deployment-single-vm.md`](../deployment-single-vm.md) §13, row "Errors in code"; [`architecture.md`](../architecture.md) §6, row `SENTRY_DSN`).
 - **Business visibility** comes from the database, not from a metrics store. The platform admin shows provisioning jobs, failed jobs and per-tenant counts (M1). The OTA admin shows `supplier_requests` diagnostics (M4).
 
 ### Audit (not logs)
