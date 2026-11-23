@@ -86,7 +86,8 @@ export { Page } from "./internal/pagination.js";
  * @property {number} [maxRetries] automatic retries of idempotent requests on 429/503/504/network errors; default 2
  * @property {Record<string, string>} [headers] extra headers sent with every request
  * @property {(info: ResponseInfo) => void} [onResponse] called for every response, retries included
- * @property {string} [hostingKey] hosting key (`hk_…`), server-only (identity.d.ts)
+ * @property {string} [hostingKey] hosting key (`hk_…`), server-only (identity.d.ts); the MVP API does not serve hosting
+ *   keys and answers `401 INVALID_API_KEY`, as it does to a client without any key (README §4, KI-033)
  * @property {string} [host] default storefront host for every call (`X-Velexis-Host`, identity.d.ts)
  * @property {EndUserSource} [endUser] default end user for every call (identity.d.ts)
  * @property {"customer" | "staff"} [sessionKind] which session the tokens belong to; default `"customer"` (console.d.ts)
@@ -101,7 +102,8 @@ export { Page } from "./internal/pagination.js";
  * @property {AbortSignal} [signal] aborts the request (and its retries)
  * @property {string} [idempotencyKey] idempotency key for state-changing calls (16 to 128 characters); generated when omitted
  * @property {number} [timeoutMs] overrides the timeout of this call
- * @property {Record<string, string>} [headers] extra headers for this call
+ * @property {Record<string, string>} [headers] extra headers for this call; an `Idempotency-Key` among them is the call's
+ *   key when `idempotencyKey` is not given, and meets the same rule (KI-032)
  * @property {string} [accessToken] overrides the access token for this call
  * @property {string} [bookingToken] overrides the booking token for this call
  * @property {string} [locale] overrides the locale of this call

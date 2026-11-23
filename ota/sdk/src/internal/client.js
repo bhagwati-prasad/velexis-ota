@@ -6,7 +6,9 @@
 // ETag `"<n>"`), and every other param is the JSON body (or the `multipart/form-data` form; an operation without a
 // body ignores them). The generator refuses name collisions, so this split never guesses. A list operation (one with
 // a `cursor` query param) resolves with a `Page`. `core.request` is the low-level escape hatch with the same headers,
-// retries and error mapping.
+// retries and error mapping, for a path that cannot leave the base URL (no `//` start, no backslash, no `.` or `..`
+// segment: FIX-W70-SDK, KI-031). An `Idempotency-Key` in the client's or a call's `headers` meets the rule of the
+// `idempotencyKey` option (KI-032).
 //
 // The session mode is chosen here, once, from the validated options (internal/session.js, README §4): cookie mode
 // (`session: "cookie"`), token mode (a publishable key) or server mode (a secret or hosting key). The session refuses
@@ -254,6 +256,23 @@ const idempotencyKey = (value, label) => {
   }
 };
 
+/**
+ * The headers of the client or of a call (`headerRecord`) whose `Idempotency-Key` entries, in any letter case, meet
+ * the rule of the `idempotencyKey` option, with its `TypeError` naming the entry (FIX-W70-SDK, KI-032): a call sends
+ * such an entry of its own headers as its key when it has no `idempotencyKey` (internal/http.js `idempotencyKeyOf`),
+ * which the API would refuse only after the request; a client's entry is checked the same way when the client is made,
+ * although no call sends it (README §5.3). Which source wins does not change.
+ * @type {Check}
+ */
+const headers = (value, label) => {
+  headerRecord(value, label);
+  for (const [name, item] of Object.entries(/** @type {Record<string, unknown>} */ (value))) {
+    if (name.toLowerCase() === "idempotency-key") {
+      idempotencyKey(item, `${label} entry "${name}"`);
+    }
+  }
+};
+
 /** @type {Check} */
 const anObject = (value, label) => {
   if (!isPlainObject(value)) {
@@ -279,7 +298,7 @@ const CLIENT_OPTIONS = {
   fetch: aFunction,
   timeoutMs: timeout,
   maxRetries: retries,
-  headers: headerRecord,
+  headers,
   onResponse: aFunction,
   hostingKey: apiKey("hk_"),
   host: nonEmptyString,
@@ -298,7 +317,7 @@ const REQUEST_OPTIONS = {
   signal: abortSignal,
   idempotencyKey,
   timeoutMs: timeout,
-  headers: headerRecord,
+  headers,
   accessToken: nonEmptyString,
   bookingToken: nonEmptyString,
   locale: nonEmptyString,
@@ -415,6 +434,14 @@ export function encodeQuery(entries) {
   }
   return parts.join("&");
 }
+
+/**
+ * Whether a path has a segment that a URL resolves: `.` or `..`, also with its dots percent-encoded in any letter case
+ * and mixed (`%2e`, `%2E%2e`, `.%2e`), the WHATWG URL standard's single- and double-dot path segments. A dot inside a
+ * segment (`a.b`, `x..y`, `...`) is no such segment.
+ * @param {string} pathname a path without its query string
+ */
+const hasDotSegment = (pathname) => pathname.split("/").some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment));
 
 /**
  * The path template of an operation with its path params filled in, URI-encoded.
@@ -559,7 +586,8 @@ export function createCore(options, family = createFamily()) {
   /**
    * The low-level escape hatch: any API path, with the same headers, retries and error mapping. `GET`, `PUT` and
    * `DELETE` are retried; `POST` and `PATCH` only with the caller's `idempotencyKey` (the SDK cannot know whether the
-   * endpoint honours a generated one).
+   * endpoint honours a generated one). The path stays under the base URL: it starts with a single `/` and has no
+   * backslash and no `.` or `..` segment, percent-encoded or not (FIX-W70-SDK, KI-031).
    * @template [T=unknown]
    * @param {HttpMethod} method
    * @param {string} path an API path such as `/v1/storefront`, optionally with a query string
@@ -573,6 +601,11 @@ export function createCore(options, family = createFamily()) {
     // `//host` and `/\host` (a backslash is a slash to a browser) would leave the base URL's origin.
     if (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//") || /[#\s\\]/.test(path)) {
       throw optionError('request path must be an API path that starts with "/", such as /v1/storefront');
+    }
+    // The URL would resolve a `.` or `..` segment, and `/api` + `/../v1/…` would leave the base URL's path, cookies and
+    // all (FIX-W70-SDK, KI-031). A dot inside a segment (`/v1/files/a.b`) stays.
+    if (hasDotSegment(path.split("?", 1)[0] ?? path)) {
+      throw optionError('request path cannot have a "." or ".." segment, percent-encoded (%2e) or not');
     }
     if (init !== undefined && !isPlainObject(init)) {
       throw optionError("request init must be an object");

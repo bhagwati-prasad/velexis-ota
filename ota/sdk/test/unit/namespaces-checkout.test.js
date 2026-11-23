@@ -78,6 +78,10 @@ const AIRLINE_CARD_PARAMS = Object.freeze({
  * separators), the security code as a token of its own, and the holder name in any case.
  */
 const CARD_VALUES = [/4242[ -]?4242[ -]?4242/, /(?<![\w])737(?![\w])/, /marco\s+rossi/i];
+/** The message of the plain Error that replaces an error of the call that is not a VelexisError and holds the card. */
+const CARD_HELD_MESSAGE =
+  "Velexis SDK: checkout.completeWithAirlineCard failed with an error that is not a VelexisError and held something " +
+  "that matches the card (such as an error the fetch in use threw); it was dropped";
 /** The names of the card's fields, which no error may carry as keys. */
 const CARD_KEYS = [
   "card",
@@ -1026,6 +1030,87 @@ describe("errors of completeWithAirlineCard", () => {
     expect(fake.requests[0]?.json).toMatchObject({ card: CARD });
     expect(error).toBeInstanceOf(ValidationError);
     expectNoCard(error);
+  });
+
+  it.each([
+    [
+      "names the request body in its message",
+      () => new TypeError(`cannot send ${JSON.stringify({ card: CARD })}`),
+    ],
+    [
+      "keeps the request in a field",
+      () => Object.assign(new Error("bad fetch"), { init: { card: { pan: 1 } } }),
+    ],
+    [
+      "holds the holder name in its cause",
+      () => new Error("bad fetch", { cause: `holder ${CARD.holderName}` }),
+    ],
+    ["is a string with the security code", () => `cvc ${CARD.securityCode} refused`],
+  ])(
+    "drop a custom fetch's synchronous throw that %s, which the transport rethrows as it is [FIX-W70-SDK AC1]",
+    async (_what, thrown) => {
+      /** @type {unknown[]} */
+      const bodies = [];
+      const fetch = vi.fn((/** @type {string} */ _url, /** @type {RequestInit} */ init) => {
+        bodies.push(init.body);
+        throw thrown();
+      });
+      const client = createVelexisClient({ publishableKey: PK, fetch, maxRetries: 3 });
+
+      const error = await client.checkout
+        .completeWithAirlineCard(AIRLINE_CARD_PARAMS)
+        .catch((caught) => caught);
+
+      // Sent once, never retried; the error is a plain Error with a fixed message that holds nothing of the card.
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(bodies[0]))).toMatchObject({ card: CARD });
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(VelexisError);
+      expect(error.message).toBe(CARD_HELD_MESSAGE);
+      expect(error.cause).toBeUndefined();
+      const text = [
+        String(error),
+        String(error.stack),
+        inspect(error, { depth: Infinity, showHidden: true }),
+      ].join("\n");
+      for (const pattern of CARD_VALUES) {
+        expect(text).not.toMatch(pattern);
+      }
+    },
+  );
+
+  it("pass on a custom fetch's synchronous throw that holds nothing of the card as it is [FIX-W70-SDK AC1]", async () => {
+    const bug = new TypeError("custom fetch: no agent configured");
+    const fetch = vi.fn(() => {
+      throw bug;
+    });
+    const client = createVelexisClient({ publishableKey: PK, fetch, maxRetries: 3 });
+
+    await expect(client.checkout.completeWithAirlineCard(AIRLINE_CARD_PARAMS)).rejects.toBe(bug);
+    await expect(client.checkout.complete({ checkoutId: CHECKOUT_ID, paymentId: PAYMENT_ID })).rejects.toBe(
+      bug,
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("fail closed on the SDK's own TypeError whose stack holds the security code by chance, naming no origin [FIX-W70-SDK AC1]", async () => {
+    const fetch = vi.fn();
+    const client = createVelexisClient({ publishableKey: PK, fetch });
+    // No checkoutId: fillPath's TypeError, before any request.
+    const withoutCheckout = { ...AIRLINE_CARD_PARAMS, checkoutId: undefined };
+    const own = await client.checkout.completeWithAirlineCard(withoutCheckout).catch((caught) => caught);
+    expect(own).toBeInstanceOf(TypeError);
+    // A line number of the TypeError's own stack, as a security code: the same call throws the same stack.
+    const lineNumber = /:(\d{3,4}):\d+\)?$/m.exec(String(own.stack))?.[1];
+    expect(lineNumber).toBeDefined();
+
+    const error = await client.checkout
+      .completeWithAirlineCard({ ...withoutCheckout, card: { ...CARD, securityCode: lineNumber } })
+      .catch((caught) => caught);
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(error).not.toBeInstanceOf(TypeError);
+    expect(error.message).toBe(CARD_HELD_MESSAGE);
   });
 
   it("leave the errors of the other checkout methods as the API sent them [SDK-009 AC2]", async () => {

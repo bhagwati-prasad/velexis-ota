@@ -693,6 +693,74 @@ describe("timeouts and aborts", () => {
   });
 });
 
+describe("a fetch that throws (FIX-W70-SDK, KI-030)", () => {
+  it("rethrows a custom fetch's synchronous throw as it is, at once, without a retry or a timer left [FIX-W70-SDK AC1]", async () => {
+    const bug = new Error("bug in the custom fetch");
+    const fetch = vi.fn(() => {
+      throw bug;
+    });
+    const controller = new AbortController();
+    const removeEventListener = vi.spyOn(controller.signal, "removeEventListener");
+    const core = createCore({ publishableKey: PK, fetch, maxRetries: 2 });
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers();
+
+    const call = settle(core.call(op.storefront_get, {}, { signal: controller.signal }));
+    // Long enough for both back-off waits, so a retried call would be over too.
+    await vi.advanceTimersByTimeAsync(10_000);
+    const { error } = await call;
+
+    // The very error, not a ConnectionError NETWORK_ERROR with it as the cause, and no back-off wait or retry.
+    expect(error).toBe(bug);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    // The attempt's timeout is cleared and its abort listener removed: nothing is left to fire.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows a synchronous throw on a retry too, and through request() and the client [FIX-W70-SDK AC1]", async () => {
+    const bug = new TypeError("not a fetch");
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockImplementation(() => {
+        throw bug;
+      });
+    const client = createVelexisClient({ publishableKey: PK, fetch });
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers();
+
+    const call = settle(client.storefront.get());
+    await vi.advanceTimersByTimeAsync(500);
+    expect((await call).error).toBe(bug);
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    await expect(client.request("GET", "/v1/not-wrapped")).rejects.toBe(bug);
+    await expect(client.request("POST", "/v1/not-wrapped", { body: {} })).rejects.toBe(bug);
+    expect(fetch).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps a rejected fetch a NETWORK_ERROR with its cause, retried as before [FIX-W70-SDK AC1]", async () => {
+    const failure = new TypeError("fetch failed");
+    const fetch = vi.fn(async () => {
+      throw failure;
+    });
+    const core = createCore({ publishableKey: PK, fetch, maxRetries: 2 });
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers();
+
+    const call = settle(core.call(op.storefront_get));
+    await vi.advanceTimersByTimeAsync(1500);
+    const { error } = await call;
+
+    expect(error).toBeInstanceOf(ConnectionError);
+    expect(error).toMatchObject({ code: "NETWORK_ERROR", status: 0, retryable: true, cause: failure });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("responses", () => {
   it("calls onResponse for every response, retries included, with the path but no query and no headers [SDK-003 AC1]", async () => {
     vi.useFakeTimers({ now: 0 });

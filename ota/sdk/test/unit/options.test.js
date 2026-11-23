@@ -5,7 +5,11 @@
 // SDK-017), in token and server mode the refresh of each refresh token, so derived clients with different refresh
 // tokens share nothing (here) and those with the same one send one refresh (session-token.test.js and
 // session-server.test.js, task SDK-017); two clients made with createVelexisClient share nothing at all. The per-call
-// options are validated the same way.
+// options are validated the same way, an Idempotency-Key header like the idempotencyKey option, and the escape hatch's
+// path cannot leave the base URL (FIX-W70-SDK). A client without a key, and one with a hostingKey, are documented in
+// README §4 and made without complaint (FIX-W70-SDK, KI-033).
+import { readFileSync } from "node:fs";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERSION, createVelexisClient } from "../../src/index.js";
@@ -447,5 +451,173 @@ describe("request options", () => {
       "Velexis SDK: request query must be an object",
     );
     expect(fake.requests).toHaveLength(0);
+  });
+
+  it.each([
+    "/../v1/storefront",
+    "/v1/..",
+    "/v1/./storefront",
+    "/v1/bookings/.",
+    "/%2e%2e/v1/storefront",
+    "/%2E%2E/v1/storefront",
+    "/%2E%2e/v1/storefront",
+    "/.%2e/v1/storefront",
+    "/%2e./v1/storefront",
+    "/v1/%2e/storefront",
+    "/v1/%2E/storefront",
+    "/v1/..?next=1",
+  ])(
+    "refuses the path %s, which leaves the base URL's path, before any request [FIX-W70-SDK AC2]",
+    async (path) => {
+      const fake = createFakeFetch();
+      const client = createVelexisClient({ publishableKey: PK, fetch: fake.fetch, baseUrl: "/api" });
+
+      for (const method of /** @type {const} */ (["GET", "DELETE"])) {
+        const error = await client.request(method, path).catch((caught) => caught);
+        expect(error).toBeInstanceOf(TypeError);
+        expect(error.message).toBe(
+          'Velexis SDK: request path cannot have a "." or ".." segment, percent-encoded (%2e) or not',
+        );
+      }
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
+
+  it("keeps a dot inside a segment and dots in the query, under a base URL with a prefix [FIX-W70-SDK AC2]", async () => {
+    const paths = [
+      "/v1/files/a.b",
+      "/v1/x..y",
+      "/v1/.../z",
+      "/v1/.well-known",
+      "/v1/a%2eb",
+      "/v1/%2e%2e%2e",
+      "/v1/search?q=../x&next=./y",
+      // A query is never resolved, so a whole `..` or `.` "segment" after the `?` is data too.
+      "/v1/search?next=/../x&back=/./y&up=/%2e%2e/z",
+    ];
+    const fake = createFakeFetch(paths.map(() => ({ body: {} })));
+    const client = createVelexisClient({ publishableKey: PK, fetch: fake.fetch, baseUrl: "/api" });
+
+    for (const path of paths) {
+      await client.request("GET", path);
+    }
+
+    expect(fake.requests.map((request) => request.url)).toEqual(paths.map((path) => `/api${path}`));
+  });
+
+  it.each([
+    ["a short key", { "Idempotency-Key": "short" }, "Idempotency-Key"],
+    ["129 characters, in lower case", { "idempotency-key": "x".repeat(129) }, "idempotency-key"],
+    ["a space, in upper case", { "IDEMPOTENCY-KEY": "has a space in it!" }, "IDEMPOTENCY-KEY"],
+    ["a tab, in mixed case", { "Idempotency-key": "tab\tinside-the-key" }, "Idempotency-key"],
+  ])(
+    "refuses an Idempotency-Key header with %s like the option, before fetch is called [FIX-W70-SDK AC3]",
+    async (_what, headers, name) => {
+      const fake = createFakeFetch([{ body: {} }, { body: {} }]);
+      const client = createVelexisClient({ publishableKey: PK, fetch: fake.fetch });
+
+      const viaMethod = await client.checkout
+        .create({ pricedOfferId: "prc_fix_w70_sdk" }, { headers })
+        .catch((caught) => caught);
+      const viaRequest = await client
+        .request("POST", "/v1/checkouts", { body: {}, options: { headers } })
+        .catch((caught) => caught);
+
+      for (const error of [viaMethod, viaRequest]) {
+        expect(error).toBeInstanceOf(TypeError);
+        expect(error.message).toBe(
+          `Velexis SDK: request option "headers" entry "${name}" must be a string of 16 to 128 visible ASCII characters`,
+        );
+      }
+      expect(fake.requests).toHaveLength(0);
+    },
+  );
+
+  it("refuses such a header in the client's headers when the client is made, also through withOptions [FIX-W70-SDK AC3]", () => {
+    const fetch = createFakeFetch().fetch;
+
+    expect(
+      typeErrorOf(() =>
+        createVelexisClient({ publishableKey: PK, fetch, headers: { "Idempotency-Key": "short" } }),
+      ),
+    ).toBe(
+      'Velexis SDK: option "headers" entry "Idempotency-Key" must be a string of 16 to 128 visible ASCII characters',
+    );
+    const client = createVelexisClient({ publishableKey: PK, fetch });
+    expect(typeErrorOf(() => client.withOptions({ headers: { "idempotency-key": "short" } }))).toBe(
+      'Velexis SDK: option "headers" entry "idempotency-key" must be a string of 16 to 128 visible ASCII characters',
+    );
+  });
+
+  it("sends a valid Idempotency-Key header as given, and options.idempotencyKey still wins [FIX-W70-SDK AC3]", async () => {
+    const fake = createFakeFetch([{ body: {} }, { body: {} }, { body: {} }]);
+    const client = createVelexisClient({
+      publishableKey: PK,
+      fetch: fake.fetch,
+      headers: { "Idempotency-Key": "client-wide-key-0001" },
+    });
+    const minimal = "k".repeat(16);
+    const maximal = `${"~".repeat(64)}${"!".repeat(64)}`;
+
+    await client.checkout.create(
+      { pricedOfferId: "prc_fix_w70_sdk" },
+      { headers: { "idempotency-key": minimal } },
+    );
+    await client.request("POST", "/v1/not-wrapped", {
+      body: {},
+      options: { headers: { "Idempotency-Key": maximal } },
+    });
+    await client.checkout.create(
+      { pricedOfferId: "prc_fix_w70_sdk" },
+      { idempotencyKey: "from-the-option-01", headers: { "Idempotency-Key": "from-the-headers-1" } },
+    );
+
+    expect(fake.requests.map((request) => request.headers["idempotency-key"])).toEqual([
+      minimal,
+      maximal,
+      "from-the-option-01",
+    ]);
+  });
+});
+
+describe("clients without a key, and hostingKey (FIX-W70-SDK, KI-033)", () => {
+  it("are explained in README §4: token mode without X-Api-Key, and hosting keys not served by the MVP API [FIX-W70-SDK AC4]", () => {
+    const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    const start = readme.indexOf("## 4. Session modes");
+    const section = readme.slice(start, readme.indexOf("### 4.1", start));
+
+    expect(start).toBeGreaterThan(-1);
+    expect(section).toContain("**A client without a key, and `hostingKey`**");
+    expect(section).toContain("such a client is in token mode and sends no `X-Api-Key`");
+    expect(section).toContain("the MVP API does not serve hosting keys");
+    expect(section.match(/`401 INVALID_API_KEY`/g)).toHaveLength(2);
+  });
+
+  it("are made without a TypeError and send what README §4 says [FIX-W70-SDK AC4]", async () => {
+    const fake = createFakeFetch([
+      errorResponse(401, "INVALID_API_KEY"),
+      errorResponse(401, "INVALID_API_KEY"),
+    ]);
+    const keyless = createVelexisClient({ fetch: fake.fetch, accessToken: "at_fix_w70_sdk" });
+    const hosting = createVelexisClient({
+      fetch: fake.fetch,
+      hostingKey: "hk_test_fix_w70_sdk",
+      host: "demo.ota.example.com",
+    });
+
+    await expect(keyless.storefront.get()).rejects.toMatchObject({ status: 401, code: "INVALID_API_KEY" });
+    await expect(hosting.storefront.get()).rejects.toMatchObject({ status: 401, code: "INVALID_API_KEY" });
+
+    const [fromKeyless, fromHosting] = fake.requests;
+    // Token mode: no X-Api-Key, the call's bearer token, and no cookies.
+    expect(fromKeyless?.headers["x-api-key"]).toBeUndefined();
+    expect(fromKeyless?.headers["authorization"]).toBe("Bearer at_fix_w70_sdk");
+    expect(fromKeyless?.init.credentials).toBe("omit");
+    // Server mode: the hosting key as X-Api-Key with the storefront host, fetch's default credentials.
+    expect(fromHosting?.headers).toMatchObject({
+      "x-api-key": "hk_test_fix_w70_sdk",
+      "x-velexis-host": "demo.ota.example.com",
+    });
+    expect(fromHosting?.init.credentials).toBeUndefined();
   });
 });

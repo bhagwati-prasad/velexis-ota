@@ -6,7 +6,9 @@
 // - only requests whose retry class is `safe` (GET) or `idempotent` (PUT, DELETE, an `Idempotency-Key`, or a POST the
 //   document marks `x-idempotent-by-design`) are retried; `never` (`checkout.completeWithAirlineCard`, a POST or PATCH
 //   without a key) is never retried, whatever `maxRetries` says;
-// - at most `maxRetries` times, on 429, 503, 504 and network errors; never after a client-side timeout or an abort;
+// - at most `maxRetries` times, on 429, 503, 504 and network errors (a rejected `fetch`); never after a client-side
+//   timeout or an abort, and never after a `fetch` that throws synchronously, whose error the call rethrows as it is
+//   (FIX-W70-SDK, KI-030);
 // - the n-th retry waits 0.5 s × 2^(n-1), capped at 8 s, ± 20 % jitter; a `Retry-After` header replaces that wait,
 //   and a `Retry-After` above 30 s ends the call at once with the response's error (`RateLimitError` for a 429);
 // - one `Idempotency-Key` per call, the same on every retry of that call.
@@ -79,6 +81,7 @@ const MAX_RETRY_AFTER_SECONDS = 30;
  * @param {HttpRequest} request
  * @returns {Promise<unknown>} the parsed response body (`undefined` for an empty body)
  * @throws {VelexisError} the mapped error of the last attempt, or a `ConnectionError`
+ * @throws {unknown} what the fetch in use throws synchronously, as it is and without a retry (KI-030)
  */
 export async function send(config, request) {
   const { options } = request;
@@ -213,6 +216,8 @@ async function endUserOf(source) {
  * @param {{ idempotencyKey: string | undefined, body: string | FormData | undefined, timeoutMs: number }} call
  * @returns {Promise<Attempt>}
  * @throws {VelexisError} a `ConnectionError` with `ABORTED` when the caller's signal aborts
+ * @throws {unknown} what the fetch in use throws synchronously, as it is, with the timer and the abort listener
+ *   cleared (KI-030)
  */
 async function sendOnce(config, request, { idempotencyKey, body, timeoutMs }) {
   const { method, path, options } = request;
@@ -252,12 +257,24 @@ async function sendOnce(config, request, { idempotencyKey, body, timeoutMs }) {
   });
   stopped.catch(() => {});
   const startedAt = Date.now();
+  /** @type {Response | Promise<Response>} */
+  let pending;
+  try {
+    pending = fetchFn(url, init);
+  } catch (error) {
+    // A synchronous throw is a programming error of the fetch in use (a custom fetch's bug), not a network failure: it
+    // is rethrown as it is, at once, never retried and never a `NETWORK_ERROR` (FIX-W70-SDK, KI-030). A rejection
+    // stays a network failure below: a standard fetch rejects with a `TypeError` for both kinds.
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+    throw error;
+  }
   /** @type {Response} */
   let response;
   /** @type {string} */
   let text;
   try {
-    response = await Promise.race([fetchFn(url, init), stopped]);
+    response = await Promise.race([pending, stopped]);
     text = await Promise.race([response.text(), stopped]);
   } catch (cause) {
     if (timedOut) {

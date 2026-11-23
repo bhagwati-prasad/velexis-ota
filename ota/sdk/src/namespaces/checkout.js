@@ -15,8 +15,9 @@
 // call: never retried, not even after `TOKEN_EXPIRED` or `CSRF_TOKEN_INVALID` (internal/session.js). Its arguments
 // never reach an error or a hook: the transport keeps no request in an error, and `onResponse` gets the method, the
 // API path, the status, the request id and the duration only. On top of that, an error of the call is rebuilt without
-// anything of the card that the API or a proxy might have echoed, or the `fetch` in use kept in its failure
-// (`withoutCard`).
+// anything of the card that the API or a proxy might have echoed, or the `fetch` in use kept in its failure, and an
+// error that a custom fetch throws synchronously (rethrown as it is since FIX-W70-SDK, KI-030) is dropped when it holds
+// anything of the card (`withoutCard`).
 
 import { op } from "../internal/operations.js";
 import { RateLimitError, VelexisError } from "../shared.js";
@@ -86,6 +87,16 @@ function live(options) {
 
 /** What replaces a card value in the texts of an error. */
 const REDACTED = "[redacted]";
+
+/**
+ * The message of the plain `Error` that replaces an error of `completeWithAirlineCard` that is not a `VelexisError` and
+ * holds something of the card (`withoutCard`), such as a custom fetch's synchronous throw that names the request body.
+ * It claims no origin: a match anywhere counts, a stack frame's line number included, so in rare cases the SDK's own
+ * `TypeError` of an invalid param is replaced too (when its stack holds the security code's digits by chance).
+ */
+const CARD_HELD_IN_ERROR =
+  "Velexis SDK: checkout.completeWithAirlineCard failed with an error that is not a VelexisError and held something " +
+  "that matches the card (such as an error the fetch in use threw); it was dropped";
 
 /**
  * Keys whose values an error of `completeWithAirlineCard` never keeps in `details` and `supplier`: the request's `card`
@@ -214,18 +225,22 @@ function holdsNoCard(value, scrub, depth = 0) {
  * the card's values redacted (texts and numbers), whose `details` and `supplier` lose every card-named field, whose
  * field errors keep their `path`, `code` and `message` only (never a value), and whose `cause` stays only when nothing
  * in it, its fields and its own causes included, holds a card value or a card-named field (`holdsNoCard`). Anything
- * that is not a `VelexisError` (the `TypeError` of an invalid param) is the SDK's own and holds no value.
+ * that is not a `VelexisError` is passed on as it is when it holds nothing of the card (the SDK's own `TypeError` of an
+ * invalid param), and replaced by `CARD_HELD_IN_ERROR` when it does: what a custom fetch throws synchronously reaches
+ * the call as it is (internal/http.js, FIX-W70-SDK, KI-030) and may hold the request it was given. The check reads the
+ * whole error, its stack included, and fails closed: a stack whose line numbers hold the security code by chance
+ * replaces even the SDK's own `TypeError`.
  * @param {unknown} error what the call threw
  * @param {unknown} params the params of the call
  * @returns {unknown}
  */
 function withoutCard(error, params) {
-  if (!(error instanceof VelexisError)) {
-    return error;
-  }
   const patterns = cardPatterns(params);
   /** @param {string} text */
   const scrub = (text) => patterns.reduce((result, pattern) => result.replace(pattern, REDACTED), text);
+  if (!(error instanceof VelexisError)) {
+    return holdsNoCard(error, scrub) ? error : new Error(CARD_HELD_IN_ERROR);
+  }
   /**
    * @param {unknown} value
    * @returns {unknown}
