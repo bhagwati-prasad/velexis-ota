@@ -66,11 +66,27 @@ export function previewAllowedHosts(env) {
 }
 
 /**
+ * The browsers Vite 6 builds for by default (its `modules` target). The stylesheets keep it, so the CSS is the same
+ * as before the scripts' own target below.
+ */
+const CSS_TARGET = ["es2020", "edge88", "firefox78", "chrome87", "safari14"];
+
+/**
  * The build options both builds share: CSP-clean output (OADR-0015 point 2), with no inline module-preload polyfill
- * and no data: URIs for fonts or scripts.
+ * and no data: URIs for fonts or scripts. The scripts are built for ES2022, the storefront's runtime (README §1:
+ * evergreen browsers). The code already calls ES2022 functions that no build lowers (`Object.hasOwn`: Chrome and Edge
+ * 93, Firefox 92, Safari 15.4), so no browser that could run it loses anything. Vite's default target (Chrome 87,
+ * Edge 88) made esbuild rewrite every `?.` as a conditional, which cost about 1.3 KB gzip on every page (wave 70's
+ * integration: the results page was over its 60 KB budget of §9 by 191 bytes).
  * @param {string} outDir
  */
-const sharedBuild = (outDir) => ({ outDir, modulePreload: { polyfill: false }, assetsInlineLimit: 0 });
+const sharedBuild = (outDir) => ({
+  outDir,
+  target: "es2022",
+  cssTarget: CSS_TARGET,
+  modulePreload: { polyfill: false },
+  assetsInlineLimit: 0,
+});
 
 /**
  * After the main build has written its files, builds each isolated page alone into the same folder: one input, one
