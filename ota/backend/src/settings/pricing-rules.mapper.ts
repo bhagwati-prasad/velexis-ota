@@ -42,9 +42,10 @@
 // out (answered `null` or omitted), so the answer always validates; a rule with such values is one the engine skips
 // (rules.repository.ts `toMarkupRule`), and saving it again requires the values its calculation needs.
 //
-// The list cursor is opaque base64url JSON with the last rule's priority and id and the `active` filter it was issued
-// for: a cursor of another filter or another rule kind, or with a priority outside the `integer` column's range, is
-// `400 VALIDATION_FAILED` (`/query/cursor`).
+// The list cursor is opaque base64url JSON with the last rule's priority and id and the filters it was issued for
+// (`active`, and a markup list's `isDefault`, recorded only when sent, so a cursor without it reads as before:
+// FIX-W70-CONSOLE): a cursor of another filter or another rule kind, or with a priority outside the `integer`
+// column's range, is `400 VALIDATION_FAILED` (`/query/cursor`).
 import type { components } from "@velexis/api-types";
 import type { FieldError } from "@velexis/errors";
 import { DECIMAL_STRING, Money } from "../pricing/pricing.types";
@@ -637,29 +638,32 @@ export function feeRuleWarnings(state: FeeRuleState, defaultCurrency: string | n
 /** The rule ids of each kind. */
 const RULE_ID = { markup: /^mkr_[0-9A-Za-z]{16,40}$/, fee: /^fee_[0-9A-Za-z]{16,40}$/ } as const;
 
-/** The `active` filter as the cursor records it. */
-const filterOf = (active: boolean | undefined): string => (active === undefined ? "all" : String(active));
+/** The filters of a list as the cursor records them: `active` (`all`, `true`, `false`), then `isDefault` when sent. */
+const filterOf = (active: boolean | undefined, isDefault?: boolean): string =>
+  `${active === undefined ? "all" : String(active)}${isDefault === undefined ? "" : `;default=${String(isDefault)}`}`;
 
 /** The range of `priority` (`integer`): a cursor outside it is no position of a rule (and PostgreSQL would refuse it). */
 const PRIORITY_MIN = -2_147_483_648;
 const PRIORITY_MAX = 2_147_483_647;
 
-/** The cursor of the page after the rule at `priority` and `id`, for the list of `active`. */
+/** The cursor of the page after the rule at `priority` and `id`, for the list of `active` (and `isDefault`). */
 export function encodeRuleCursor(
   active: boolean | undefined,
   last: { readonly priority: number; readonly id: string },
+  isDefault?: boolean,
 ): string {
-  return encodeCursor({ p: String(last.priority), i: last.id, f: filterOf(active) });
+  return encodeCursor({ p: String(last.priority), i: last.id, f: filterOf(active, isDefault) });
 }
 
 /**
- * The position of a cursor of the `kind` list with the `active` filter; `400 VALIDATION_FAILED` (`/query/cursor`) for
- * one this list did not issue.
+ * The position of a cursor of the `kind` list with the `active` (and `isDefault`) filter; `400 VALIDATION_FAILED`
+ * (`/query/cursor`) for one this list did not issue.
  */
 export function decodeRuleCursor(
   kind: "markup" | "fee",
   active: boolean | undefined,
   cursor: string,
+  isDefault?: boolean,
 ): { readonly priority: number; readonly id: string } {
   const { p, i, f } = decodeKeysetCursor(cursor, ["p", "i", "f"]);
   const priority = Number(p);
@@ -668,7 +672,7 @@ export function decodeRuleCursor(
     priority < PRIORITY_MIN ||
     priority > PRIORITY_MAX ||
     !RULE_ID[kind].test(i) ||
-    f !== filterOf(active)
+    f !== filterOf(active, isDefault)
   ) {
     throw invalidCursor();
   }

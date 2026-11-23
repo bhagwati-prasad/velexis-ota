@@ -16,7 +16,9 @@
 // - `listSnapshots` (console.queues.listSnapshots, `GET /v1/console/queue-snapshots`): the environment's snapshots,
 //   newest first, staff reads and the poller's (`fetchedBy: null`), filtered by queue, office, category and fetch time,
 //   with a keyset cursor bound to the environment and the filters; `include=items` adds each snapshot's PNRs (then at
-//   most 20 per page: `400 VALIDATION_FAILED` at `/query/limit` above). No Amadeus call.
+//   most 20 per page: `400 VALIDATION_FAILED` at `/query/limit` above). With `latest=true` only the newest snapshot
+//   of each office, queue and category the filters match, in the same order and paging, its cursor bound to
+//   `latest` too (queue-snapshots.repository.ts; FIX-W70-CONSOLE, known issue KI-022). No Amadeus call.
 //
 // Each PNR is shown as linked to the OTA's booking of its record locator (`bookingId`, `bookingReference`,
 // `bookingStatus`, read when the page is answered) or as an orphan (all three `null`): the booking queue view of
@@ -273,6 +275,7 @@ export function queueSnapshotsFingerprint(
     fetchedFrom: instant(query.fetchedFrom),
     fetchedTo: instant(query.fetchedTo),
     include: query.include?.includes("items") === true ? "items" : undefined,
+    latest: query.latest === true ? "latest" : undefined,
   });
 }
 
@@ -423,7 +426,7 @@ export class QueuesService {
 
   // ---- console.queues.listSnapshots --------------------------------------------------------------------------------
 
-  /** One page of the environment's snapshots, newest first (see the file header). */
+  /** One page of the environment's snapshots, or of each queue's newest (`latest`), newest first (file header). */
   async listSnapshots(query: ConsoleListQueueSnapshotsQuery): Promise<QueueSnapshotPage> {
     const tenant = this.tenants.require();
     const withItems = query.include?.includes("items") === true;
@@ -444,6 +447,7 @@ export class QueuesService {
           fetchedFrom: query.fetchedFrom === undefined ? undefined : new Date(query.fetchedFrom),
           fetchedTo: query.fetchedTo === undefined ? undefined : new Date(query.fetchedTo),
           after,
+          latest: query.latest === true,
           limit: limit + 1,
         },
         withItems,

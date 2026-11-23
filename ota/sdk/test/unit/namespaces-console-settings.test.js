@@ -1093,6 +1093,28 @@ describe("the lists", () => {
     }
   });
 
+  it("[FIX-W70-CONSOLE AC3] markupRules.list sends isDefault as a query parameter, with the cursor bound to it", async () => {
+    const answer = bodyOf("console.settings.markupRules.list");
+    const pages = [
+      { ...answer, page: { nextCursor: "cur_2", limit: 1 } },
+      { ...answer, page: { nextCursor: null, limit: 1 } },
+      answer,
+    ];
+    const fake = createFakeFetch(pages.map((body) => ({ body })));
+    const client = staffClient(fake.fetch);
+
+    const first = await client.console.settings.markupRules.list({ isDefault: true, limit: 1 });
+    await first.next();
+    await client.console.settings.markupRules.list({ isDefault: false, active: true });
+
+    expect(fake.requests.map((request) => `${request.path}?${request.searchParams}`)).toEqual([
+      "/v1/console/settings/markup-rules?isDefault=true&limit=1",
+      "/v1/console/settings/markup-rules?isDefault=true&cursor=cur_2&limit=1",
+      "/v1/console/settings/markup-rules?active=true&isDefault=false",
+    ]);
+    expect(op.console_settings_markupRules_list.queryParams).toContain("isDefault");
+  });
+
   it("payments.list sends one status, provider or method as it is and several comma-separated [SDK-012]", async () => {
     const fake = createFakeFetch([answerOf("console.payments.list"), answerOf("console.payments.list")]);
     const client = staffClient(fake.fetch);

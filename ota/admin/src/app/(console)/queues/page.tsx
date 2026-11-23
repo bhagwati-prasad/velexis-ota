@@ -1,9 +1,12 @@
 // `/queues` (README §5, routes.md §5, OAD-009): the Amadeus office queues of the OTA in the environment of the switch,
 // each with its last stored read, from `console.queues.listSnapshots` (`queues:read`: owner, admin, agent; no Amadeus
 // call, not audited). The API has no list of the monitored queues themselves (they are set per OTA and environment in
-// the portal, `platform.supplier_connections.monitored_queues`), so the page groups the newest snapshots by office,
-// queue and category: a queue the scheduled poller read (`fetchedBy: null`) is a monitored one, the others are the
-// queues staff read. Each links to `/queues/[queueId]` (queues/[queueId]/page.tsx), where "Read now" calls Amadeus.
+// the portal, `platform.supplier_connections.monitored_queues`), so the page lists the newest read of each office,
+// queue and category (`latest: true`, pages of 100, at most 10 pages: FIX-W70-CONSOLE, known issue KI-022), so a queue
+// stays listed with its last read until its snapshots expire (30 days) however many reads of other queues follow it.
+// Whether the scheduled poller reads a queue (`fetchedBy: null`) is judged, as before, from the newest 100 snapshots,
+// read in parallel (the poller reads each monitored queue every 15 minutes), or from the queue's newest read itself.
+// Each links to `/queues/[queueId]` (queues/[queueId]/page.tsx), where "Read now" calls Amadeus.
 //
 // "Open a queue" is a plain GET form to this page (`?queueId=50&category=0&officeId=…`), which sends a valid queue on to
 // its own page and names what is not valid (a queue number from 0 to 99, a category from 0 to 254, one of the OTA's
@@ -65,6 +68,8 @@ const PAGE_STRINGS = Object.freeze({
   caption: "Queues read recently",
   empty:
     "No queue has been read in this environment yet. The scheduled poller reads the queues set up in the portal; open a queue below to read it now.",
+  more: (count: number) =>
+    `Only the ${count.toLocaleString("en-GB")} most recently read queues are listed. Open another queue below.`,
   queue: (queueId: number) => `Queue ${queueId}`,
   monitored: "Yes, by the scheduled poller",
   notMonitored: "No",
@@ -93,8 +98,11 @@ const LINK_CLASS = "text-sm font-medium text-primary underline underline-offset-
 const FIELD_CLASS =
   "h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
-/** The newest snapshots the page groups: enough for the polled queues of a day and the staff's recent reads. */
+/** The newest snapshots whose poller reads mark a queue as monitored: the poller reads each one every 15 minutes. */
 const SNAPSHOT_LIMIT = 100;
+/** The newest read of each queue: per page, and the most pages read (1,000 queues, far more than an OTA reads). */
+const LATEST_PAGE_SIZE = 100;
+const LATEST_MAX_PAGES = 10;
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -278,19 +286,53 @@ interface QueueRow {
   readonly monitored: boolean;
 }
 
-/** The newest snapshot of each office, queue and category (`snapshots` come newest first), by queue number. */
-function queueRowsOf(snapshots: readonly QueueSnapshot[]): QueueRow[] {
-  const rows = new Map<string, { latest: QueueSnapshot; monitored: boolean }>();
-  for (const snapshot of snapshots) {
-    const key = `${snapshot.officeId}|${snapshot.queueId}|${snapshot.category}`;
-    const row = rows.get(key);
-    if (row === undefined) {
-      rows.set(key, { latest: snapshot, monitored: snapshot.fetchedBy === null });
-    } else if (snapshot.fetchedBy === null) {
-      row.monitored = true;
+/** What the page reads: the newest read of each queue, whether more queues were left unread, the newest snapshots. */
+interface QueueReads {
+  readonly latest: readonly QueueSnapshot[];
+  readonly more: boolean;
+  readonly recent: readonly QueueSnapshot[];
+}
+
+/** The office, queue and category of a snapshot, as one key. */
+const queueKeyOf = (snapshot: QueueSnapshot): string =>
+  `${snapshot.officeId}|${snapshot.queueId}|${snapshot.category}`;
+
+/**
+ * The newest read of each queue (`latest: true`, up to LATEST_MAX_PAGES pages) and, in parallel, the newest snapshots
+ * that tell which queues the poller reads.
+ */
+async function queueReadsOf(request: ConsoleRequest): Promise<QueueReads> {
+  const newestReads = async (): Promise<{ latest: QueueSnapshot[]; more: boolean }> => {
+    let page = await request.console.queues.listSnapshots({ latest: true, limit: LATEST_PAGE_SIZE });
+    const latest = [...page.data];
+    for (let read = 1; read < LATEST_MAX_PAGES; read += 1) {
+      const next = await page.next();
+      if (next === null) {
+        return { latest, more: false };
+      }
+      latest.push(...next.data);
+      page = next;
     }
-  }
-  return [...rows.values()].sort(
+    return { latest, more: page.page.nextCursor !== null };
+  };
+  const [{ latest, more }, recent] = await Promise.all([
+    newestReads(),
+    request.console.queues.listSnapshots({ limit: SNAPSHOT_LIMIT }),
+  ]);
+  return { latest, more, recent: recent.data };
+}
+
+/**
+ * Each queue's newest read (`latest`, one per office, queue and category), by queue number; a queue is monitored when
+ * its newest read or one of the newest snapshots (`recent`) is the scheduled poller's.
+ */
+function queueRowsOf(latest: readonly QueueSnapshot[], recent: readonly QueueSnapshot[]): QueueRow[] {
+  const polled = new Set(recent.filter((snapshot) => snapshot.fetchedBy === null).map(queueKeyOf));
+  const rows = latest.map((snapshot) => ({
+    latest: snapshot,
+    monitored: snapshot.fetchedBy === null || polled.has(queueKeyOf(snapshot)),
+  }));
+  return rows.sort(
     (a, b) =>
       a.latest.queueId - b.latest.queueId ||
       a.latest.officeId.localeCompare(b.latest.officeId) ||
@@ -298,55 +340,70 @@ function queueRowsOf(snapshots: readonly QueueSnapshot[]): QueueRow[] {
   );
 }
 
-function QueuesTable({ rows, timeZone }: { readonly rows: readonly QueueRow[]; readonly timeZone: string }) {
+function QueuesTable({
+  rows,
+  more,
+  timeZone,
+}: {
+  readonly rows: readonly QueueRow[];
+  readonly more: boolean;
+  readonly timeZone: string;
+}) {
   const columns = Object.values(PAGE_STRINGS.columns);
   return (
-    <Table>
-      <TableCaption className="sr-only">{PAGE_STRINGS.caption}</TableCaption>
-      <TableHeader>
-        <TableRow>
-          {columns.map((column) => (
-            <TableHead key={column} scope="col">
-              {column}
-            </TableHead>
-          ))}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.length === 0 ? (
+    <>
+      <Table>
+        <TableCaption className="sr-only">{PAGE_STRINGS.caption}</TableCaption>
+        <TableHeader>
           <TableRow>
-            <TableCell colSpan={columns.length} className="h-20 text-center text-muted-foreground">
-              {PAGE_STRINGS.empty}
-            </TableCell>
+            {columns.map((column) => (
+              <TableHead key={column} scope="col">
+                {column}
+              </TableHead>
+            ))}
           </TableRow>
-        ) : (
-          rows.map(({ latest, monitored }) => (
-            <TableRow key={latest.id}>
-              <TableCell>
-                <Link
-                  href={queueHref({
-                    queueId: latest.queueId,
-                    officeId: latest.officeId,
-                    category: latest.category,
-                  })}
-                  className="font-medium underline-offset-4 hover:underline focus-visible:underline"
-                >
-                  {PAGE_STRINGS.queue(latest.queueId)}
-                </Link>
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={columns.length} className="h-20 text-center text-muted-foreground">
+                {PAGE_STRINGS.empty}
               </TableCell>
-              <TableCell className="font-mono">{latest.officeId}</TableCell>
-              <TableCell>{latest.category}</TableCell>
-              <TableCell>
-                <time dateTime={latest.fetchedAt}>{formatInstant(latest.fetchedAt, timeZone)}</time>
-              </TableCell>
-              <TableCell>{actorText(latest.fetchedBy)}</TableCell>
-              <TableCell className="tabular-nums">{latest.itemCount}</TableCell>
-              <TableCell>{monitored ? PAGE_STRINGS.monitored : PAGE_STRINGS.notMonitored}</TableCell>
             </TableRow>
-          ))
-        )}
-      </TableBody>
-    </Table>
+          ) : (
+            rows.map(({ latest, monitored }) => (
+              <TableRow key={latest.id}>
+                <TableCell>
+                  <Link
+                    href={queueHref({
+                      queueId: latest.queueId,
+                      officeId: latest.officeId,
+                      category: latest.category,
+                    })}
+                    className="font-medium underline-offset-4 hover:underline focus-visible:underline"
+                  >
+                    {PAGE_STRINGS.queue(latest.queueId)}
+                  </Link>
+                </TableCell>
+                <TableCell className="font-mono">{latest.officeId}</TableCell>
+                <TableCell>{latest.category}</TableCell>
+                <TableCell>
+                  <time dateTime={latest.fetchedAt}>{formatInstant(latest.fetchedAt, timeZone)}</time>
+                </TableCell>
+                <TableCell>{actorText(latest.fetchedBy)}</TableCell>
+                <TableCell className="tabular-nums">{latest.itemCount}</TableCell>
+                <TableCell>{monitored ? PAGE_STRINGS.monitored : PAGE_STRINGS.notMonitored}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+      {more ? (
+        <p className="text-sm text-muted-foreground">
+          {PAGE_STRINGS.more(LATEST_PAGE_SIZE * LATEST_MAX_PAGES)}
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -411,9 +468,9 @@ export default async function QueuesPage({
     redirect(queueHref(open.scope));
   }
 
-  let snapshots: QueueSnapshot[];
+  let reads: QueueReads;
   try {
-    snapshots = (await request.console.queues.listSnapshots({ limit: SNAPSHOT_LIMIT })).data;
+    reads = await queueReadsOf(request);
   } catch (error) {
     const failure = await apiFailure(error, QUEUES_PATH);
     return (
@@ -429,7 +486,11 @@ export default async function QueuesPage({
 
   return (
     <QueuesShell environment={environment} staff={staff} request={open}>
-      <QueuesTable rows={queueRowsOf(snapshots)} timeZone={staff.tenant.timeZone} />
+      <QueuesTable
+        rows={queueRowsOf(reads.latest, reads.recent)}
+        more={reads.more}
+        timeZone={staff.tenant.timeZone}
+      />
     </QueuesShell>
   );
 }

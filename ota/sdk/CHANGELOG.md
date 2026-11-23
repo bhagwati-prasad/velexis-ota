@@ -13,6 +13,10 @@ The first npm release (SDK-015, [OADR-0016](../docs/adr/0016-sdk-packaging-and-t
 - The contract's error classes and `isVelexisError`, `Page<T>` with `for await`, retries with one `Idempotency-Key` per call, timeouts, `Retry-After` and the `onResponse` hook.
 - An ESM bundle (15.8 KB min+gzip of its 25 KB budget) and an IIFE (`window.Velexis`), both ES2022 and without dependencies, and declarations that include the OTA API's types; Node.js 22.12 and later and 24, evergreen browsers and edge runtimes.
 
+### Added
+
+- Two optional list parameters, additions to the OTA API's console operations (FIX-W70-CONSOLE, guidebook known issues KI-022 and KI-023): `console.queues.listSnapshots({ latest: true })` lists only the newest stored read of each office, queue and category the other filters match, newest first and paged as before, so a queue read within the 30 days of retention is listed however many later reads of other queues there are; `console.settings.markupRules.list({ isDefault: true, limit: 1 })` reads the seeded default markup rule however many rules come first (an empty page when the OTA has none; `isDefault: false` lists every other rule). `ConsoleListQueueSnapshotsParams.latest` and `ConsoleListMarkupRulesParams.isDefault` are optional booleans and the route table sends them as query parameters; nothing else changed ([`docs/extensions.md`](docs/extensions.md) §4).
+
 ### Changed
 
 - The declarations are self-contained (SDK-015, OADR-0016 point 7): the build copies the OTA part of `@velexis/api-types` (the generated `components`, `paths`, `operations`, `webhooks` and `$defs` of the OTA booking API) into `dist/types/api-types.d.ts`, and the declarations import `./api-types.js` instead of `@velexis/api-types`, their declaration maps moved to match. A project that installs the package from npm needs nothing else, not even for its types; `test/unit/pack.test.js` compiles what `npm pack` makes in an empty project with `strict` and without `skipLibCheck`. The types themselves are unchanged, so code that also imports `@velexis/api-types` (inside the monorepo) stays compatible.

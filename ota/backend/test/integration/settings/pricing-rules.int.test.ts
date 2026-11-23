@@ -35,7 +35,7 @@ import {
 } from "@velexis/testing";
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { newId } from "../../../src/common/ids";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import { Money } from "../../../src/pricing/pricing.types";
@@ -903,6 +903,76 @@ describe("console.settings.markupRules", () => {
       expect(res.body.error.fieldErrors).toEqual([
         expect.objectContaining({ path: "/query/cursor", code: "cursor" }),
       ]);
+    }
+  });
+
+  it("[FIX-W70-CONSOLE AC2] reads the default rule with isDefault=true and limit 1 behind 600 rules; none answers an empty page", async () => {
+    const owner = await signIn(alphaId, "owner");
+    // 600 rules ahead of the default (priority 1000) in evaluation order, written as the console stores them, and
+    // deleted again when the test ends (passed or failed), so the tests after it meet alpha's rules as before.
+    const ahead = Array.from({ length: 600 }, () => newId("mkr"));
+    await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx
+        .insertInto("markup_rules")
+        .values(
+          ahead.map((id, index) => ({
+            id,
+            name: `Route rule ${index}`,
+            scope: JSON.stringify({ carriers: ["AF"] }),
+            calculation: "percentage",
+            percentage: "2.5000",
+            priority: index % 999,
+          })),
+        )
+        .execute(),
+    );
+    onTestFinished(async () => {
+      await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+        trx.deleteFrom("markup_rules").where("id", "in", ahead).execute(),
+      );
+    });
+
+    // The first five pages of 100, all the console's old tile read, hold no default rule.
+    let cursor: string | null = null;
+    for (let page = 0; page < 5; page += 1) {
+      const res = await owner.get(`${MARKUP}?limit=100${cursor === null ? "" : `&cursor=${cursor}`}`);
+      expect(res.status).toBe(200);
+      expect((res.body.data as Json[]).some((rule) => rule["isDefault"] === true)).toBe(false);
+      cursor = res.body.page.nextCursor as string | null;
+    }
+    const byDefault = await owner.get(`${MARKUP}?isDefault=true&limit=1`);
+    const others = await owner.get(`${MARKUP}?isDefault=false&limit=100`);
+    const otherFilter = await owner.get(`${MARKUP}?cursor=${String(others.body.page.nextCursor)}`);
+
+    for (const res of [byDefault, others]) {
+      expect(res.status).toBe(200);
+      expectResponseToMatch("consoleListMarkupRules", res);
+    }
+    expect(byDefault.body).toEqual({
+      data: [
+        expect.objectContaining({ id: alphaDefault, isDefault: true, percentage: "0.0000", priority: 1000 }),
+      ],
+      page: { nextCursor: null, limit: 1 },
+    });
+    expect((others.body.data as Json[]).some((rule) => rule["isDefault"] === true)).toBe(false);
+    expect(answer(otherFilter)).toEqual([400, "VALIDATION_FAILED"]);
+    expect(otherFilter.body.error.fieldErrors).toEqual([
+      expect.objectContaining({ path: "/query/cursor", code: "cursor" }),
+    ]);
+
+    // An OTA without a default rule (none can be deleted, so the flag is taken off here and put back).
+    await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx.updateTable("markup_rules").set({ is_default: false }).where("id", "=", alphaDefault).execute(),
+    );
+    try {
+      const none = await owner.get(`${MARKUP}?isDefault=true&limit=1`);
+      expect(none.status).toBe(200);
+      expectResponseToMatch("consoleListMarkupRules", none);
+      expect(none.body).toEqual({ data: [], page: { nextCursor: null, limit: 1 } });
+    } finally {
+      await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+        trx.updateTable("markup_rules").set({ is_default: true }).where("id", "=", alphaDefault).execute(),
+      );
     }
   });
 

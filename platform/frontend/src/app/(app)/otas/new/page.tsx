@@ -80,20 +80,37 @@ function planStep(loaded: readonly Plan[] | undefined, stripeBilling: boolean, r
   };
 }
 
+/** A read whose failure is kept for later: `loadTenantLimit`'s, started with the page's other reads (39d). */
+type Settled<T> = { readonly value: T } | { readonly failure: unknown };
+
+const settled = <T,>(read: Promise<T>): Promise<Settled<T>> =>
+  read.then(
+    (value) => ({ value }),
+    (failure: unknown) => ({ failure }),
+  );
+
 /**
  * `/otas/new` (README §2 Signed in; flow signup-and-create-ota.md step 5; PF-10): the create-OTA wizard for a
- * verified account. The page loads the account (`getMe`: the M5 switch and the time zone to preselect) and the
- * public plans, builds the country, currency and time zone lists, and makes the wizard's one `Idempotency-Key`
- * (a UUID): a new one each time the page opens, the same one for every submit of that wizard (PF-10 AC2). `plan` is the
- * plan chosen on `/pricing` (a well-formed code only, FIX-W69-SIGNUP, KI-009), preselected when the plan step offers it.
+ * verified account. The page loads the account (`getMe`: the M5 switch and the time zone to preselect), the
+ * public plans and the account's tenant limit (`listTenants`), builds the country, currency and time zone lists, and
+ * makes the wizard's one `Idempotency-Key` (a UUID): a new one each time the page opens, the same one for every submit
+ * of that wizard (PF-10 AC2). `plan` is the plan chosen on `/pricing` (a well-formed code only, FIX-W69-SIGNUP,
+ * KI-009), preselected when the plan step offers it.
+ *
+ * The reads run in one `Promise.all` (lead decision (39d), FIX-W70-CONSOLE): the limit no longer waits for
+ * `getMe`. `getMe`'s answer decides only what the page renders (a sign-in redirect, its error, `/verify-pending`),
+ * not whether the limit may be read (the dashboard reads both in parallel too), so an unverified account or a failed
+ * `getMe` costs one `listTenants` whose answer is not used. The limit's failure is kept until the account is known to
+ * be verified and only then thrown, as before, so the page behaves exactly as when it read the limit after `getMe`.
  */
 export default async function NewOtaPage({ searchParams }: { readonly searchParams?: SearchParams }) {
   const settings = getConfig();
   const api = await platformApi();
-  const [me, plans, params] = await Promise.all([
+  const [me, plans, params, limit] = await Promise.all([
     api.GET("/v1/me"),
     listPlans(),
     searchParams ?? Promise.resolve(NO_QUERY),
+    settled(loadTenantLimit(api)),
   ]);
   const requestedPlan = planCodeOf(params.plan);
   if (me.error !== undefined) {
@@ -114,8 +131,11 @@ export default async function NewOtaPage({ searchParams }: { readonly searchPara
   if (!account.emailVerified) {
     redirect("/verify-pending");
   }
-  // FIX-W69-LIMIT (KI-010): at the tenant limit the reason shows above the first step; only a verified account asks.
-  const tenantLimit = await loadTenantLimit(api);
+  // FIX-W69-LIMIT (KI-010): at the tenant limit the reason shows above the first step, for a verified account only.
+  if ("failure" in limit) {
+    throw limit.failure;
+  }
+  const tenantLimit = limit.value;
 
   const timeZones = timeZoneOptions(account.timeZone);
   const defaultTimeZone = timeZones.some((zone) => zone.value === account.timeZone)

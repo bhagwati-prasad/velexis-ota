@@ -9,9 +9,10 @@
 //   - the heading, the net-price notice and the audit note (each raw read is an audited read);
 //   - that booking on behalf comes later (`console.bookings.create` is deferred, scope §3.4), with the two ways staff
 //     have instead: the storefront, and the PNR lookup's import of a booking made in the Amadeus terminal;
-//   - for orientation, the OTA's default markup rule (`console.settings.markupRules.list`, `settings:read`, read here
-//     and never sent to the browser as a rule: only its description), which says how far a storefront price is above
-//     the net prices of the page; a role without `settings:read` gets no tile and no request;
+//   - for orientation, the OTA's default markup rule (`console.settings.markupRules.list` with `isDefault: true` and
+//     `limit: 1`, so it is found however many rules come before it: FIX-W70-CONSOLE, known issue KI-023; `settings:read`,
+//     read here and never sent to the browser as a rule: only its description), which says how far a storefront price is
+//     above the net prices of the page; a role without `settings:read` gets no tile and no request;
 //   - the environment and the OTA's Amadeus offices, and a warning when the environment has no Amadeus connection;
 //   - the console of results.tsx (the two searches and an offer's branded fares and confirmed price).
 //
@@ -43,9 +44,6 @@ const SHOPPING_PATH = "/shopping";
 const READ_PERMISSION = "amadeus:read";
 /** The permission of the markup rules. */
 const SETTINGS_PERMISSION = "settings:read";
-/** Markup rules per page, and the most pages read to find the default rule (priority 1000, the last of most lists). */
-const MARKUP_PAGE_SIZE = 100;
-const MARKUP_MAX_PAGES = 5;
 
 const PAGE_STRINGS = Object.freeze({
   title: "Shopping on behalf",
@@ -106,21 +104,15 @@ type MarkupTile =
   | { readonly kind: "none" }
   | { readonly kind: "failed"; readonly error: VelexisErrorLike };
 
-/** The OTA's default markup rule (`isDefault`), from the pages of `console.settings.markupRules.list`. */
+/**
+ * The OTA's default markup rule: `console.settings.markupRules.list` with `isDefault: true` and `limit: 1` answers it
+ * whatever the number of rules before it (FIX-W70-CONSOLE, KI-023), or an empty page when the OTA has none.
+ */
 async function defaultMarkupRule(request: ConsoleRequest): Promise<MarkupTile> {
   try {
-    let page = await request.console.settings.markupRules.list({ limit: MARKUP_PAGE_SIZE });
-    for (let read = 1; ; read += 1) {
-      const rule = page.data.find((candidate) => candidate.isDefault);
-      if (rule !== undefined) {
-        return { kind: "rule", rule };
-      }
-      const next = read < MARKUP_MAX_PAGES ? await page.next() : null;
-      if (next === null) {
-        return { kind: "none" };
-      }
-      page = next;
-    }
+    const page = await request.console.settings.markupRules.list({ isDefault: true, limit: 1 });
+    const rule = page.data.find((candidate) => candidate.isDefault);
+    return rule === undefined ? { kind: "none" } : { kind: "rule", rule };
   } catch (error) {
     return { kind: "failed", error: await apiFailure(error) };
   }

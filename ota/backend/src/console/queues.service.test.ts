@@ -265,6 +265,31 @@ describe("cursors", () => {
       invalidCursorError,
     );
   });
+
+  it("[FIX-W70-CONSOLE AC1] of the newest read of each queue (latest) are bound to latest; latest=false is the plain list", () => {
+    const query = { queueId: 50 };
+    const plain = queueSnapshotsFingerprint("test", query);
+    const latest = queueSnapshotsFingerprint("test", { ...query, latest: true });
+    const cursor = encodeSnapshotsCursor(latest, "2026-10-10T10:00:03.123456", SNAPSHOT_ID);
+
+    expect(latest).not.toBe(plain);
+    expect(decodeSnapshotsCursor(cursor, latest)).toEqual({
+      key: "2026-10-10T10:00:03.123456",
+      id: SNAPSHOT_ID,
+    });
+    // A cursor of one list is refused by the other, both ways.
+    expect(caught(() => decodeSnapshotsCursor(cursor, plain))).toEqual(invalidCursorError);
+    expect(
+      caught(() =>
+        decodeSnapshotsCursor(
+          encodeSnapshotsCursor(plain, "2026-10-10T10:00:03.123456", SNAPSHOT_ID),
+          latest,
+        ),
+      ),
+    ).toEqual(invalidCursorError);
+    // `latest=false` is the plain list, whose fingerprint (and so its cursors) did not change.
+    expect(queueSnapshotsFingerprint("test", { ...query, latest: false })).toBe(plain);
+  });
 });
 
 describe("QueuesService refusals", () => {
@@ -343,5 +368,19 @@ describe("QueuesService refusals", () => {
       page: { nextCursor: null, limit: MAX_SNAPSHOTS_WITH_ITEMS },
     });
     await expect(queues.listSnapshots({ limit: 100 })).resolves.toMatchObject({ page: { limit: 100 } });
+  });
+
+  it("[FIX-W70-CONSOLE AC1] ask the repository for each queue's newest read only with latest=true", async () => {
+    const { queues, repository } = service(undefined);
+
+    await queues.listSnapshots({ latest: true, queueId: 50, limit: 30 });
+    await queues.listSnapshots({ latest: false });
+    await queues.listSnapshots({});
+
+    expect(repository.list.mock.calls.map((call: unknown[]) => call[1])).toEqual([
+      expect.objectContaining({ environment: "test", queueId: 50, latest: true, limit: 31 }),
+      expect.objectContaining({ latest: false }),
+      expect.objectContaining({ latest: false }),
+    ]);
   });
 });

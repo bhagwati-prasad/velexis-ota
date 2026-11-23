@@ -118,9 +118,35 @@ const STAFF_READER = {
   role: "agent",
 } as const;
 
-/** `console.queues.listSnapshots` answers `data` (whatever the query). */
+/**
+ * `console.queues.listSnapshots` answers `data` (newest first), its first `limit` snapshots, whatever the other filters;
+ * with `latest=true`, as the API does (FIX-W70-CONSOLE), the newest snapshot of each office, queue and category, `limit`
+ * a page, with a cursor.
+ */
 function snapshotsAnswer(data: QueueSnapshot[]): void {
-  api.on(SNAPSHOTS, () => Response.json({ data, page: { nextCursor: null, limit: data.length } }));
+  api.on(SNAPSHOTS, (request) => {
+    if (request.url.searchParams.get("latest") !== "true") {
+      const limit = Number(request.url.searchParams.get("limit") ?? "20");
+      return Response.json({
+        data: data.slice(0, limit),
+        page: { nextCursor: data.length > limit ? "cur_plain" : null, limit },
+      });
+    }
+    const newest = new Map<string, QueueSnapshot>();
+    for (const read of data) {
+      const key = `${read.officeId}|${read.queueId}|${read.category}`;
+      if (!newest.has(key)) {
+        newest.set(key, read);
+      }
+    }
+    const limit = Number(request.url.searchParams.get("limit") ?? "20");
+    const offset = Number((request.url.searchParams.get("cursor") ?? "cur_0").replace("cur_", ""));
+    const all = [...newest.values()];
+    return Response.json({
+      data: all.slice(offset, offset + limit),
+      page: { nextCursor: offset + limit < all.length ? `cur_${offset + limit}` : null, limit },
+    });
+  });
 }
 
 /** `console.queues.list` of queue 50 answers a fresh read with `items` and `nextCursor`. */
@@ -161,6 +187,11 @@ function searchParamsOf(search: string): Promise<Record<string, string | string[
 
 async function renderQueues(search = ""): Promise<HTMLElement> {
   return toDocument(await QueuesPage({ searchParams: searchParamsOf(search) }));
+}
+
+/** The server-rendered HTML of `/queues`, unparsed: for a page of 1,000 rows. */
+async function queuesMarkup(search = ""): Promise<string> {
+  return renderToStaticMarkup(await QueuesPage({ searchParams: searchParamsOf(search) }));
 }
 
 async function renderQueue(queueId: string, search = ""): Promise<HTMLElement> {
@@ -362,7 +393,11 @@ describe("/queues", () => {
 
     const page = await renderQueues();
 
-    expect(queriesOf(SNAPSHOTS)).toEqual([{ limit: "100" }]);
+    // The newest read of each queue, and the newest 100 snapshots for the poller's reads, read in parallel.
+    expect(queriesOf(SNAPSHOTS)).toEqual(
+      expect.arrayContaining([{ latest: "true", limit: "100" }, { limit: "100" }]),
+    );
+    expect(queriesOf(SNAPSHOTS)).toHaveLength(2);
     expect(within(page).getByRole("heading", { level: 1 }).textContent).toBe("Queues");
     const table = within(page).getByRole("table", { name: "Queues read recently" });
     const rows = [...table.querySelectorAll("tbody tr")].map((row) =>
@@ -383,6 +418,111 @@ describe("/queues", () => {
     expect(within(table).getByRole("link", { name: "Queue 50" }).getAttribute("href")).toBe(
       "/queues/50?officeId=OSLN12345&category=0",
     );
+  });
+
+  it("[FIX-W70-CONSOLE AC1] lists a queue whose newest read has more than 100 newer reads of other queues, with its last read", async () => {
+    // 120 reads of queue 8 by the poller after the one read of queue 5 by a staff member (KI-022).
+    snapshotsAnswer([
+      ...Array.from({ length: 120 }, (_, index) =>
+        snapshot({
+          id: `qsn_01JA4G2M5P8S1V4Y7B0E${String(index).padStart(6, "0")}`,
+          queueId: 8,
+          fetchedAt: new Date(Date.UTC(2026, 9, 10, 12, 0) - index * 60_000).toISOString(),
+        }),
+      ),
+      snapshot({
+        id: "qsn_01JA4G2M5P8S1V4Y7B0E3H6K9Q",
+        queueId: 5,
+        fetchedAt: "2026-10-09T08:15:00Z",
+        fetchedBy: STAFF_READER,
+        itemCount: 4,
+      }),
+      // Queue 3, last read by the poller before all of them: monitored by its own newest read, which the newest 100
+      // snapshots no longer hold.
+      snapshot({
+        id: "qsn_01JA4G2M5P8S1V4Y7B0E3H6K9R",
+        queueId: 3,
+        fetchedAt: "2026-10-09T07:00:00Z",
+        itemCount: 1,
+      }),
+    ]);
+
+    const page = await renderQueues();
+
+    const table = within(page).getByRole("table", { name: "Queues read recently" });
+    const rows = [...table.querySelectorAll("tbody tr")].map((row) =>
+      [...row.querySelectorAll("td")].map((cell) => cell.textContent),
+    );
+    expect(rows).toEqual([
+      [
+        "Queue 3",
+        OFFICE,
+        "0",
+        formatInstant("2026-10-09T07:00:00Z", TIME_ZONE),
+        "Scheduled poller",
+        "1",
+        "Yes, by the scheduled poller",
+      ],
+      ["Queue 5", OFFICE, "0", formatInstant("2026-10-09T08:15:00Z", TIME_ZONE), "Maria Lopez", "4", "No"],
+      [
+        "Queue 8",
+        OFFICE,
+        "0",
+        formatInstant("2026-10-10T12:00:00.000Z", TIME_ZONE),
+        "Scheduled poller",
+        "2",
+        "Yes, by the scheduled poller",
+      ],
+    ]);
+    expect(page.textContent).not.toContain("most recently read queues are listed");
+  });
+
+  it("[FIX-W70-CONSOLE AC1] pages through the newest reads of every queue, without a note below 1,000 queues", async () => {
+    // 150 queues (queue 0 to 74 in categories 0 and 1): two pages of 100.
+    snapshotsAnswer(
+      Array.from({ length: 150 }, (_, index) =>
+        snapshot({
+          id: `qsn_01JA4G2M5P8S1V4Y7B0E${String(index).padStart(6, "0")}`,
+          queueId: index % 75,
+          category: Math.floor(index / 75),
+          fetchedAt: new Date(Date.UTC(2026, 9, 10, 12, 0) - index * 60_000).toISOString(),
+        }),
+      ),
+    );
+
+    const page = await renderQueues();
+
+    expect(queriesOf(SNAPSHOTS).filter((query) => query["latest"] === "true")).toEqual([
+      { latest: "true", limit: "100" },
+      { latest: "true", limit: "100", cursor: "cur_100" },
+    ]);
+    const table = within(page).getByRole("table", { name: "Queues read recently" });
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(150);
+    expect(page.textContent).not.toContain("most recently read queues are listed");
+  });
+
+  it("[FIX-W70-CONSOLE AC1] lists the 1,000 most recently read queues and says so when more were read", async () => {
+    // 1,001 queues (queue 0 to 90 in categories 0 to 10), newest first: the first 1,000 and a note. The page is
+    // checked as HTML: parsing 1,000 rows into a document costs more than the page itself.
+    snapshotsAnswer(
+      Array.from({ length: 1001 }, (_, index) =>
+        snapshot({
+          id: `qsn_01JA4G2M5P8S1V4Y7B0E${String(index).padStart(6, "0")}`,
+          queueId: index % 91,
+          category: Math.floor(index / 91),
+          fetchedAt: new Date(Date.UTC(2026, 9, 10, 12, 0) - index * 1000).toISOString(),
+        }),
+      ),
+    );
+    const html = await queuesMarkup();
+    expect(queriesOf(SNAPSHOTS).filter((query) => query["latest"] === "true")).toHaveLength(10);
+    expect(html).toContain(">Queues read recently</caption>");
+    const body = html.slice(html.indexOf("<tbody"), html.indexOf("</tbody>"));
+    expect(body.match(/<tr[\s>]/g)).toHaveLength(1000);
+    // The 1,000th newest read (queue 89, category 10) is listed, the 1,001st (queue 90, category 10) is not.
+    expect(body).toContain(`href="/queues/89?officeId=${OFFICE}&amp;category=10"`);
+    expect(body).not.toContain(`href="/queues/90?officeId=${OFFICE}&amp;category=10"`);
+    expect(html).toContain("Only the 1,000 most recently read queues are listed. Open another queue below.");
   });
 
   it("opens a queue from the form: a valid queue goes to its page, an invalid one is named without a request", async () => {

@@ -2255,6 +2255,8 @@ export interface paths {
          * List stored queue snapshots
          * @description Lists `queue_snapshots` rows (newest first): every Queue List read made by staff (console.queues.list, console.amadeus.getQueue) or by the scheduled queue poller (`fetchedBy = null`; the queues it polls are configured per OTA and environment in `platform.supplier_connections.monitored_queues` — `[{officeId, queueId, category}]`, e.g. queue 50 every 15 min — managed in the Velexis portal, not in storefront_settings). Filter by `queueId`, `officeId`, `category` and fetch time; `include=items` adds the PNR items of each snapshot (max `limit` 20 then). Use it to see how a queue evolved or to reopen an earlier read without calling Amadeus. Snapshots are retained 30 days. No Amadeus call. Permission `queues:read`.
          *
+         *     **The newest read of each queue (`latest=true`).** Lists one snapshot per office, queue and category: the newest of the snapshots of the request's environment that match the other filters (`queueId`, `officeId`, `category`, `fetchedFrom`, `fetchedTo`), the greater `fetchedAt` first, then the greater `id`. So every queue read within the 30 days of retention is listed, however many reads of other queues came after it, with its newest read, until that read expires. The page is ordered as the plain list is, newest first (`fetchedAt`, then `id`, descending), and `page.nextCursor` continues after the page's last snapshot; a cursor is bound to `latest` and to the filters it was issued for (`400 VALIDATION_FAILED` at `/query/cursor` for a cursor of another list). A queue read again while you page moves to the top and is not listed on later pages. `include=items` adds the items as for the plain list (max `limit` 20 then). `latest=false` or no `latest` is the plain list of every snapshot. Same permission, environment and retention as the plain list (FIX-W70-CONSOLE, known issue KI-022).
+         *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
         get: operations["consoleListQueueSnapshots"];
@@ -2601,7 +2603,7 @@ export interface paths {
         };
         /**
          * List the markup rules
-         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000, active, no validity window) is one of them; it cannot be deleted and always matches.
+         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000, active, no validity window) is one of them; it cannot be deleted and always matches. `isDefault=true` lists only the default rule, `isDefault=false` every other rule, no `isDefault` every rule; with `active` both filters apply, and the order stays the evaluation order. So `isDefault=true&limit=1` reads the default rule however many rules come before it, and an empty page means the OTA has none (FIX-W70-CONSOLE, known issue KI-023). A cursor is bound to the filters it was issued for (`400 VALIDATION_FAILED` at `/query/cursor` for a cursor of other filters).
          *
          *     Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -23270,6 +23272,8 @@ export interface operations {
                 fetchedTo?: string;
                 /** @description `items` adds the PNR items. */
                 include?: "items"[];
+                /** @description `true`: only the newest snapshot of each office, queue and category among those the other filters match (see the description); `false` or absent: every snapshot. */
+                latest?: boolean;
                 /** @description Opaque cursor from page.nextCursor. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description Page size. */
@@ -25862,6 +25866,8 @@ export interface operations {
             query?: {
                 /** @description `true`: only enabled rules (`isActive`); `false`: only disabled ones; absent: every rule. */
                 active?: components["parameters"]["ConsoleSettingsActiveFilter"];
+                /** @description `true`: only the seeded default rule (`isDefault`); `false`: every other rule; absent: every rule. */
+                isDefault?: boolean;
                 /** @description Opaque cursor from page.nextCursor. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description Page size. */

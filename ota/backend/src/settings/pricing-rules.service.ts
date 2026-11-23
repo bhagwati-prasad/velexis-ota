@@ -8,7 +8,8 @@
 // OADR-0005 point 8). A search identical to one of the last 30 seconds joins it (OADR-0002 point 2) and so answers that
 // search's stored offers.
 //
-//   list    the page in evaluation order (`priority`, then `id`) after the cursor, `active` true, false or absent
+//   list    the page in evaluation order (`priority`, then `id`) after the cursor, `active` true, false or absent,
+//           and for markup rules `isDefault` true (the default rule only), false or absent (FIX-W70-CONSOLE, KI-023)
 //   get     the rule; `404 NOT_FOUND` for an id of no rule of the tenant
 //   create  the input with its defaults, checked (`400 VALIDATION_FAILED` with the field errors of the mapper), is
 //           inserted with a new id and `created_by_staff_id` (the staff member, null for a key-only call); answered
@@ -41,6 +42,7 @@ import {
   RulesRepository,
   type FeeRuleEditRow,
   type MarkupRuleEditRow,
+  type MarkupRuleListQuery,
   type RuleLock,
 } from "../pricing/rules.repository";
 import { pageLimit } from "../reference/reference.mapper";
@@ -86,6 +88,11 @@ export interface RuleListParams {
   readonly limit?: number | undefined;
 }
 
+/** The query of the markup rules list: also `isDefault`. */
+export interface MarkupRuleListParams extends RuleListParams {
+  readonly isDefault?: boolean | undefined;
+}
+
 /** A rule as create and update answer it: the saved rule and its warnings. */
 export type SavedMarkupRule = ConsoleMarkupRule & { readonly warnings: SettingsWarning[] };
 export type SavedFeeRule = ConsoleFeeRule & { readonly warnings: SettingsWarning[] };
@@ -104,14 +111,7 @@ interface RuleKind<Row extends { id: string; priority: number; version: number }
   stateOf(view: View): State;
   problems(state: State): FieldError[];
   warnings(state: State, defaultCurrency: string | null): SettingsWarning[];
-  list(
-    trx: TenantTransaction,
-    query: {
-      active: boolean | undefined;
-      after: { priority: number; id: string } | undefined;
-      limit: number;
-    },
-  ): Promise<Row[]>;
+  list(trx: TenantTransaction, query: MarkupRuleListQuery): Promise<Row[]>;
   byId(trx: TenantTransaction, id: string, lock: RuleLock): Promise<Row | undefined>;
   insert(trx: TenantTransaction, id: string, state: State, staffId: string | null): Promise<Row>;
   /** Writes `state` (the stored rule with `update`'s fields) at the row's version + 1; undefined when it moved. */
@@ -194,6 +194,7 @@ export class PricingRulesService {
       stateOf: feeStateOfRule,
       problems: feeRuleProblems,
       warnings: feeRuleWarnings,
+      // Fee rules have no default rule: their list never takes `isDefault` (listFeeRules does not pass it).
       list: (trx, query) => rules.listFeeRules(trx, query),
       byId: (trx, id, lock) => rules.feeRuleById(trx, id, lock),
       insert: (trx, id, state, staffId) =>
@@ -208,7 +209,7 @@ export class PricingRulesService {
   // ---- Markup rules ------------------------------------------------------------------------------------------------
 
   /** console.settings.markupRules.list. */
-  async listMarkupRules(params: RuleListParams): Promise<MarkupRulePage> {
+  async listMarkupRules(params: MarkupRuleListParams): Promise<MarkupRulePage> {
     return await this.list(this.markup, params);
   }
 
@@ -236,7 +237,7 @@ export class PricingRulesService {
 
   /** console.settings.feeRules.list. */
   async listFeeRules(params: RuleListParams): Promise<FeeRulePage> {
-    return await this.list(this.fee, params);
+    return await this.list(this.fee, { active: params.active, cursor: params.cursor, limit: params.limit });
   }
 
   /** console.settings.feeRules.get. */
@@ -263,19 +264,20 @@ export class PricingRulesService {
 
   private async list<Row extends { id: string; priority: number; version: number }, View, State>(
     kind: RuleKind<Row, View, State>,
-    params: RuleListParams,
+    params: MarkupRuleListParams,
   ): Promise<{ data: View[]; page: { nextCursor: string | null; limit: number } }> {
     const limit = pageLimit(params.limit);
-    const { active } = params;
+    const { active, isDefault } = params;
     const after =
-      params.cursor === undefined ? undefined : decodeRuleCursor(kind.kind, active, params.cursor);
-    const rows = await this.tx.run((trx) => kind.list(trx, { active, after, limit: limit + 1 }));
+      params.cursor === undefined ? undefined : decodeRuleCursor(kind.kind, active, params.cursor, isDefault);
+    const rows = await this.tx.run((trx) => kind.list(trx, { active, isDefault, after, limit: limit + 1 }));
     const page = rows.slice(0, limit);
     const last = page.at(-1);
     return {
       data: page.map((row) => kind.view(row)),
       page: {
-        nextCursor: rows.length > limit && last !== undefined ? encodeRuleCursor(active, last) : null,
+        nextCursor:
+          rows.length > limit && last !== undefined ? encodeRuleCursor(active, last, isDefault) : null,
         limit,
       },
     };

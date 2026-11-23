@@ -937,3 +937,180 @@ describe("isolation", () => {
     }
   });
 });
+
+// ---- The newest read of each queue (latest=true; FIX-W70-CONSOLE, known issue KI-022) -------------------------------
+
+describe("the newest read of each queue (latest)", () => {
+  /** A queue no other test reads, and two that bury it under more than 100 newer reads. */
+  const QUIET = { queueId: 77, category: 3 } as const;
+  const BUSY = [78, 79] as const;
+  const BUSY_READS = 60;
+  const quiet = { older: "", newest: "" };
+  let quietNewestAt: Date;
+
+  /** Stores snapshots of alpha's office in alpha's test mode as a read stores them (empty queues). */
+  async function storeReads(
+    reads: ReadonlyArray<{ readonly queueId: number; readonly category: number; readonly fetchedAt: Date }>,
+  ): Promise<string[]> {
+    const rows = reads.map((read) => ({
+      id: newId("qsn"),
+      environment: "test",
+      office_id: offices.alpha,
+      queue_id: read.queueId,
+      category: read.category,
+      max_requested: null,
+      item_count: 0,
+      response: JSON.stringify({ meta: { count: 0 }, data: [] }),
+      fetched_by_staff_id: null,
+      supplier_request_id: null,
+      fetched_at: read.fetchedAt,
+      created_at: read.fetchedAt,
+      updated_at: read.fetchedAt,
+    }));
+    await inTenant("alpha", (trx) => trx.insertInto("queue_snapshots").values(rows).execute());
+    return rows.map((row) => row.id);
+  }
+
+  /** Alpha's test-mode snapshots as the database holds them: the newest of each office, queue and category. */
+  async function newestByQueue(): Promise<Map<string, { id: string; fetchedAt: Date }>> {
+    const rows = await inTenant("alpha", (trx) =>
+      trx
+        .selectFrom("queue_snapshots")
+        .select(["id", "office_id", "queue_id", "category", "fetched_at"])
+        .where("environment", "=", "test")
+        .execute(),
+    );
+    const newest = new Map<string, { id: string; fetchedAt: Date }>();
+    for (const row of rows) {
+      const key = `${row.office_id}|${row.queue_id}|${row.category}`;
+      const kept = newest.get(key);
+      const later =
+        kept === undefined ||
+        row.fetched_at.getTime() > kept.fetchedAt.getTime() ||
+        (row.fetched_at.getTime() === kept.fetchedAt.getTime() && row.id > kept.id);
+      if (later) {
+        newest.set(key, { id: row.id, fetchedAt: row.fetched_at });
+      }
+    }
+    return newest;
+  }
+
+  const keyOf = (snapshot: JsonObject): string =>
+    `${String(snapshot["officeId"])}|${String(snapshot["queueId"])}|${String(snapshot["category"])}`;
+
+  beforeAll(async () => {
+    // The quiet queue read twice, then 120 reads of two other queues after its newest read, all before the reads of
+    // the earlier tests (which happened just now), so that the newest 100 snapshots never hold the quiet queue.
+    const now = Date.now();
+    quietNewestAt = new Date(now - 120 * MINUTE);
+    [quiet.older, quiet.newest] = (await storeReads([
+      { ...QUIET, fetchedAt: new Date(now - 180 * MINUTE) },
+      { ...QUIET, fetchedAt: quietNewestAt },
+    ])) as [string, string];
+    await storeReads(
+      BUSY.flatMap((queueId, queue) =>
+        Array.from({ length: BUSY_READS }, (_, read) => ({
+          queueId,
+          category: 0,
+          fetchedAt: new Date(now - 100 * MINUTE + (read * BUSY.length + queue) * 20_000),
+        })),
+      ),
+    );
+  });
+
+  it("[FIX-W70-CONSOLE AC1] lists a queue with its newest read although more than 100 newer reads of other queues followed it", async () => {
+    const owner = await staff("owner");
+
+    const plain = await owner.get("/v1/console/queue-snapshots?limit=100");
+    const latest = await owner.get("/v1/console/queue-snapshots?latest=true&limit=100");
+
+    // The plain list's newest 100 (what /queues grouped before) no longer hold the quiet queue.
+    expect(plain.status).toBe(200);
+    expectResponseToMatch("consoleListQueueSnapshots", plain);
+    expect(plain.body.data).toHaveLength(100);
+    expect((plain.body.data as JsonObject[]).some((snapshot) => snapshot["queueId"] === QUIET.queueId)).toBe(
+      false,
+    );
+    // The newest read of each queue lists it, once, with its newest read.
+    expect(latest.status).toBe(200);
+    expectResponseToMatch("consoleListQueueSnapshots", latest);
+    const snapshots = latest.body.data as JsonObject[];
+    expect(snapshots.filter((snapshot) => snapshot["queueId"] === QUIET.queueId)).toEqual([
+      expect.objectContaining({
+        id: quiet.newest,
+        officeId: offices.alpha,
+        category: QUIET.category,
+        fetchedAt: quietNewestAt.toISOString(),
+      }),
+    ]);
+    // One snapshot per office, queue and category, each the newest the database holds for it, none of another
+    // tenant or of the live mode (the isolation tests stored newer reads of queue 50 there), newest first.
+    const expected = await newestByQueue();
+    expect(new Set(snapshots.map(keyOf)).size).toBe(snapshots.length);
+    expect(Object.fromEntries(snapshots.map((snapshot) => [keyOf(snapshot), snapshot["id"]]))).toEqual(
+      Object.fromEntries([...expected].map(([key, newest]) => [key, newest.id])),
+    );
+    const fetched = snapshots.map((snapshot) => snapshot["fetchedAt"] as string);
+    expect([...fetched].sort().reverse()).toEqual(fetched);
+    expect(latest.body.page).toEqual({ nextCursor: null, limit: 100 });
+  });
+
+  it("[FIX-W70-CONSOLE AC1] pages the newest reads with a cursor bound to latest, and filters before choosing the newest", async () => {
+    const owner = await staff("owner");
+    const whole = await owner.get("/v1/console/queue-snapshots?latest=true&limit=100");
+    const paged: JsonObject[] = [];
+    let cursor: string | null = null;
+    let first: string | null = null;
+    do {
+      const res = await owner.get(
+        `/v1/console/queue-snapshots?latest=true&limit=2${cursor === null ? "" : `&cursor=${cursor}`}`,
+      );
+      expect(res.status).toBe(200);
+      expectResponseToMatch("consoleListQueueSnapshots", res);
+      paged.push(...(res.body.data as JsonObject[]));
+      cursor = res.body.page.nextCursor as string | null;
+      first ??= cursor;
+    } while (cursor !== null);
+
+    expect(paged.map((snapshot) => snapshot["id"])).toEqual(
+      (whole.body.data as JsonObject[]).map((snapshot) => snapshot["id"]),
+    );
+    // A cursor of the newest reads is not one of the plain list (and the other way round).
+    const plainWithLatestCursor = await owner.get(`/v1/console/queue-snapshots?limit=2&cursor=${first}`);
+    expect(plainWithLatestCursor.status).toBe(400);
+    expectResponseToMatch("consoleListQueueSnapshots", plainWithLatestCursor);
+    expect(plainWithLatestCursor.body.error.fieldErrors).toEqual([
+      expect.objectContaining({ path: "/query/cursor" }),
+    ]);
+
+    // The filters choose the snapshots first: the newest read of the quiet queue, or the newest before fetchedTo.
+    const quietOnly = await owner.get(
+      `/v1/console/queue-snapshots?latest=true&queueId=${QUIET.queueId}&category=${QUIET.category}`,
+    );
+    const before = await owner.get(
+      `/v1/console/queue-snapshots?latest=true&queueId=${QUIET.queueId}&fetchedTo=${encodeURIComponent(
+        quietNewestAt.toISOString(),
+      )}`,
+    );
+    expect((quietOnly.body.data as JsonObject[]).map((snapshot) => snapshot["id"])).toEqual([quiet.newest]);
+    expect((before.body.data as JsonObject[]).map((snapshot) => snapshot["id"])).toEqual([quiet.older]);
+    // latest=false is the plain list.
+    const plainFalse = await owner.get(`/v1/console/queue-snapshots?latest=false&queueId=${QUIET.queueId}`);
+    expect((plainFalse.body.data as JsonObject[]).map((snapshot) => snapshot["id"])).toEqual([
+      quiet.newest,
+      quiet.older,
+    ]);
+  });
+
+  it("[FIX-W70-CONSOLE AC1] needs queues:read like the plain list: a finance user gets 403 FORBIDDEN", async () => {
+    const finance = await staff("finance");
+
+    const res = await finance.get("/v1/console/queue-snapshots?latest=true");
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatchObject({
+      code: "FORBIDDEN",
+      details: { requiredPermission: "queues:read" },
+    });
+  });
+});

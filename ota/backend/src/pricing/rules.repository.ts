@@ -9,7 +9,8 @@
 // Since OBE-069 the console's rule settings (settings/pricing-rules.service.ts) list, read, insert, update and delete
 // the rows here, with their console columns (`description`, `version`, `created_at`, `updated_at`):
 //
-// - lists are in evaluation order (`priority`, then `id`) after a keyset position, with the `is_active` filter;
+// - lists are in evaluation order (`priority`, then `id`) after a keyset position, with the `is_active` filter (and,
+//   for markup rules, the `is_default` filter: FIX-W70-CONSOLE, known issue KI-023);
 // - an update locks its row `FOR NO KEY UPDATE`, which a search's insert of offers that reference the rule (a
 //   foreign-key `KEY SHARE`) never waits for, and writes it at `version + 1` with `updated_at = now()` only while it
 //   is still at the version read;
@@ -141,6 +142,12 @@ export interface RuleListQuery {
   readonly limit: number;
 }
 
+/** A console list of markup rules: also the `is_default` filter. */
+export interface MarkupRuleListQuery extends RuleListQuery {
+  /** `true`: the default rule only; `false`: every other rule; `undefined`: every rule. */
+  readonly isDefault?: boolean | undefined;
+}
+
 /** How the console reads one rule: plainly, or locked for its update or delete until the end of the transaction. */
 export type RuleLock = "none" | "update" | "delete";
 
@@ -175,11 +182,17 @@ export class RulesRepository {
 
   // ---- The console's markup rules (OBE-069) ----------------------------------------------------------------------
 
-  /** Up to `limit` markup rules in evaluation order after `after`, every rule or those of the `active` filter. */
-  async listMarkupRules(trx: TenantTransaction, query: RuleListQuery): Promise<MarkupRuleEditRow[]> {
+  /**
+   * Up to `limit` markup rules in evaluation order after `after`, every rule or those of the `active` and
+   * `isDefault` filters.
+   */
+  async listMarkupRules(trx: TenantTransaction, query: MarkupRuleListQuery): Promise<MarkupRuleEditRow[]> {
     let select = trx.selectFrom("markup_rules").select(MARKUP_EDIT_COLUMNS);
     if (query.active !== undefined) {
       select = select.where("is_active", "=", query.active);
+    }
+    if (query.isDefault !== undefined) {
+      select = select.where("is_default", "=", query.isDefault);
     }
     const { after } = query;
     if (after !== undefined) {

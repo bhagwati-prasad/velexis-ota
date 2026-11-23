@@ -124,6 +124,36 @@ function markupPages(...pages: MarkupRule[][]): void {
   });
 }
 
+/**
+ * The markup rules answered as the API answers them (OBE-069, FIX-W70-CONSOLE): `rules` in evaluation order, filtered by
+ * `isDefault` when it is sent, `limit` rules a page.
+ */
+function markupRules(rules: readonly MarkupRule[]): void {
+  api.on(MARKUP_RULES, (request) => {
+    const isDefault = request.url.searchParams.get("isDefault");
+    const limit = Number(request.url.searchParams.get("limit") ?? "20");
+    const matching = rules.filter(
+      (candidate) => isDefault === null || String(candidate.isDefault) === isDefault,
+    );
+    return Response.json({
+      data: matching.slice(0, limit),
+      page: { nextCursor: matching.length > limit ? "cur_1" : null, limit },
+    });
+  });
+}
+
+/** `count` rules that are not the default one, all before it in evaluation order. */
+const rulesAhead = (count: number): MarkupRule[] =>
+  Array.from({ length: count }, (_, index) =>
+    rule({
+      id: `mkr_01JA4H1A3C5E7G9J1L3N${String(index).padStart(6, "0")}`,
+      name: `Route rule ${index}`,
+      isDefault: false,
+      priority: index % 999,
+      percentage: "9.0000",
+    }),
+  );
+
 /** `/shopping`, rendered to HTML on the "server" and parsed into a document. */
 async function renderPage(): Promise<HTMLElement> {
   const element = await ShoppingPage();
@@ -194,21 +224,17 @@ describe("/shopping", () => {
     );
   });
 
-  it("shows the OTA's default markup rule for orientation, read from the markup rules in the switch's environment", async () => {
+  it("[FIX-W70-CONSOLE AC2] shows the OTA's default markup rule behind 600 rules, read with isDefault and limit 1 in the switch's environment", async () => {
     signedIn("live");
     staffOf("agent");
-    // The default rule is the last of the evaluation order (priority 1000): here on the second page.
-    markupPages(
-      [rule({ id: "mkr_01JA4H1A3C5E7G9J1L3N5Q7S9V", name: "Long haul", isDefault: false, priority: 10 })],
-      [rule()],
-    );
+    // The default rule is the last of the evaluation order (priority 1000), behind 600 rules (KI-023).
+    markupRules([...rulesAhead(600), rule()]);
 
     const page = await renderPage();
 
     const sent = api.sent(MARKUP_RULES);
     expect(sent.map((request) => Object.fromEntries(request.url.searchParams))).toEqual([
-      { limit: "100" },
-      { limit: "100", cursor: "cur_1" },
+      { isDefault: "true", limit: "1" },
     ]);
     expect(sent[0]?.headers.get("X-Velexis-Environment")).toBe("live");
     const tile = within(page).getByRole("region", { name: "Default markup rule, for orientation" });
@@ -216,7 +242,7 @@ describe("/shopping", () => {
       "Default: 5 % of the net price, per traveller (at least €5.00, at most €50.00 each).",
     );
     expect(tile.textContent).toContain("this default rule applies when no other rule matches");
-    expect(tile.textContent).not.toContain("Long haul");
+    expect(tile.textContent).not.toContain("Route rule");
     expect(within(tile).getByRole("link", { name: "Markup rules" }).getAttribute("href")).toBe(
       "/settings/markups",
     );
@@ -263,6 +289,19 @@ describe("/shopping", () => {
     markupPages([rule({ isDefault: false, name: "Long haul" })]);
     tile = within(await renderPage()).getByRole("region", { name: "Default markup rule, for orientation" });
     expect(tile.textContent).toContain("This OTA has no default markup rule.");
+  });
+
+  it("[FIX-W70-CONSOLE AC2] says the OTA has no default markup rule when the API answers isDefault=true with an empty page", async () => {
+    staffOf("owner");
+    markupRules(rulesAhead(600));
+
+    const tile = within(await renderPage()).getByRole("region", {
+      name: "Default markup rule, for orientation",
+    });
+
+    expect(tile.textContent).toContain("This OTA has no default markup rule.");
+    expect(tile.querySelector("[data-markup-rule]")).toBeNull();
+    expect(api.sent(MARKUP_RULES)).toHaveLength(1);
   });
 
   it("keeps the searches when the markup rules cannot be read, with the message and the request id in their tile", async () => {

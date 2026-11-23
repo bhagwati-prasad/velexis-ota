@@ -344,6 +344,8 @@ interface Call {
 }
 
 const calls: Call[] = [];
+/** The `latest=true` reads of the snapshots (also in `calls`). */
+const newestReads: Array<Pick<Call, "caller" | "target" | "res">> = [];
 /** The orders of each tenant's office, and one queued in the caller's office but owned by the other's. */
 const orders = {} as Record<TenantKey, { readonly own: StubOrder; readonly ownedByOther: StubOrder }>;
 /** Every row of each schema after the calls. */
@@ -531,6 +533,21 @@ beforeAll(async () => {
     await record("consoleListQueueSnapshots", key, "other", () =>
       agent.get(`/v1/console/queue-snapshots?officeId=${otherOffice}`),
     );
+    // The newest read of each queue (FIX-W70-CONSOLE, KI-022): the same isolation as the plain list.
+    newestReads.push({
+      caller: key,
+      target: "own",
+      res: await record("consoleListQueueSnapshots", key, "own", () =>
+        agent.get("/v1/console/queue-snapshots?latest=true"),
+      ),
+    });
+    newestReads.push({
+      caller: key,
+      target: "other",
+      res: await record("consoleListQueueSnapshots", key, "other", () =>
+        agent.get(`/v1/console/queue-snapshots?latest=true&officeId=${otherOffice}`),
+      ),
+    });
     await record("consoleAmadeusSearchFlightOffers", key, "own", () =>
       agent.post(`${RAW}/v2/shopping/flight-offers`, { amadeus: searchQuery() }),
     );
@@ -670,6 +687,31 @@ describe("two OTAs on the shared Amadeus account", () => {
         [tenants[entry.caller].office],
       ]);
       expect(JSON.stringify(snapshots)).not.toContain(orders[otherOf(entry.caller)].own.recordLocator);
+    }
+  });
+});
+
+describe("the newest read of each queue (latest)", () => {
+  it("[FIX-W70-CONSOLE AC1] lists each tenant only its own office's queues, never the other tenant's", () => {
+    expect(newestReads.map((entry) => [entry.caller, entry.target])).toEqual([
+      ["alpha", "own"],
+      ["alpha", "other"],
+      ["beta", "own"],
+      ["beta", "other"],
+    ]);
+    for (const entry of newestReads) {
+      expectResponseToMatch("consoleListQueueSnapshots", entry.res);
+      const snapshots = entry.res.body.data as JsonObject[];
+      if (entry.target === "other") {
+        expect([entry.caller, entry.res.status, snapshots]).toEqual([entry.caller, 200, []]);
+        continue;
+      }
+      expect(entry.res.status).toBe(200);
+      // One snapshot per queue of its own office (the queue it read), none of the other tenant's office.
+      expect([
+        entry.caller,
+        snapshots.map((snapshot) => [snapshot["officeId"], snapshot["queueId"]]),
+      ]).toEqual([entry.caller, [[tenants[entry.caller].office, QUEUE]]]);
     }
   });
 });

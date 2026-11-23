@@ -333,3 +333,90 @@ describe("loadTenantLimit and tenantLimitReached", () => {
     expect(document.querySelector('[data-notice="tenant-limit"]')).toBeNull();
   });
 });
+
+// ---- /otas/new reads the limit in parallel (lead decision (39d), FIX-W70-CONSOLE) ----------------------------------
+
+describe("/otas/new: the tenant limit read with the page's other reads", () => {
+  /** Answers like `routes({})`, with `me` as getMe's answer and `tenants` as listTenants' (a throw: a network error). */
+  function answers(me: () => Promise<Response>, tenants: () => Promise<Response>): void {
+    routes({});
+    const base = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation((input) => {
+      const path = new URL(input.url).pathname;
+      if (path === "/v1/me") {
+        return me();
+      }
+      if (path === "/v1/tenants") {
+        return tenants();
+      }
+      return base === undefined ? Promise.reject(new Error("no routes")) : base(input);
+    });
+  }
+
+  it("[FIX-W70-CONSOLE AC5] asks listTenants before getMe has answered", async () => {
+    let tenantsAsked: () => void = () => undefined;
+    const asked = new Promise<void>((resolve) => {
+      tenantsAsked = resolve;
+    });
+    let askedBeforeMe: boolean | undefined;
+    answers(
+      async () => {
+        // getMe answers once listTenants was asked, or after 1 s: a page that read the limit after getMe asks only then.
+        askedBeforeMe = await new Promise<boolean>((resolve) => {
+          const late = setTimeout(() => resolve(false), 1000);
+          void asked.then(() => {
+            clearTimeout(late);
+            resolve(true);
+          });
+        });
+        return json(account(), 200);
+      },
+      () => {
+        tenantsAsked();
+        return Promise.resolve(json({ data: [], tenantLimit: { max: 3, owned: 3 } }, 200));
+      },
+    );
+
+    const page = await newOtaPage({});
+
+    expect(askedBeforeMe).toBe(true);
+    // The same page as before: the limit read for the verified account (rendered by the tests above).
+    expect(page).toBeTruthy();
+    expect(
+      fetchMock.mock.calls.filter(([request]) => new URL(request.url).pathname === "/v1/tenants"),
+    ).toHaveLength(1);
+  });
+
+  it("[FIX-W70-CONSOLE AC5] behaves as before when listTenants is refused: only a verified account's page meets it", async () => {
+    // The API's MFA enrolment gate on listTenants (the one answer that leaves the page) reaches only a verified account.
+    const gated = () =>
+      Promise.resolve(
+        json(
+          {
+            error: {
+              code: "MFA_REQUIRED",
+              message: "The API's own text, never shown",
+              status: 403,
+              requestId: "req_api_fixw70",
+              details: { reason: "enrolment_required" },
+            },
+          },
+          403,
+        ),
+      );
+    answers(() => Promise.resolve(json({ ...account(), emailVerified: false }, 200)), gated);
+    await expect(newOtaPage({})).rejects.toThrow("NEXT_REDIRECT /verify-pending");
+    answers(() => Promise.resolve(apiError("UNAUTHENTICATED", 401)), gated);
+    await expect(newOtaPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Fotas%2Fnew");
+    answers(() => Promise.resolve(json(account(), 200)), gated);
+    await expect(newOtaPage({})).rejects.toThrow("NEXT_REDIRECT /mfa-enrolment");
+    // A failed listTenants (an error answer, or no answer at all) is no limit: the wizard opens without the notice.
+    for (const failing of [
+      () => Promise.resolve(apiError("INTERNAL_ERROR", 500)),
+      () => Promise.reject(new TypeError("fetch failed")),
+    ]) {
+      answers(() => Promise.resolve(json(account(), 200)), failing);
+      await expect(newOtaPage({})).resolves.toBeTruthy();
+    }
+  });
+});

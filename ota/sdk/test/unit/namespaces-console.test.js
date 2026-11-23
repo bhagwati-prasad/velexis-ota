@@ -1111,6 +1111,28 @@ describe("the lists", () => {
   });
 });
 
+describe("queues.listSnapshots latest (FIX-W70-CONSOLE)", () => {
+  it("[FIX-W70-CONSOLE AC3] sends latest as a query parameter with the other filters, and on the next page", async () => {
+    const answer = bodyOf("queues.listSnapshots");
+    const fake = createFakeFetch([
+      { body: { ...answer, page: { nextCursor: "cur_2", limit: 100 } } },
+      { body: { ...answer, page: { nextCursor: null, limit: 100 } } },
+      { body: answer },
+    ]);
+    const client = staffClient(fake.fetch);
+
+    const first = await client.console.queues.listSnapshots({ latest: true, limit: 100 });
+    await first.next();
+    await client.console.queues.listSnapshots({ queueId: 50, latest: false });
+
+    expect(fake.requests.map((request) => request.url)).toEqual([
+      `${BASE_URL}/v1/console/queue-snapshots?latest=true&limit=100`,
+      `${BASE_URL}/v1/console/queue-snapshots?latest=true&cursor=cur_2&limit=100`,
+      `${BASE_URL}/v1/console/queue-snapshots?queueId=50&latest=false`,
+    ]);
+  });
+});
+
 describe("ifMatch on bookings.patch, bookings.issue and bookings.cancel", () => {
   it("is sent as If-Match: a version number as its ETag, a string as it is, and never in the body [SDK-011]", async () => {
     const booking = bodyOf("bookings.get");

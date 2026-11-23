@@ -54,7 +54,7 @@ The working OpenAPI document gains these operations (96 + 33 = 129 SDK methods; 
 
 | `x-sdk-method` | HTTP | Parameters → result |
 |---|---|---|
-| `console.settings.markupRules.list` | `GET /v1/console/settings/markup-rules` | `{ active?, cursor?, limit? }` → `Page<MarkupRule>` |
+| `console.settings.markupRules.list` | `GET /v1/console/settings/markup-rules` | `{ active?, isDefault?, cursor?, limit? }` → `Page<MarkupRule>` (`isDefault`: FIX-W70-CONSOLE, §4) |
 | `console.settings.markupRules.create` | `POST …/markup-rules` | `MarkupRuleInput` → `MarkupRule` (+ `warnings[]`) |
 | `console.settings.markupRules.get` | `GET …/markup-rules/{markupRuleId}` | `{ markupRuleId }` → `MarkupRule` |
 | `console.settings.markupRules.update` | `PATCH …/markup-rules/{markupRuleId}` | `{ markupRuleId, ifMatch, ...MarkupRuleUpdate }` (any subset of `MarkupRuleInput`) → `MarkupRule` (+ `warnings[]`) |
@@ -114,6 +114,8 @@ These need no SDK code (they come with the generated types), but storefront and 
 | `BookingLookupResult.bookingToken` | nullable (`null` in cookie mode) | §2.2 |
 | `console.bookings.list` params (`consoleListBookings` query) | `reconcileOutcome` (`found` \| `not_found` \| `manual_review`, list), `cancellationRequested`, `hasScheduleChange` (booleans): the needs-attention filters | part 2 §7 |
 | `ConsoleTenant` (the `tenant` of `ConsoleStaffSession` and `ConsoleStaffProfile`) | `billingNotice?: "past_due" \| "trial_ending" \| null`: the platform's billing banner (M5; a missing field means none) | part 2 §3.1 |
+| `console.queues.listSnapshots` params (`consoleListQueueSnapshots` query) | `latest` (boolean): only the newest snapshot of each office, queue and category the other filters match, newest first, so every queue read within the 30 days of retention is listed whatever later reads of other queues there are (FIX-W70-CONSOLE, known issue KI-022) | the OTA document's change log ([`ota/backend/openapi/README.md`](../../backend/openapi/README.md) §6) |
+| `console.settings.markupRules.list` params (`consoleListMarkupRules` query) | `isDefault` (boolean): only the seeded default rule, or every other rule; `{ isDefault: true, limit: 1 }` reads the default rule however many rules come first (FIX-W70-CONSOLE, known issue KI-023) | the OTA document's change log ([`ota/backend/openapi/README.md`](../../backend/openapi/README.md) §6) |
 | `ConsoleBookingActions` (`consoleActions` of `ConsoleBooking`) | `canCloseReview?: boolean` (always answered since OBE-099; optional so readers written before stay valid) and the reason `not_in_review` in `reasons` | part 2 §8 |
 
 ## 5. Error codes added to the catalogue

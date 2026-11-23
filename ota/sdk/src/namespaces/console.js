@@ -643,8 +643,9 @@ function createConsoleQueuesApi(core) {
 
     /**
      * Lists stored queue snapshots, newest first: reads by staff, raw `getQueue` calls and the scheduled queue poller
-     * (`fetchedBy: null`); `include: ["items"]` adds the PNR items. Retained 30 days. Resolves with a `Page`.
-     * `GET /v1/console/queue-snapshots`; `queues:read`. No Amadeus call.
+     * (`fetchedBy: null`); `include: ["items"]` adds the PNR items; `latest: true` keeps only the newest snapshot of
+     * each office, queue and category the other filters match (FIX-W70-CONSOLE). Retained 30 days. Resolves with a
+     * `Page`. `GET /v1/console/queue-snapshots`; `queues:read`. No Amadeus call.
      * @param {ConsoleListQueueSnapshotsParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<QueueSnapshot>>}
@@ -970,7 +971,8 @@ function createConsoleMarkupRulesApi(core) {
     /**
      * Lists the markup rules in the order the pricing engine evaluates them (`priority`, then `id`); `active: true`
      * keeps the enabled rules, `active: false` the disabled ones. The seeded default rule (`isDefault`) is one of
-     * them. Resolves with a `Page`. `GET /v1/console/settings/markup-rules`; `settings:read`.
+     * them; `isDefault: true` keeps only it, `isDefault: false` the others (FIX-W70-CONSOLE). Resolves with a `Page`.
+     * `GET /v1/console/settings/markup-rules`; `settings:read`.
      * @param {ConsoleListMarkupRulesParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<MarkupRule>>}

@@ -14522,6 +14522,19 @@ paths:
         Snapshots are retained 30 days. No Amadeus call. Permission `queues:read`.
 
 
+        **The newest read of each queue (`latest=true`).** Lists one snapshot per office, queue and category: the
+        newest of the snapshots of the request's environment that match the other filters (`queueId`, `officeId`,
+        `category`, `fetchedFrom`, `fetchedTo`), the greater `fetchedAt` first, then the greater `id`. So every queue
+        read within the 30 days of retention is listed, however many reads of other queues came after it, with its
+        newest read, until that read expires. The page is ordered as the plain list is, newest first (`fetchedAt`,
+        then `id`, descending), and `page.nextCursor` continues after the page's last snapshot; a cursor is bound to
+        `latest` and to the filters it was issued for (`400 VALIDATION_FAILED` at `/query/cursor` for a cursor of
+        another list). A queue read again while you page moves to the top and is not listed on later pages.
+        `include=items` adds the items as for the plain list (max `limit` 20 then). `latest=false` or no `latest` is
+        the plain list of every snapshot. Same permission, environment and retention as the plain list
+        (FIX-W70-CONSOLE, known issue KI-022).
+
+
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
@@ -14607,6 +14620,14 @@ paths:
               type: string
               enum:
                 - items
+        - name: latest
+          in: query
+          required: false
+          description: >-
+            `true`: only the newest snapshot of each office, queue and category among those the other filters match
+            (see the description); `false` or absent: every snapshot.
+          schema:
+            type: boolean
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/VelexisEnvironment'
@@ -17820,7 +17841,11 @@ paths:
         order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true`
         lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded
         default rule (`isDefault`, scope `{}`, priority 1000, active, no validity window) is one of them; it cannot be
-        deleted and always matches.
+        deleted and always matches. `isDefault=true` lists only the default rule, `isDefault=false` every other rule,
+        no `isDefault` every rule; with `active` both filters apply, and the order stays the evaluation order. So
+        `isDefault=true&limit=1` reads the default rule however many rules come before it, and an empty page means the
+        OTA has none (FIX-W70-CONSOLE, known issue KI-023). A cursor is bound to the filters it was issued for (`400
+        VALIDATION_FAILED` at `/query/cursor` for a cursor of other filters).
 
 
         Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment`
@@ -17862,6 +17887,12 @@ paths:
       x-milestone: M4
       parameters:
         - $ref: '#/components/parameters/ConsoleSettingsActiveFilter'
+        - name: isDefault
+          in: query
+          required: false
+          description: '`true`: only the seeded default rule (`isDefault`); `false`: every other rule; absent: every rule.'
+          schema:
+            type: boolean
         - $ref: '#/components/parameters/Cursor'
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/AcceptLanguage'

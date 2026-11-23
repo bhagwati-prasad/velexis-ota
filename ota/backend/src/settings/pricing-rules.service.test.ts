@@ -16,6 +16,7 @@ import type {
   FeeRuleValues,
   MarkupRuleChanges,
   MarkupRuleEditRow,
+  MarkupRuleListQuery,
   MarkupRuleValues,
   RuleListQuery,
   RuleLock,
@@ -459,6 +460,25 @@ describe("the list cursor", () => {
       decodeRuleCursor("markup", undefined, encodeRuleCursor(undefined, { priority: 2_147_483_647, id })),
     ).toEqual({ priority: 2_147_483_647, id });
   });
+
+  it("[FIX-W70-CONSOLE AC2] binds a cursor to isDefault when it is sent, and keeps a cursor without it as before", () => {
+    const id = newId("mkr", CREATED);
+    const last = { priority: 100, id };
+    const withDefault = encodeRuleCursor(undefined, last, false);
+
+    expect(decodeRuleCursor("markup", undefined, withDefault, false)).toEqual(last);
+    for (const isDefault of [undefined, true] as const) {
+      expect(() => decodeRuleCursor("markup", undefined, withDefault, isDefault)).toThrow(AppError);
+    }
+    expect(() => decodeRuleCursor("markup", undefined, encodeRuleCursor(undefined, last), false)).toThrow(
+      AppError,
+    );
+    // A cursor without isDefault is the one this list wrote before FIX-W70-CONSOLE, byte for byte.
+    expect(encodeRuleCursor(true, last)).toBe(
+      Buffer.from(JSON.stringify({ p: "100", i: id, f: "true" })).toString("base64url"),
+    );
+    expect(encodeRuleCursor(true, last, undefined)).toBe(encodeRuleCursor(true, last));
+  });
 });
 
 /* ------------------------------------------------------------------------------------------------
@@ -482,12 +502,13 @@ class MemoryRules {
   fee: FeeRuleEditRow[] = [];
   readonly locks: string[] = [];
 
-  private static sorted<R extends { priority: number; id: string; is_active: boolean }>(
+  private static sorted<R extends { priority: number; id: string; is_active: boolean; is_default?: boolean }>(
     rows: readonly R[],
-    query: RuleListQuery,
+    query: MarkupRuleListQuery,
   ): R[] {
     return rows
       .filter((row) => query.active === undefined || row.is_active === query.active)
+      .filter((row) => query.isDefault === undefined || row.is_default === query.isDefault)
       .filter(
         (row) =>
           query.after === undefined ||
@@ -512,7 +533,7 @@ class MemoryRules {
     };
   }
 
-  listMarkupRules(trx: TenantTransaction, query: RuleListQuery): Promise<MarkupRuleEditRow[]> {
+  listMarkupRules(trx: TenantTransaction, query: MarkupRuleListQuery): Promise<MarkupRuleEditRow[]> {
     expect(trx).toBe(TRX);
     return Promise.resolve(MemoryRules.sorted(this.markup, query));
   }
@@ -1006,6 +1027,52 @@ describe("PricingRulesService", () => {
     expect(
       (await refusalOf(h.service.listMarkupRules({ active: true, cursor: first.page.nextCursor ?? "" })))[0],
     ).toBe("VALIDATION_FAILED");
+  });
+
+  it("[FIX-W70-CONSOLE AC2] reads the default rule with isDefault=true and limit 1 however many rules come before it", async () => {
+    // 600 rules ahead of the default (priority 1000) in evaluation order.
+    for (let index = 0; index < 600; index += 1) {
+      h.rules.markup.push(markupRow({ id: newId("mkr"), priority: index % 999 }));
+    }
+
+    const first = await h.service.listMarkupRules({ limit: 1 });
+    const byDefault = await h.service.listMarkupRules({ isDefault: true, limit: 1 });
+    const others = await h.service.listMarkupRules({ isDefault: false, limit: 100 });
+    const activeDefault = await h.service.listMarkupRules({ isDefault: true, active: true });
+
+    expect(first.data.map((rule) => rule.isDefault)).toEqual([false]);
+    expect(checker.check("consoleListMarkupRules", { status: 200, body: byDefault })).toEqual([]);
+    expect(byDefault).toEqual({
+      data: [consoleMarkupRuleOf(defaultRule)],
+      page: { nextCursor: null, limit: 1 },
+    });
+    expect(others.data).toHaveLength(100);
+    expect(others.data.some((rule) => rule.isDefault)).toBe(false);
+    expect(others.page.nextCursor).not.toBeNull();
+    expect(activeDefault.data.map((rule) => rule.id)).toEqual([defaultRule.id]);
+    // A cursor of the isDefault=false list is refused by the list without the filter.
+    expect((await refusalOf(h.service.listMarkupRules({ cursor: others.page.nextCursor ?? "" })))[0]).toBe(
+      "VALIDATION_FAILED",
+    );
+    expect(
+      (
+        await h.service.listMarkupRules({
+          isDefault: false,
+          limit: 100,
+          cursor: others.page.nextCursor ?? "",
+        })
+      ).data,
+    ).toHaveLength(100);
+  });
+
+  it("[FIX-W70-CONSOLE AC2] answers an empty page for isDefault=true when the OTA has no default rule", async () => {
+    h.rules.markup = h.rules.markup.filter((row) => !row.is_default);
+    h.rules.markup.push(markupRow({ id: newId("mkr"), priority: 10 }));
+
+    expect(await h.service.listMarkupRules({ isDefault: true, limit: 1 })).toEqual({
+      data: [],
+      page: { nextCursor: null, limit: 1 },
+    });
   });
 
   it("updates and deletes fee rules, which have no default rule", async () => {

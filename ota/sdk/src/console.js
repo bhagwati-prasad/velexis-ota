@@ -245,6 +245,9 @@ export { createConsoleApi } from "./namespaces/console.js";
  * @property {string} [fetchedFrom] taken at or after (ISO-8601)
  * @property {string} [fetchedTo] taken before (ISO-8601)
  * @property {Array<"items">} [include] `["items"]` adds the PNR items of each snapshot
+ * @property {boolean} [latest] `true`: only the newest snapshot of each office, queue and category the other filters
+ *   match, newest first, every queue read within the retention listed however many later reads of other queues there
+ *   are (an MVP addition, FIX-W70-CONSOLE; ota/sdk/docs/extensions.md §4); `false` or absent: every snapshot
  */
 
 /**
@@ -423,6 +426,8 @@ export { createConsoleApi } from "./namespaces/console.js";
  * @property {string} [cursor] the `page.nextCursor` of the previous page
  * @property {number} [limit] the page size
  * @property {boolean} [active] `true`: only enabled rules; `false`: only disabled ones; absent: every rule
+ * @property {boolean} [isDefault] `true`: only the seeded default rule (`{ isDefault: true, limit: 1 }` reads it however
+ *   many rules come first; an empty page means none); `false`: every other rule; absent: every rule (FIX-W70-CONSOLE)
  */
 
 /** Params of `ConsoleSettingsMarkupRulesApi.create`. @typedef {MarkupRuleInput} ConsoleCreateMarkupRuleParams */
