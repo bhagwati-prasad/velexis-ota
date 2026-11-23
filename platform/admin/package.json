@@ -25,13 +25,13 @@
     "@velexis/errors": "workspace:*",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "lucide-react": "1.73.0",
+    "lucide-react": "1.76.0",
     "next": "15.5.29",
     "openapi-fetch": "0.13.8",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "server-only": "0.0.1",
-    "tailwind-merge": "3.7.0",
+    "tailwind-merge": "3.7.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
