@@ -1645,6 +1645,70 @@ describe("account.delete by a key caller, its replay, and the bookings that hold
   });
 });
 
+describe("[FIX-W70-API AC5] a card number in the deletion's comment (lead decision (38b))", () => {
+  // The comment is never kept, but the idempotency record keeps an unkeyed hash of the request with it: the request
+  // validation refuses a card number at /comment before the key is claimed, so no record (and no hash) exists, and
+  // nothing of the account changes. The same key then serves the same body without the number.
+  const email = uniqueEmail("fixw70-delete-card");
+  const key = randomUUID();
+  let customerId = "";
+  const answers: Record<string, Response> = {};
+  let before: Awaited<ReturnType<typeof customerState>>;
+  let afterRefusal: Awaited<ReturnType<typeof customerState>>;
+  let recordAfterRefusal: unknown;
+  let recordAfterDeletion: unknown;
+
+  beforeAll(async () => {
+    customerId = await insertCustomer("tenant_alpha", email);
+    const session = await bearerSignIn(email);
+    const client = new KeyClient();
+    before = await customerState("tenant_alpha", customerId);
+    answers["refused"] = await client.post(
+      "/v1/account/deletion",
+      { currentPassword: PASSWORD, reason: "other", comment: "Please refund 4111 1111 1111 1111 first" },
+      session.accessToken,
+      key,
+    );
+    afterRefusal = await customerState("tenant_alpha", customerId);
+    recordAfterRefusal = await inTenant("tenant_alpha", (trx) =>
+      trx.selectFrom("idempotency_keys").select("key").where("key", "=", key).executeTakeFirst(),
+    );
+    answers["account"] = await client.get("/v1/account", session.accessToken);
+    answers["deleted"] = await client.post(
+      "/v1/account/deletion",
+      { currentPassword: PASSWORD, reason: "other", comment: "Moving to another agency" },
+      session.accessToken,
+      key,
+    );
+    recordAfterDeletion = await inTenant("tenant_alpha", (trx) =>
+      trx.selectFrom("idempotency_keys").select("key").where("key", "=", key).executeTakeFirst(),
+    );
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W70-API AC5] answers 400 card_data at /comment, never repeating the text, before the idempotency key and any write", () => {
+    const refused = answers["refused"] as Response;
+    expect(outcome(refused)).toEqual([400, "VALIDATION_FAILED"]);
+    expectResponseToMatch("deleteAccount", refused);
+    expect(refused.body.error.fieldErrors).toEqual([
+      { path: "/comment", code: "card_data", message: "A comment never holds a card number: remove it." },
+    ]);
+    expect(JSON.stringify(refused.body)).not.toMatch(/4111/);
+    // No idempotency record (so no hash of the request), and the account, its sessions and its e-mails are unchanged.
+    expect(recordAfterRefusal).toBeUndefined();
+    expect(afterRefusal).toEqual(before);
+    expect([answers["account"]?.status, answers["account"]?.body.status]).toEqual([200, "active"]);
+    expect(api.sink.text()).not.toContain("4111 1111 1111 1111");
+  });
+
+  it("[FIX-W70-API AC5] deletes the account for the same body without the card number, under the same key", async () => {
+    expect(answers["deleted"]?.status).toBe(202);
+    expectResponseToMatch("deleteAccount", answers["deleted"] as Response);
+    expect(recordAfterDeletion).toEqual({ key });
+    const state = await customerState("tenant_alpha", customerId);
+    expect(state.customer.status).toBe("deleted");
+  });
+});
+
 describe("[FIX-W43-OTA AC3] a new account at an erased customer's address claims none of its bookings", () => {
   // Lead decision (5h) of 2026-11-05: the erasure (account/erasure.service.ts) marks each booking it detaches with a
   // `customer.erased` event, and auth.verifyEmail's claim of guest bookings (customers.repository.ts

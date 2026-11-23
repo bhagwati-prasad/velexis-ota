@@ -34,7 +34,9 @@
 //
 // Once the caller is known, the guard opens the answer to a browser page whose publishable key lists the page's
 // `Origin` (OBE-097, common/http/cors.ts `allowCorsAnswer`), so every answer from here on (the later guards' refusals,
-// the validation's, the operation's) carries the CORS headers; a refused credential never does.
+// the validation's, the operation's) carries the CORS headers. A refused credential gets none, with one exception
+// (KI-034, lead decision (39u) of 2026-11-23; `allowCorsRefusal`): the `403 ORIGIN_NOT_ALLOWED` of a publishable key
+// whose allowed origins do not list the page's serialized `Origin` is opened to that origin, so that the page reads it.
 import { isIP } from "node:net";
 import {
   Injectable,
@@ -47,7 +49,7 @@ import { Reflector } from "@nestjs/core";
 import { AppError } from "@velexis/errors";
 import type { Request, Response } from "express";
 import { CallerContext, CallerResolver, type Caller, type RouteAccess } from "../../tenancy/caller-resolver";
-import { allowCorsAnswer } from "../http/cors";
+import { allowCorsAnswer, allowCorsRefusal } from "../http/cors";
 import { endUserIp, END_USER_IP_HEADER, type AddressedRequest } from "../http/rate-limits";
 import { RequestContext, type EndUser } from "../http/request-context";
 
@@ -136,12 +138,20 @@ export class CallerGuard implements CanActivate {
         context.getHandler(),
         context.getClass(),
       ]) ?? "authenticated";
-    const caller = await this.resolver.resolve(
-      { headers: req.headers, remoteAddress: req.socket.remoteAddress },
-      access,
-    );
+    const res = context.switchToHttp().getResponse<Response>();
+    let caller: Caller;
+    try {
+      caller = await this.resolver.resolve(
+        { headers: req.headers, remoteAddress: req.socket.remoteAddress },
+        access,
+      );
+    } catch (error) {
+      // Only `403 ORIGIN_NOT_ALLOWED` is opened to the page (see the file header); every other refusal stays closed.
+      allowCorsRefusal(res, error, req.headers.origin);
+      throw error;
+    }
     this.callers.set(caller);
-    allowCorsAnswer(context.switchToHttp().getResponse<Response>(), caller, req.headers.origin);
+    allowCorsAnswer(res, caller, req.headers.origin);
     this.context.setEndUser(endUserOf(req, caller));
     return true;
   }

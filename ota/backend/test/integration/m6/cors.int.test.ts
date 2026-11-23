@@ -7,7 +7,8 @@
 //   publishable key, Origin it lists                                   the answer is opened to that origin
 //                                                                      (Allow-Origin, Expose-Headers, Vary: Origin),
 //                                                                      the later guards' refusals (401, 429) included
-//   publishable key, Origin it does not list                           403 ORIGIN_NOT_ALLOWED, no CORS header
+//   publishable key, Origin it does not list                           403 ORIGIN_NOT_ALLOWED opened to that origin
+//                                                                      (KI-034, lead decision (39u); FIX-W70-API)
 //   publishable key without Origin, secret key, refused key, the edge  no CORS header
 //
 // and `Access-Control-Allow-Credentials` on no answer at all. Every answer but the edge's varies by `Origin` (lead
@@ -52,7 +53,7 @@ const HOST = `alpha.${TEST_STOREFRONT_BASE_DOMAIN}`;
 const SHOP = "https://shop.alpha-travel.example";
 const OTHER = "https://evil.example.com";
 const SETUP_TIMEOUT_MS = Math.max(OPENAPI_SETUP_TIMEOUT_MS, 90_000);
-/** About forty-five requests: well under a second; the budget only stops a hang. */
+/** About fifty requests: well under a second; the budget only stops a hang. */
 const REQUESTS_TIMEOUT_MS = 60_000;
 
 /** The CORS response headers, lower case as Supertest gives them. */
@@ -271,6 +272,14 @@ beforeAll(async () => {
     await get("/v1/storefront", keyCaller(publishableKey, "http://localhost:5500")),
   );
   answers.set("unlisted", await get("/v1/storefront", keyCaller(publishableKey, OTHER)));
+  answers.set("unlisted opaque", await get("/v1/storefront", keyCaller(publishableKey, "null")));
+  answers.set(
+    "unlisted write",
+    await post("/v1/flight-searches", keyCaller(publishableKey, OTHER), { searchType: "SIMPLE" }),
+  );
+  answers.set("unknown key other", await get("/v1/storefront", keyCaller(newApiKey("pk"), OTHER)));
+  answers.set("revoked other", await get("/v1/storefront", keyCaller(revokedKey, OTHER)));
+  answers.set("secret other", await get("/v1/storefront", keyCaller(secretKey, OTHER)));
   answers.set("no origin", await get("/v1/storefront", keyCaller(publishableKey, undefined)));
   answers.set("revoked", await get("/v1/storefront", keyCaller(revokedKey, SHOP)));
   answers.set("unknown key", await get("/v1/storefront", keyCaller(newApiKey("pk"), SHOP)));
@@ -400,12 +409,34 @@ describe("actual answers", () => {
     expect(String(limited.headers["access-control-expose-headers"])).toContain("Retry-After");
   });
 
-  it("[OBE-097 AC1] gives an origin the key does not list none, and keeps its 403 ORIGIN_NOT_ALLOWED", () => {
+  it("[FIX-W70-API AC4] opens a publishable key's 403 ORIGIN_NOT_ALLOWED to the origin it does not list, so the page reads it", () => {
     const res = answerOf("unlisted");
+    const write = answerOf("unlisted write");
 
-    expect([res.status, codeOf(res)]).toEqual([403, "ORIGIN_NOT_ALLOWED"]);
+    for (const refusal of [res, write]) {
+      expect([refusal.status, codeOf(refusal)]).toEqual([403, "ORIGIN_NOT_ALLOWED"]);
+      expectOpenedTo(refusal, OTHER);
+      expect(refusal.headers["x-request-id"]).toEqual(expect.any(String));
+    }
     expectResponseToMatch("getStorefront", res);
-    expectClosed(res);
+    expectResponseToMatch("createFlightSearch", write);
+    // The listed origins are answered as before (the test above).
+    expectOpenedTo(answerOf("listed"), SHOP);
+  });
+
+  it("[FIX-W70-API AC4] opens nothing else: an opaque Origin, an unknown or revoked key from that origin, a secret key", () => {
+    const opaque = answerOf("unlisted opaque");
+    const unknown = answerOf("unknown key other");
+    const revoked = answerOf("revoked other");
+    const secret = answerOf("secret other");
+
+    expect([opaque.status, codeOf(opaque)]).toEqual([403, "ORIGIN_NOT_ALLOWED"]);
+    expect([unknown.status, codeOf(unknown)]).toEqual([401, "INVALID_API_KEY"]);
+    expect([revoked.status, codeOf(revoked)]).toEqual([401, "INVALID_API_KEY"]);
+    expect(secret.status).toBe(200);
+    for (const res of [opaque, unknown, revoked, secret]) {
+      expectClosed(res);
+    }
   });
 
   it("[OBE-097 AC1] gives none to a request without Origin, a secret key, or a key that is refused", () => {

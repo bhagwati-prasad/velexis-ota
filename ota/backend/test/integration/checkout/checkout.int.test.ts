@@ -920,6 +920,83 @@ describe("checks of the steps", () => {
     expect(after.body).toMatchObject({ version: 1 });
   });
 
+  it("[FIX-W70-API AC1] takes an issue date and a date of birth that are today in UTC+14, and refuses the day after", async () => {
+    const { body: checkout } = await keyCheckout();
+    // An instant between 12:00 and 22:00 UTC, at most a day before now (the checkout was opened at now): UTC+14 is then
+    // already the next calendar day, and a traveller in Tokyo, Sydney or Auckland lives on it. The API's clock is held
+    // at that instant for these requests only.
+    const real = new Date();
+    const hour = real.getUTCHours();
+    const instant = new Date(
+      real.getTime() - (hour >= 12 && hour < 22 ? 0 : ((hour + 24 - 17) % 24) * 3_600_000),
+    );
+    const utcToday = dateFromToday(0, instant);
+    const latest = dateFromToday(1, instant);
+    const after = dateFromToday(2, instant);
+    const clock = vi.spyOn(Clock.prototype, "now").mockImplementation(() => new Date(instant.getTime()));
+    const sent: Array<Awaited<ReturnType<typeof put>>> = [];
+    try {
+      for (const traveler of [
+        buildTravelerInput({ documents: [buildPassport({ issuanceDate: latest })] }),
+        buildTravelerInput({ documents: [buildPassport({ issuanceDate: after })] }),
+        // The adult's date of birth: on the latest date it passes the "future" check and meets the age range; after
+        // it, the "future" check refuses it first (both AGE_MISMATCH_TRAVELER_TYPE, told apart by their messages).
+        buildTravelerInput({ dateOfBirth: latest }),
+        buildTravelerInput({ dateOfBirth: after }),
+      ]) {
+        sent.push(await put(keyHeaders(alphaSk), checkout.id, "travelers", { travelers: [traveler] }));
+      }
+    } finally {
+      clock.mockRestore();
+    }
+    const [issuedToday, issuedTomorrow, bornToday, bornTomorrow] = sent as [
+      (typeof sent)[number],
+      (typeof sent)[number],
+      (typeof sent)[number],
+      (typeof sent)[number],
+    ];
+
+    expect(latest > utcToday).toBe(true);
+    expect(issuedToday.status).toBe(200);
+    expectResponseToMatch("setCheckoutTravelers", issuedToday);
+    expect([issuedTomorrow.status, (issuedTomorrow.body as ErrorBody).error.fieldErrors]).toEqual([
+      422,
+      [
+        {
+          path: "/travelers/0/documents/0/issuanceDate",
+          code: "INVALID_FORMAT",
+          message: "The issue date cannot be in the future.",
+        },
+      ],
+    ]);
+    const messages = (res: typeof bornToday) =>
+      ((res.body as ErrorBody).error.fieldErrors ?? []).map((entry) => [
+        entry.path,
+        entry.code,
+        entry.message,
+      ]);
+    expect([bornToday.status, messages(bornToday)]).toEqual([
+      422,
+      [
+        [
+          "/travelers/0/dateOfBirth",
+          "AGE_MISMATCH_TRAVELER_TYPE",
+          "The date of birth does not match the traveller type at the travel dates.",
+        ],
+      ],
+    ]);
+    expect([bornTomorrow.status, messages(bornTomorrow)]).toEqual([
+      422,
+      [
+        [
+          "/travelers/0/dateOfBirth",
+          "AGE_MISMATCH_TRAVELER_TYPE",
+          "The date of birth cannot be in the future.",
+        ],
+      ],
+    ]);
+  });
+
   it("answers 422 CONTACT_DATA_INVALID for contacts that miss what the airline requires", async () => {
     const { body: checkout } = await keyCheckout();
 

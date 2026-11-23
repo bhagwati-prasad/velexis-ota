@@ -487,6 +487,8 @@ export interface paths {
          *
          *     **Preconditions.** `currentPassword` re-authentication (`422 CURRENT_PASSWORD_INCORRECT`; the password counts against the sign-in lockout of the address, and from the fifth wrong attempt within 15 minutes the answer is `429 RATE_LIMITED` with `Retry-After` and `details.reason: password_attempts`). No booking of the customer may be awaiting payment, ticketing or a refund (`409 ACCOUNT_DELETION_BLOCKED`, `details.bookingIds`, oldest first): a `pending` booking, a `confirmed` or `partially_ticketed` one whose tickets are not all issued, one other than `failed` with a payment that is `requires_action`, `processing` or `authorized`, or one with a `pending` or `processing` refund. Live bookings always count; test bookings count for a request in the test environment, and a `pending` booking (its order may exist and its checkout waits for the reconciliation) counts whatever its environment.
          *
+         *     **Comment.** `comment` is feedback for the OTA that is never stored, logged or audited. It never holds a card number: a comment that holds one (12 to 19 digits that start with 2 to 6 and pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/comment` before the `Idempotency-Key` is claimed and before anything changes; the error never repeats the text.
+         *
          *     **Data export.** The MVP offers no data export: `exportData: true` answers `403 FEATURE_DISABLED` (`details.feature: dataExports`) and changes nothing, and `dataExport` is always `null` (ask the OTA for a copy before deleting the account).
          *
          *     **Immediate effects (one transaction).** All `customer_sessions` are revoked (`account_deleted`), the identity is disabled, open password reset links end, `customers.status` becomes `deleted` and the email is replaced by a salted hash so the address can register again; marketing consent is withdrawn (`customer_consents`). Open and payment-pending checkouts are abandoned, and the payments of those checkouts that are not confirmed yet or only authorised are voided after the commit. A confirmation email is queued to the address before it was replaced (template `account.deleted`: when, the erasure date, whether booking records are kept).
@@ -2123,7 +2125,7 @@ export interface paths {
          * Add an internal note to a booking
          * @description Adds a staff note to the booking timeline: a `booking_events` row (`type = staff.note`, actor staff, `visible_to_customer` = `visibleToCustomer`, default false) and a `staff_actions` row (`booking.note`). Internal notes are never sent to Amadeus (use console.bookings.patch with `remarks` to write a PNR remark) and never shown to the customer unless `visibleToCustomer=true`, in which case the text appears in the customer's booking timeline (bookings.listEvents). The booking `version` does not change.
          *
-         *     Notes are returned in `ConsoleBooking.notes` (newest first). `Location` points to the booking with the note anchor. Permission `bookings:write` (finance may also add notes). `Idempotency-Key` required (a retry does not duplicate the note). No Amadeus call.
+         *     Notes are returned in `ConsoleBooking.notes` (newest first). `Location` points to the booking with the note anchor. Permission `bookings:write`. `Idempotency-Key` required (a retry does not duplicate the note). No Amadeus call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -6557,7 +6559,7 @@ export interface components {
              * @enum {string}
              */
             reason?: "no_longer_needed" | "privacy_concerns" | "too_many_emails" | "bad_experience" | "duplicate_account" | "other";
-            /** @description Optional free-text feedback. */
+            /** @description Optional free-text feedback for the OTA; never stored, logged or audited. Never a card number: a comment that holds one (12 to 19 digits that start with 2 to 6 and pass the Luhn check, grouped by spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/comment`, before the `Idempotency-Key` is claimed and before anything changes; the error never repeats the text. */
             comment?: string;
             /** @description Optional, default false. Create a data export first and email its download link to the account address. */
             exportData?: boolean;

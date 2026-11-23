@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Body, Controller, Get, Header, Patch, Post } from "@nestjs/common";
 import { hashApiKey } from "@velexis/crypto";
+import { AppError } from "@velexis/errors";
 import request, { type Response } from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { edgeHeaders, newApiKey, testApiCredentials } from "../../../test/helpers/api-env";
@@ -20,7 +21,9 @@ import { PublicRoute } from "../auth/caller.guard";
 import { newId } from "../ids";
 import {
   allowCorsAnswer,
+  allowCorsRefusal,
   corsAnswerOrigin,
+  corsRefusalOrigin,
   CORS_ALLOWED_HEADERS,
   CORS_ALLOWED_METHODS,
   CORS_EXPOSED_HEADERS,
@@ -317,24 +320,47 @@ describe("actual answers", () => {
     expect(varyOf(serverCall)).toEqual(["accept-language", "origin"]);
   });
 
-  it("[OBE-097 AC1] gives none to an origin the key does not list (403 ORIGIN_NOT_ALLOWED kept), a refused key, or a publishable key without Origin", async () => {
+  it("[OBE-097 AC1] gives none to a refused key or a publishable key without Origin", async () => {
     platform(PUBLISHABLE_KEY);
 
-    const unlisted = await request(api.server)
-      .get("/__cors/key")
-      .set({ "X-Api-Key": PUBLISHABLE_KEY, Origin: OTHER });
     const noOrigin = await request(api.server).get("/__cors/key").set({ "X-Api-Key": PUBLISHABLE_KEY });
     platform();
     const unknownKey = await request(api.server)
       .get("/__cors/key")
       .set({ "X-Api-Key": PUBLISHABLE_KEY, Origin: SHOP });
+    const unknownOther = await request(api.server)
+      .get("/__cors/key")
+      .set({ "X-Api-Key": PUBLISHABLE_KEY, Origin: OTHER });
 
-    expect([unlisted.status, codeOf(unlisted)]).toEqual([403, "ORIGIN_NOT_ALLOWED"]);
     expect([unknownKey.status, codeOf(unknownKey)]).toEqual([401, "INVALID_API_KEY"]);
+    expect([unknownOther.status, codeOf(unknownOther)]).toEqual([401, "INVALID_API_KEY"]);
     expect(noOrigin.status).toBe(200);
-    for (const res of [unlisted, unknownKey, noOrigin]) {
+    for (const res of [unknownKey, unknownOther, noOrigin]) {
       expectClosed(res);
     }
+  });
+
+  it("[FIX-W70-API AC4] opens a publishable key's 403 ORIGIN_NOT_ALLOWED to the origin it does not list, and to nothing else", async () => {
+    platform(PUBLISHABLE_KEY);
+
+    const unlisted = await request(api.server)
+      .get("/__cors/key")
+      .set({ "X-Api-Key": PUBLISHABLE_KEY, Origin: OTHER });
+    // An opaque origin (a sandboxed frame, a file) is refused too, and never echoed.
+    const opaque = await request(api.server)
+      .get("/__cors/key")
+      .set({ "X-Api-Key": PUBLISHABLE_KEY, Origin: "null" });
+    const listed = await request(api.server)
+      .get("/__cors/key")
+      .set({ "X-Api-Key": PUBLISHABLE_KEY, Origin: SHOP });
+
+    expect([unlisted.status, codeOf(unlisted)]).toEqual([403, "ORIGIN_NOT_ALLOWED"]);
+    expectOpenedTo(unlisted, OTHER);
+    expect([opaque.status, codeOf(opaque)]).toEqual([403, "ORIGIN_NOT_ALLOWED"]);
+    expectClosed(opaque);
+    // A listed origin is answered as before.
+    expect(listed.status).toBe(200);
+    expectOpenedTo(listed, SHOP);
   });
 
   it("[OBE-097 AC1] gives none to a secret key, the storefront edge or an anonymous caller, whatever the Origin", async () => {
@@ -516,6 +542,39 @@ describe("the CORS decisions", () => {
     // Once more as the headers are written, whatever set Vary in between.
     (res as unknown as { writeHead: (status: number) => void }).writeHead(200);
     expect(varied).toEqual(["Origin", "Origin"]);
+  });
+
+  it("[FIX-W70-API AC4] opens only ORIGIN_NOT_ALLOWED to the request's serialized Origin, never another refusal", () => {
+    const headers = new Map<string, string>();
+    const varied: string[] = [];
+    const res = {
+      setHeader: (name: string, value: string) => headers.set(name, value),
+      vary: (field: string) => varied.push(field),
+      writeHead: () => undefined,
+    } as unknown as Parameters<typeof allowCorsRefusal>[0];
+    const refusal = (
+      code: "ORIGIN_NOT_ALLOWED" | "INVALID_API_KEY" | "SERVICE_UNAVAILABLE" | "INVALID_REQUEST",
+    ) => new AppError(code);
+
+    expect(corsRefusalOrigin(refusal("ORIGIN_NOT_ALLOWED"), OTHER)).toBe(OTHER);
+    expect(corsRefusalOrigin(refusal("ORIGIN_NOT_ALLOWED"), undefined)).toBeUndefined();
+    expect(corsRefusalOrigin(refusal("ORIGIN_NOT_ALLOWED"), "null")).toBeUndefined();
+    expect(corsRefusalOrigin(refusal("ORIGIN_NOT_ALLOWED"), `${OTHER}/`)).toBeUndefined();
+    expect(corsRefusalOrigin(refusal("ORIGIN_NOT_ALLOWED"), `${OTHER}, ${SHOP}`)).toBeUndefined();
+    for (const code of ["INVALID_API_KEY", "SERVICE_UNAVAILABLE", "INVALID_REQUEST"] as const) {
+      expect([code, corsRefusalOrigin(refusal(code), OTHER)]).toEqual([code, undefined]);
+    }
+    // Something that is no AppError (a failure of the lookup itself) is never opened.
+    expect(corsRefusalOrigin(new Error("ORIGIN_NOT_ALLOWED"), OTHER)).toBeUndefined();
+
+    allowCorsRefusal(res, refusal("INVALID_API_KEY"), OTHER);
+    expect([...headers.keys(), ...varied]).toEqual([]);
+    allowCorsRefusal(res, refusal("ORIGIN_NOT_ALLOWED"), OTHER);
+    expect(Object.fromEntries(headers)).toEqual({
+      "Access-Control-Allow-Origin": OTHER,
+      "Access-Control-Expose-Headers": CORS_EXPOSED_HEADERS.join(", "),
+    });
+    expect(varied).toEqual(["Origin"]);
   });
 
   it("[FIX-W49-OTA AC1] adds Origin to Vary now and once as the headers are written, however often it is asked", () => {

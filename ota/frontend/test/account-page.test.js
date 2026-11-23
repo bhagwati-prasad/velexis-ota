@@ -944,6 +944,43 @@ describe("account deletion", () => {
   });
 });
 
+describe("a card number in the deletion's comment (FIX-W70-API, lead decision (38b))", () => {
+  it("[FIX-W70-API AC5] shows a 400 card_data at /comment in the dialog's error summary through the field-error path; the account stays", async () => {
+    // The dialog sends no comment (`account.delete({ currentPassword, reason })`): a card_data refusal at /comment, as
+    // the API answers a client that sends one, has no field here, so the summary lists it with the storefront's own
+    // message of the code, never the API's text or the value.
+    const client = fakeClient({
+      delete: async () =>
+        Promise.reject(
+          apiError(ValidationError, "VALIDATION_FAILED", 400, {
+            fieldErrors: [
+              {
+                path: "/comment",
+                code: "card_data",
+                message: "A comment never holds a card number: remove it.",
+              },
+            ],
+          }),
+        ),
+    });
+    const { replace } = await open({ client });
+    $('[data-action="open-delete"]').click();
+    fill("delete", { currentPassword: PASSWORD });
+    await submit("delete");
+
+    expect(client.account.delete).toHaveBeenCalledWith({ currentPassword: PASSWORD });
+    expect(dialog().open).toBe(true);
+    const summary = $("form[data-delete-form] [data-error-summary]");
+    expect(summary.hidden).toBe(false);
+    expect(document.activeElement).toBe(summary);
+    expect(text(summary)).toContain("Remove the card number: card details never go in this field");
+    expect(text(summary)).not.toContain("A comment never holds");
+    // The password field is not blamed, and the page is still signed in.
+    expect(field("delete", "currentPassword").getAttribute("aria-invalid")).not.toBe("true");
+    expect(replace).not.toHaveBeenCalled();
+  });
+});
+
 describe("forms", () => {
   it("[OFE-010] password fields allow paste and password managers; forms post without an action", async () => {
     await open();

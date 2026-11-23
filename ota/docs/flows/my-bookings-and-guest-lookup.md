@@ -46,7 +46,7 @@ sequenceDiagram
   participant D as tenant_acme
   participant R as Redis
 
-  G->>B: reference VX9M4T + last name ROSSI
+  G->>B: reference VX9M4TQ7 + last name ROSSI
   B->>O: bookings.lookup {bookingReference, lastName} (Idempotency-Key, X-CSRF-Token)
   O->>R: 5 failures per 15 min per IP and per reference
   O->>D: match reference / record locator / associated record + traveller last name, environment = storefront environment

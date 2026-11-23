@@ -19,8 +19,10 @@ import {
   apiConfigSchema,
   APP_DIR,
   DEFAULT_STORAGE_DIR,
+  isStripePlaceholder,
   loadApiConfig,
   loadWorkerConfig,
+  STRIPE_PLACEHOLDER_SUFFIX,
   workerConfigSchema,
   type ApiConfig,
   type WorkerConfig,
@@ -653,6 +655,86 @@ describe("the Stripe keys of the Velexis account (OBE-038)", () => {
         expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
         expect(error.message).not.toContain(value);
       }
+    }
+  });
+});
+
+describe("placeholder Stripe values (KI-026, lead decision (39r) of 2026-11-23)", () => {
+  /** Every Stripe variable of the OTA backend: keys in both processes, webhook secrets in the API. */
+  const KEYS = [
+    "STRIPE_SECRET_KEY_TEST",
+    "STRIPE_PUBLISHABLE_KEY_TEST",
+    "STRIPE_SECRET_KEY_LIVE",
+    "STRIPE_PUBLISHABLE_KEY_LIVE",
+  ] as const;
+  const SECRETS = [
+    "STRIPE_WEBHOOK_SECRET_VELEXIS_TEST",
+    "STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE",
+    "STRIPE_WEBHOOK_SECRET_CONNECT_TEST",
+    "STRIPE_WEBHOOK_SECRET_CONNECT_LIVE",
+  ] as const;
+
+  it("[FIX-W70-API AC2] count every value that ends in _replace_me as unset, in both processes", () => {
+    const placeholders = {
+      STRIPE_SECRET_KEY_TEST: "sk_test_replace_me",
+      STRIPE_PUBLISHABLE_KEY_TEST: "pk_test_replace_me",
+      STRIPE_SECRET_KEY_LIVE: "sk_live_replace_me",
+      STRIPE_PUBLISHABLE_KEY_LIVE: "pk_live_replace_me",
+      STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: "whsec_replace_me",
+      STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: "whsec_replace_me",
+      STRIPE_WEBHOOK_SECRET_CONNECT_TEST: "whsec_replace_me",
+      STRIPE_WEBHOOK_SECRET_CONNECT_LIVE: "whsec_replace_me",
+    };
+    const api = loadApiConfig({ ...API_ENV, ...placeholders });
+    const worker = loadWorkerConfig({ ...WORKER_ENV, ...placeholders });
+
+    expect([...KEYS, ...SECRETS].map((name) => [name, api[name]])).toEqual(
+      [...KEYS, ...SECRETS].map((name) => [name, undefined]),
+    );
+    expect(KEYS.map((name) => [name, worker[name]])).toEqual(KEYS.map((name) => [name, undefined]));
+    // A placeholder of the other mode is no key either: it is unset, never refused as a live key in a test variable.
+    expect(
+      loadApiConfig({ ...API_ENV, STRIPE_SECRET_KEY_TEST: "sk_live_replace_me" }).STRIPE_SECRET_KEY_TEST,
+    ).toBe(undefined);
+    expect(isStripePlaceholder("pk_test_replace_me")).toBe(true);
+    expect(isStripePlaceholder(`pk_test_${"0123456789abcdef".repeat(2)}`)).toBe(false);
+    expect(STRIPE_PLACEHOLDER_SUFFIX).toBe("_replace_me");
+  });
+
+  it("[FIX-W70-API AC2] treat the Stripe dummies of ota/backend/.env.example and the root .env.example as unset", () => {
+    for (const file of [join(APP_DIR, ".env.example"), join(REPO_ROOT, ".env.example")]) {
+      const example = readEnvFile(file);
+      const given = Object.fromEntries(
+        [...KEYS, ...SECRETS]
+          .filter((name) => example[name] !== undefined)
+          .map((name) => [name, example[name]]),
+      );
+      // The test keys and both test webhook secrets are dummies there; the live ones are empty.
+      expect([file, Object.keys(given).length]).toEqual([file, KEYS.length + SECRETS.length]);
+      const api = loadApiConfig({ ...API_ENV, ...given });
+      expect([file, ...[...KEYS, ...SECRETS].map((name) => api[name])]).toEqual([
+        file,
+        ...[...KEYS, ...SECRETS].map(() => undefined),
+      ]);
+    }
+  });
+
+  it("[FIX-W70-API AC2] keep every other value as it was: a key is taken, a malformed one refused without printing it", () => {
+    const key = `sk_test_${"0123456789abcdefABCDEF".repeat(2)}`;
+    expect(loadApiConfig({ ...API_ENV, STRIPE_SECRET_KEY_TEST: key }).STRIPE_SECRET_KEY_TEST).toBe(key);
+    for (const value of ["sk_test_replace_me ", "replace_me", "sk_test_replace_me_now"]) {
+      const load = () => loadApiConfig({ ...API_ENV, STRIPE_SECRET_KEY_TEST: value });
+      if (value === "sk_test_replace_me_now") {
+        // Not a placeholder (it does not end in _replace_me), and of a key's shape: taken as a key.
+        expect(load().STRIPE_SECRET_KEY_TEST).toBe(value);
+        continue;
+      }
+      const error = configErrorOf(load);
+      expect([value, error.problems.map((problem) => problem.variable)]).toEqual([
+        value,
+        ["STRIPE_SECRET_KEY_TEST"],
+      ]);
+      expect(error.message).not.toContain(value);
     }
   });
 });

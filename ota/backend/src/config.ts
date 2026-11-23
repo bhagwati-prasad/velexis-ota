@@ -129,7 +129,8 @@ export const MAIL_FROM_PATTERN = new RegExp(
  * other way round. Each is optional: an environment without both keys has no `velexis`-mode payments (`424
  * PAYMENT_PROVIDER_NOT_CONFIGURED`, and `storefront.get` lists no payment method), so the API starts on a VM whose
  * Stripe keys are not filled in yet (provision-vm.sh: "Stripe when needed"); the live keys stay empty until the M6
- * launch checklist. A refused value is named, never printed (@velexis/config).
+ * launch checklist. A placeholder value (`isStripePlaceholder`) counts as unset, as an empty one does. A refused value
+ * is named, never printed (@velexis/config).
  */
 export const STRIPE_KEY_PATTERNS = Object.freeze({
   secret: { test: /^(?:sk|rk)_test_[A-Za-z0-9_]+$/, live: /^(?:sk|rk)_live_[A-Za-z0-9_]+$/ },
@@ -141,6 +142,40 @@ export const STRIPE_KEY_PATTERNS = Object.freeze({
  * `whsec_` and letters and digits; the base64 characters are accepted too. A refused value is named, never printed.
  */
 export const STRIPE_WEBHOOK_SECRET_PATTERN = /^whsec_[A-Za-z0-9+/=_-]{8,}$/;
+
+/**
+ * The end of the placeholder values that the `.env.example` files give the Stripe variables (`sk_test_replace_me`,
+ * `pk_test_replace_me`, `whsec_replace_me`): they pass the key and secret patterns above, but they are no keys.
+ */
+export const STRIPE_PLACEHOLDER_SUFFIX = "_replace_me";
+
+/**
+ * True for a Stripe value that is a placeholder (`STRIPE_PLACEHOLDER_SUFFIX`), which counts as unset (KI-026, lead
+ * decision (39r) of 2026-11-23): a `.env.local` copied from `.env.example` without real keys then runs like one
+ * without the variables, so storefront.get lists no card method and checkout.createPayment answers `424
+ * PAYMENT_PROVIDER_NOT_CONFIGURED` instead of offering the card and failing at Stripe with `502`, and the webhook
+ * receiver refuses deliveries as it does without a secret. The e2e harness (tools/e2e/support/stack.ts
+ * `givenOtaStripeKeys`) likewise treats the example files' dummies as no keys, by comparing with the values it reads
+ * from them.
+ */
+export function isStripePlaceholder(value: string): boolean {
+  return value.endsWith(STRIPE_PLACEHOLDER_SUFFIX);
+}
+
+/**
+ * An optional Stripe key or webhook secret of `pattern`: a placeholder (`isStripePlaceholder`) counts as unset, as an
+ * empty value does; any other value must match. A refused value is named, never printed.
+ */
+function stripeValue(pattern: RegExp): EnvVar<string | undefined> {
+  const value = env.string({ pattern, optional: true });
+  return {
+    ...value,
+    kind: "stripeValue",
+    parse(raw, context) {
+      return isStripePlaceholder(raw) ? { ok: true, value: undefined } : value.parse(raw, context);
+    },
+  };
+}
 
 /** The storage folder on the VM (ADR-0017; `velexis-ota`'s, mode 0700, provision-vm.sh): STORAGE_DIR's default. */
 export const DEFAULT_STORAGE_DIR = "/var/lib/velexis/storage";
@@ -169,11 +204,12 @@ const sharedSchema = {
   // (src/payments/stripe/stripe-client.factory.ts): the API creates, reads and updates PaymentIntents and hands the
   // publishable key to the storefront through storefront.get; the worker reads the PaymentIntents, charges, refunds and
   // disputes of the webhook events again (OBE-039, OADR-0010 point 5), and from OBE-040 voids, captures and refunds.
-  // Both units read ota-backend.env, which holds them.
-  STRIPE_SECRET_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.test, optional: true }),
-  STRIPE_PUBLISHABLE_KEY_TEST: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.test, optional: true }),
-  STRIPE_SECRET_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.secret.live, optional: true }),
-  STRIPE_PUBLISHABLE_KEY_LIVE: env.string({ pattern: STRIPE_KEY_PATTERNS.publishable.live, optional: true }),
+  // Both units read ota-backend.env, which holds them. A placeholder value (`…_replace_me`, the `.env.example` files')
+  // counts as unset (`stripeValue`, KI-026).
+  STRIPE_SECRET_KEY_TEST: stripeValue(STRIPE_KEY_PATTERNS.secret.test),
+  STRIPE_PUBLISHABLE_KEY_TEST: stripeValue(STRIPE_KEY_PATTERNS.publishable.test),
+  STRIPE_SECRET_KEY_LIVE: stripeValue(STRIPE_KEY_PATTERNS.secret.live),
+  STRIPE_PUBLISHABLE_KEY_LIVE: stripeValue(STRIPE_KEY_PATTERNS.publishable.live),
   // The StorageAdapter of @velexis/db/storage (ADR-0017, OADR-0013 items 7 and 9; OBE-053, OBE-054): `local` (the MVP)
   // keeps the objects as files under STORAGE_DIR, an existing folder (checked here; `.local/storage` locally, which
   // `pnpm dev:keys` creates). The worker's documents module writes the rendered PDFs there (`tenant_<key>/documents/…`)
@@ -344,16 +380,17 @@ export const apiConfigSchema = {
   // The signing secrets of the Velexis account's webhook endpoints, `/webhooks/stripe/velexis/{test,live}` (OBE-039,
   // OADR-0010 point 4). Optional: an environment without its secret refuses every delivery with `400` (Stripe keeps
   // sending it, so nothing is lost once the secret is set); the live one stays empty until the M6 launch checklist.
-  // Only the webhook receiver reads them (src/payments/webhooks/webhook-receiver.service.ts); never logged.
-  STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
-  STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  // Only the webhook receiver reads them (src/payments/webhooks/webhook-receiver.service.ts); never logged. A
+  // placeholder value (`whsec_replace_me`) counts as unset (`stripeValue`, KI-026).
+  STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: stripeValue(STRIPE_WEBHOOK_SECRET_PATTERN),
+  STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: stripeValue(STRIPE_WEBHOOK_SECRET_PATTERN),
   // The signing secrets of the Velexis platform's Connect endpoints for the OTAs' connected accounts,
   // `/webhooks/stripe/connect/{test,live}` (OBE-078, OADR-0010 point 4): the payment events of every `connect_standard`
   // account. Optional, as the Velexis ones: an environment without its secret refuses every delivery with `400`. The
   // `api_keys` endpoint `/webhooks/stripe/c/<ppc_id>` has no variable: each connection's own secret is stored
-  // encrypted on its platform row. Only the webhook receiver reads them; never logged.
-  STRIPE_WEBHOOK_SECRET_CONNECT_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
-  STRIPE_WEBHOOK_SECRET_CONNECT_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  // encrypted on its platform row. Only the webhook receiver reads them; never logged. A placeholder counts as unset.
+  STRIPE_WEBHOOK_SECRET_CONNECT_TEST: stripeValue(STRIPE_WEBHOOK_SECRET_PATTERN),
+  STRIPE_WEBHOOK_SECRET_CONNECT_LIVE: stripeValue(STRIPE_WEBHOOK_SECRET_PATTERN),
   // The global kill switch of the airline-card method (ADR-0011, OADR-0004 point 1; OBE-050), `false` by default
   // (`true`, `false`, `1` or `0`; anything else is refused at start-up). Off, checkout.createPayment refuses
   // `airline_card` (`403 FEATURE_DISABLED`) and storefront.get never lists it, whatever the tenants' settings say.

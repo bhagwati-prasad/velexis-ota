@@ -67,6 +67,7 @@ import {
 } from "./checkout.repository";
 import {
   contactErrors,
+  latestCalendarDate,
   MAX_FIELD_ERRORS,
   offerTravelersOf,
   primaryIndexOf,
@@ -356,6 +357,7 @@ export class CheckoutService {
         requirements,
         trip: tripOf(context.priced.pricedOffer),
         today: utcDate(now),
+        latestToday: latestCalendarDate(now),
         stored: rows.map(factsOfRow),
       });
       const plans: Array<{

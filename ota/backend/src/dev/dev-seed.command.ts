@@ -114,9 +114,11 @@ export const DEV_SEED_KEY_LABELS = Object.freeze({
  *
  * Its other console calls carry the staff token it signs in (console.auth.signIn with a test portal token, as the
  * scope guard lets any secret key not scoped `storefront` do): console.auth.me and console.auth.signOut need the
- * session and no permission, and console.bookings.list, console.customers.list and console.bookings.create are checked
- * against the staff member's role, never against the key (scope.guard.ts). No write, issue, cancel, refund, settings
- * or raw Amadeus write permission; the smoke test proves a key-only call outside these permissions is refused.
+ * session and no permission, and console.bookings.list and console.customers.list are checked against the staff
+ * member's role, never against the key (scope.guard.ts). console.bookings.create is a deferred route
+ * (pending-operations.ts): it answers `501 NOT_IMPLEMENTED` without any role or permission check, because the staff,
+ * scope and permission guards check only operations bound to the document (KI-028). No write, issue, cancel, refund,
+ * settings or raw Amadeus write permission; the smoke test proves a key-only call outside these permissions is refused.
  */
 export const DEV_SEED_KEY_SCOPES = Object.freeze({
   publishable: Object.freeze([] as string[]),

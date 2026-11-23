@@ -1,7 +1,8 @@
 // Checkout requirements and the checks of travellers, contacts and remarks (OBE-036; ota/docs/flows/checkout-stripe.md
 // §1 and §2 steps 1–2, the OTA document's createCheckout, setCheckoutTravelers, setCheckoutContacts and
-// setCheckoutRemarks, SDK guide B3 §2.1–§2.5). Pure functions: no I/O and no clock (the caller passes `today`); dates
-// are `YYYY-MM-DD` strings, compared as text and moved with UTC calendar arithmetic, never through local time.
+// setCheckoutRemarks, SDK guide B3 §2.1–§2.5). Pure functions: no I/O and no clock (the caller passes `today` and
+// `latestToday`); dates are `YYYY-MM-DD` strings, compared as text and moved with UTC calendar arithmetic, never
+// through local time.
 //
 // Requirements (`requirementsOf`) come from the priced offer: the contact flags of Amadeus `bookingRequirements` (the
 // primary e-mail is always required: confirmations and guest access go there), one entry per traveller of the offer
@@ -16,9 +17,11 @@
 // one traveller at a time, so a required field that is still missing is accepted and reported in `progress.missing`
 // and the traveller's `missingFields` (`missingFieldsOf`, `missingErrorsOf`); createPayment refuses an incomplete
 // checkout (OBE-038). What is sent must be valid: a traveller id of the offer, sent once; Latin names of at most 57
-// characters in total; a date of birth not after today and in its type's range, and a held infant younger than its
-// adult; identity documents of an accepted type that do not expire before the last flight; complete discount entries
-// with well-formed card and certificate numbers (a masked value from a response never is); well-formed phones, e-mails
+// characters in total; a date of birth not after the latest calendar date on Earth (UTC+14, so that no traveller's
+// local today is refused: KI-025, lead decision (39q) of 2026-11-23) and in its type's range, and a held infant
+// younger than its adult; identity documents of an accepted type that do not expire before the last flight (judged on
+// the UTC date) and were not issued after that latest date; complete discount entries with well-formed card and
+// certificate numbers (a masked value from a response never is); well-formed phones, e-mails
 // and codes; no two travellers with the same name and date of birth. Saved travellers are deferred in the MVP
 // (scope.md §3), so a `savedTravelerId` never exists: `SAVED_TRAVELER_NOT_FOUND`. Error paths are JSON pointers into
 // the request; messages never contain a submitted value.
@@ -138,6 +141,22 @@ export function addDays(date: string, days: number): string {
 /** The UTC date of an instant. */
 export function utcDate(instant: Date): string {
   return instant.toISOString().slice(0, 10);
+}
+
+/**
+ * The offset of the time zone furthest ahead of UTC, in hours: UTC+14 (the Line Islands of Kiribati). No place on
+ * Earth has reached a later calendar date than the UTC date of an instant plus this offset.
+ */
+export const LATEST_UTC_OFFSET_HOURS = 14;
+
+/**
+ * The latest calendar date on Earth at an instant: the date in UTC+14 (`LATEST_UTC_OFFSET_HOURS`). A date of birth or
+ * a document's issue date is "in the future" only after it (KI-025, lead decision (39q) of 2026-11-23), so a traveller
+ * whose local today is ahead of the UTC date (Tokyo between 00:00 and 09:00, say) is never refused; the OTA's own time
+ * zone is not needed for it.
+ */
+export function latestCalendarDate(instant: Date): string {
+  return utcDate(new Date(instant.getTime() + LATEST_UTC_OFFSET_HOURS * 3_600_000));
 }
 
 // ---- The trip and the travellers of a priced offer ----------------------------------------------------------------
@@ -358,8 +377,13 @@ export interface TravelerFacts {
 export interface TravelerCheckContext {
   readonly requirements: CheckoutRequirements;
   readonly trip: Pick<Trip, "lastDate">;
-  /** Today's date (UTC): a document that expired before it is `DOCUMENT_EXPIRED`, a date of birth after it refused. */
+  /** Today's date (UTC): a document that expired before it is `DOCUMENT_EXPIRED`. */
   readonly today: string;
+  /**
+   * The latest calendar date on Earth (UTC+14, `latestCalendarDate`): a date of birth or a document's issue date after
+   * it is in the future and refused; one on it is today somewhere, so it passes (KI-025, lead decision (39q)).
+   */
+  readonly latestToday: string;
   /** Every traveller of the checkout as stored, for duplicates and a held infant's adult. */
   readonly stored: readonly TravelerFacts[];
 }
@@ -476,7 +500,7 @@ function documentErrors(
         );
       }
     }
-    if (document.issuanceDate !== undefined && document.issuanceDate > context.today) {
+    if (document.issuanceDate !== undefined && document.issuanceDate > context.latestToday) {
       errors.push(error(`${path}/issuanceDate`, "INVALID_FORMAT", "The issue date cannot be in the future."));
     }
     for (const field of ["issuanceCountry", "nationality", "validityCountry", "birthCountry"] as const) {
@@ -624,7 +648,7 @@ export function travelerErrors(
     if (input.dateOfBirth !== undefined) {
       const min = requirement.dateOfBirthMin ?? null;
       const max = requirement.dateOfBirthMax ?? null;
-      if (input.dateOfBirth > context.today) {
+      if (input.dateOfBirth > context.latestToday) {
         // An infant's range reaches the first flight's day, but nobody can be booked before being born.
         errors.push(
           error(

@@ -7,7 +7,9 @@
 // a card number there would reach the database, its backups and the supplier. So every free-text field that the OTA
 // stores or forwards, in the console, customer and both-scope operations below, refuses one, with the detector of
 // @velexis/logger (`holdsCardNumber`: 12 to 19 digits, grouped by single spaces or dashes or not, wherever they stand
-// among other digits, that start with 2 to 6 and pass the Luhn check).
+// among other digits, that start with 2 to 6 and pass the Luhn check). So does the account deletion's comment, which
+// the OTA never keeps, because the idempotency record keeps an unkeyed hash of the whole request (lead decision (38b)
+// of 2026-11-22, FIX-W70-API): refused before the key is claimed, a card number never reaches it.
 //
 // The check runs in the request validation layer (openapi-validation.interceptor.ts), after the document's own
 // validation of the request and before the idempotency interceptor and the handler: a refused request claims no
@@ -111,6 +113,9 @@ export const CARD_FREE_TEXT_FIELDS: Readonly<Partial<Record<OtaOperationId, read
     consoleUpdateMarkupRule: [note("/description")],
     // The customer's (and an API key's, in the both scope) free text.
     cancelBooking: [comment("/comment")],
+    // Never kept, but part of the idempotency record's request hash, which a card number must never reach (lead
+    // decision (38b) of 2026-11-22, FIX-W70-API).
+    deleteAccount: [comment("/comment")],
     setCheckoutRemarks: [remark("/remarks/*/text")],
     setCheckoutTravelers: [TRAVELERS_EMERGENCY_TEXT],
     priceFlightOffers: [TRAVELERS_EMERGENCY_TEXT],

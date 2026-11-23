@@ -231,10 +231,32 @@ describe("the card check of a customer request (FIX-W68-CARDTEXT, lead decision 
     expect(
       refusals("cancelBooking", bodyOf({ reasonCode: "other", comment: "Call +46 70 123 45 67" })),
     ).toEqual([]);
-    // The account deletion's comment is never kept, a lookup's last name never stored, metadata never free text.
-    expect(refusals("deleteAccount", bodyOf({ reason: "other", comment: TEST_PAN }))).toEqual([]);
+    // A lookup's last name is never stored and metadata is never free text (the account deletion's comment, never kept
+    // either, is checked since lead decision (38b): see the next test).
     expect(refusals("lookupBooking", bodyOf({ reference: "ABC123", lastName: TEST_PAN }))).toEqual([]);
     expect(refusals("createCheckout", bodyOf({ metadata: { crm: TEST_PAN } }))).toEqual([]);
+  });
+
+  it("[FIX-W70-API AC5] refuses a card number in an account deletion's comment, which the idempotency record's request hash covers (lead decision (38b))", () => {
+    expect(
+      refusals("deleteAccount", bodyOf({ reason: "other", comment: `My card ${TEST_PAN} is closed` })),
+    ).toEqual([["/comment", "card_data", "A comment never holds a card number: remove it."]]);
+    expect(
+      refusals("deleteAccount", bodyOf({ comment: TEST_PAN.replaceAll(" ", "-") })).map(([path]) => path),
+    ).toEqual(["/comment"]);
+    // A comment without one, or no comment at all, passes; the password is a credential and never inspected.
+    expect(
+      refusals("deleteAccount", bodyOf({ reason: "other", comment: "Moving to another agency" })),
+    ).toEqual([]);
+    expect(refusals("deleteAccount", bodyOf({ currentPassword: TEST_PAN.replaceAll(" ", "") }))).toEqual([]);
+    let caught: unknown;
+    try {
+      refuseCardData("deleteAccount", bodyOf({ reason: "other", comment: `card ${TEST_PAN}` }));
+    } catch (error) {
+      caught = error;
+    }
+    expect(isAppError(caught) && [caught.code, caught.status]).toEqual(["VALIDATION_FAILED", 400]);
+    expect(JSON.stringify(caught)).not.toMatch(/4111/);
   });
 
   it("[FIX-W68-CARDTEXT AC1] refuses a customer request as a 400 VALIDATION_FAILED that never repeats the value", () => {
@@ -336,11 +358,6 @@ const NOT_FREE_TEXT: ReadonlyArray<{
     operations: ["updateAccount"],
     pointer: "/phone/number",
     why: "the account holder's phone number (digits), personal data with a defined meaning",
-  },
-  {
-    operations: ["deleteAccount"],
-    pointer: "/comment",
-    why: "accepted and never kept: not stored, logged or audited (account.service.ts), only part of the idempotency request hash",
   },
   {
     operations: [...SAVED_TRAVELER],

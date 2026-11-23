@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import type { ConfigService } from "@nestjs/config";
+import { defineConfig } from "@velexis/config";
 import { encryptValue, type KeyProvider } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import type { PinoLogger } from "nestjs-pino";
@@ -14,7 +15,7 @@ import Stripe from "stripe";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { testKeyProvider } from "../../../test/helpers/api-env";
 import { startFakeStripe, type FakeStripe, type FakeStripeRequest } from "../../../test/helpers/fake-stripe";
-import type { ApiConfig } from "../../config";
+import { apiConfigSchema, type ApiConfig } from "../../config";
 import {
   paymentConfigFor,
   STRIPE_CARD_BRANDS,
@@ -317,6 +318,43 @@ describe("the account of a tenant's environment (OADR-0010 point 1)", () => {
     }
     expect(stripe.requests).toEqual([]);
     expect(unwraps).toBe(0);
+  });
+
+  it("[FIX-W70-API AC2] takes the .env.example placeholders for no keys: no card method, and 424 as without keys", async () => {
+    // The values a `.env.local` copied from ota/backend/.env.example holds, through the API's own schema entries.
+    const placeholders = defineConfig(
+      {
+        STRIPE_SECRET_KEY_TEST: apiConfigSchema.STRIPE_SECRET_KEY_TEST,
+        STRIPE_PUBLISHABLE_KEY_TEST: apiConfigSchema.STRIPE_PUBLISHABLE_KEY_TEST,
+      },
+      { STRIPE_SECRET_KEY_TEST: "sk_test_replace_me", STRIPE_PUBLISHABLE_KEY_TEST: "pk_test_replace_me" },
+    );
+    expect(placeholders).toEqual({
+      STRIPE_SECRET_KEY_TEST: undefined,
+      STRIPE_PUBLISHABLE_KEY_TEST: undefined,
+    });
+    const factory = factoryWith(placeholders);
+    const gateway = gatewayOf(factory);
+
+    expect([factory.hasVelexisAccount("test"), factory.velexisPublishableKey("test")]).toEqual([
+      false,
+      undefined,
+    ]);
+    // storefront.get: no account, so no card method and no publishable key.
+    const account = await gateway.findAccount(CTX);
+    expect(account).toBeNull();
+    expect(paymentConfigFor(STOREFRONT_PAYMENT, account)).toMatchObject({
+      supportedMethods: [],
+      publishableKey: "",
+    });
+    // checkout.createPayment: the same 424 as for missing keys, before any call to Stripe.
+    const error = await appErrorOf(gateway.account(CTX));
+    expect([error.code, error.status, (error.cause as PaymentAccountUnusableError).reason]).toEqual([
+      "PAYMENT_PROVIDER_NOT_CONFIGURED",
+      424,
+      "no_velexis_keys",
+    ]);
+    expect(stripe.requests).toEqual([]);
   });
 
   it("serves an api_keys account without its Velexis keys, and never decrypts its key to say so", async () => {

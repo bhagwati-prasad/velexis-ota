@@ -24,11 +24,20 @@
 //   ORIGIN_NOT_ALLOWED` before this runs) gets `Access-Control-Allow-Origin` with that origin, the exposed headers
 //   below and `Vary: Origin`, on the answer whatever it becomes: the later guards' refusals and the operation's own
 //   errors stay readable to the page. Secret keys, the service, the edge, anonymous callers and requests without an
-//   `Origin` get none, and so does everything answered before the key is checked (a refused key, a body the parsers
-//   refuse, a path that is no operation); all of them but the edge's still vary by `Origin`.
+//   `Origin` get none, and so does everything answered before the key is checked (a body the parsers refuse, a path
+//   that is no operation) and every other refusal of the credential (an unknown, revoked or expired key, `401
+//   INVALID_API_KEY`; a key that cannot be looked up, `503`); all of them but the edge's still vary by `Origin`.
+// - The refusal of an origin (`allowCorsRefusal`, called by the caller guard when the credential is refused; KI-034,
+//   lead decision (39u) of 2026-11-23): `403 ORIGIN_NOT_ALLOWED`, which the key verifier answers only for a
+//   publishable key whose hash matched and whose allowed origins do not list the request's `Origin`, gets the same
+//   three headers for that origin when it is a serialized origin (`isSerializedOrigin`; the opaque `null` gets none),
+//   so that the page can read the refusal and the SDK raises `PermissionError` `ORIGIN_NOT_ALLOWED` after one request
+//   instead of a `NETWORK_ERROR` after its retries. A publishable key is public (it is in the page's source), and the
+//   answer says only that this origin is not one of the key's: nothing a page on that origin could not learn anyway.
 //
 // `Access-Control-Allow-Credentials` is never sent: no cookie travels cross-origin (the API ignores cookies of key and
 // bearer callers anyway, and the SDK's token mode fetches with `credentials: "omit"`).
+import { isAppError } from "@velexis/errors";
 import type { NextFunction, Request, Response } from "express";
 import type { Caller } from "../../tenancy/caller-resolver";
 
@@ -221,7 +230,38 @@ export function allowCorsAnswer(res: CorsAnswerTarget, caller: Caller, origin: s
   if (allowed === undefined) {
     return;
   }
-  res.setHeader("Access-Control-Allow-Origin", allowed);
+  openTo(res, allowed);
+}
+
+/**
+ * The origin the refusal `error` of a request is opened to, or `undefined` for none: the request's `Origin` when the
+ * refusal is `403 ORIGIN_NOT_ALLOWED` (a publishable key whose allowed origins do not list it; the key verifier answers
+ * that code for nothing else) and the `Origin` is a serialized origin. Every other refusal of the credential, and
+ * `ORIGIN_NOT_ALLOWED` for an opaque or malformed `Origin`, gets none.
+ */
+export function corsRefusalOrigin(error: unknown, origin: string | undefined): string | undefined {
+  if (!isAppError(error) || error.code !== "ORIGIN_NOT_ALLOWED" || origin === undefined) {
+    return undefined;
+  }
+  return isSerializedOrigin(origin) ? origin : undefined;
+}
+
+/**
+ * Opens the `403 ORIGIN_NOT_ALLOWED` refusal of a publishable key to the page on the request's `Origin`
+ * (`corsRefusalOrigin`; KI-034): the origin, the exposed headers and `Vary: Origin`, as an opened answer has, so that
+ * the page reads the refusal instead of a CORS error. Nothing for any other refusal.
+ */
+export function allowCorsRefusal(res: CorsAnswerTarget, error: unknown, origin: string | undefined): void {
+  const allowed = corsRefusalOrigin(error, origin);
+  if (allowed === undefined) {
+    return;
+  }
+  openTo(res, allowed);
+}
+
+/** The three headers of an answer opened to `origin`: the origin, the exposed headers and `Vary: Origin`. */
+function openTo(res: CorsAnswerTarget, origin: string): void {
+  res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Expose-Headers", EXPOSE_HEADERS);
   varyByOrigin(res);
 }

@@ -34,10 +34,14 @@ info:
     `Access-Control-Expose-Headers: X-Request-Id, Retry-After, ETag, Location` and `Vary: Origin` when the request's
     publishable key lists its `Origin`, from the moment the key is checked: the guards' later refusals
     (`403 TENANT_SUSPENDED`, `401 UNAUTHENTICATED`, `429 RATE_LIMITED`, ...) and the operation's own errors carry them
-    too. Secret keys, requests without an `Origin`, the refusals of the key itself (`401 INVALID_API_KEY`,
-    `403 ORIGIN_NOT_ALLOWED` for an origin the key does not list, the `503` of a lookup that fails), answers given
-    before the key is checked (a body that cannot be parsed or is too large, a path that is no operation) and
-    the hosted storefront's edge get none; the edge's preflights are not answered. Every answer but the edge's carries
+    too. So does the refusal of a publishable key whose allowed origins do not list the request's `Origin`,
+    `403 ORIGIN_NOT_ALLOWED`: it carries `Access-Control-Allow-Origin` with that origin, the same exposed headers and
+    `Vary: Origin`, so that the page reads the refusal and the SDK raises `PermissionError` `ORIGIN_NOT_ALLOWED` instead
+    of a network error (a publishable key is public, and the answer says only that this origin is not listed; an
+    `Origin` that is no serialized origin, such as `null`, gets none). Secret keys, requests without an `Origin`, the
+    other refusals of the key itself (`401 INVALID_API_KEY`, the `503` of a lookup that fails), answers given before the
+    key is checked (a body that cannot be parsed or is too large, a path that is no operation) and the hosted
+    storefront's edge get none; the edge's preflights are not answered. Every answer but the edge's carries
     `Vary: Origin`, whatever the key and whether or not the request has an `Origin`: the answers that get no CORS
     header too, and a cacheable answer whose own `Vary` names other headers (`Accept-Language`, `X-Api-Key`) as well,
     so that no cache between a page and the API reuses an answer given to one origin, or to a server without one, for
@@ -2860,6 +2864,12 @@ paths:
         `processing` refund. Live bookings always count; test bookings count for a request in the test environment, and
         a `pending` booking (its order may exist and its checkout waits for the reconciliation) counts whatever its
         environment.
+
+
+        **Comment.** `comment` is feedback for the OTA that is never stored, logged or audited. It never holds a card
+        number: a comment that holds one (12 to 19 digits that start with 2 to 6 and pass the Luhn check, grouped by
+        spaces or dashes or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/comment` before
+        the `Idempotency-Key` is claimed and before anything changes; the error never repeats the text.
 
 
         **Data export.** The MVP offers no data export: `exportData: true` answers `403 FEATURE_DISABLED`
@@ -8419,7 +8429,7 @@ paths:
                     checkoutId: chk_01JA4CH2F0J3M6Q9T2W5Z8C1E4
                     booking:
                       id: bkg_01JA4CH3G1K4N7R0U3X6A9D2F5
-                      reference: VX9M4T
+                      reference: VX9M4TQ7
                       status: confirmed
                       channel: storefront
                       customerId: null
@@ -9654,7 +9664,7 @@ paths:
               lookup:
                 summary: Reference + last name
                 value:
-                  bookingReference: VX9M4T
+                  bookingReference: VX9M4TQ7
                   lastName: Rossi
       responses:
         '200':
@@ -9679,7 +9689,7 @@ paths:
                     expiresAt: '2026-10-11T10:30:00Z'
                     booking:
                       id: bkg_01JA4CH3G1K4N7R0U3X6A9D2F5
-                      reference: VX9M4T
+                      reference: VX9M4TQ7
                       status: ticketed
                       timeframe: upcoming
                       recordLocator: RT4K7P
@@ -13796,8 +13806,8 @@ paths:
 
 
         Notes are returned in `ConsoleBooking.notes` (newest first). `Location` points to the booking with the note
-        anchor. Permission `bookings:write` (finance may also add notes). `Idempotency-Key` required (a retry does not
-        duplicate the note). No Amadeus call.
+        anchor. Permission `bookings:write`. `Idempotency-Key` required (a retry does not duplicate the note). No
+        Amadeus call.
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -31284,7 +31294,11 @@ components:
         comment:
           type: string
           maxLength: 500
-          description: Optional free-text feedback.
+          description: >-
+            Optional free-text feedback for the OTA; never stored, logged or audited. Never a card number: a comment
+            that holds one (12 to 19 digits that start with 2 to 6 and pass the Luhn check, grouped by spaces or dashes
+            or not) answers `400 VALIDATION_FAILED` with the field code `card_data` at `/comment`, before the
+            `Idempotency-Key` is claimed and before anything changes; the error never repeats the text.
         exportData:
           type: boolean
           description: Optional, default false. Create a data export first and email its download link to the account address.

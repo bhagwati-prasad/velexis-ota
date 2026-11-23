@@ -293,6 +293,31 @@ describe("publishable keys and origins", () => {
     });
   });
 
+  it("[FIX-W70-API AC4] answers ORIGIN_NOT_ALLOWED, the one refusal opened to the page (cors.ts), only for a key the caller holds", async () => {
+    // The CORS headers of that refusal must say nothing about a key the page does not hold: an unknown, mistyped,
+    // revoked or expired pk_ key from an origin no key lists is the same closed 401 as from any other origin.
+    const key = newApiKey("pk");
+    const revoked = newApiKey("pk");
+    const expired = newApiKey("pk");
+    const { verifier } = harness(
+      rowOf(key, { allowedOrigins: ORIGINS }),
+      rowOf(revoked, { allowedOrigins: ORIGINS, revokedAt: "2026-10-01T00:00:00.000Z" }),
+      rowOf(expired, { allowedOrigins: ORIGINS, expiresAt: "2026-10-14T00:00:00.000Z" }),
+    );
+    const origin = "https://evil.example.com";
+
+    expect((await refusal(verifier.verify(key, { origin }))).code).toBe("ORIGIN_NOT_ALLOWED");
+    for (const [label, presented] of [
+      ["unknown", newApiKey("pk")],
+      ["mistyped", `${key.slice(0, -1)}${key.endsWith("A") ? "B" : "A"}`],
+      ["revoked", revoked],
+      ["expired", expired],
+    ] as const) {
+      const error = await refusal(verifier.verify(presented, { origin }));
+      expect([label, error.code, error.status]).toEqual([label, "INVALID_API_KEY", 401]);
+    }
+  });
+
   it("refuses a pk_ key with console scopes", async () => {
     const key = newApiKey("pk");
     const { verifier } = harness(rowOf(key, { scopes: ["console"] }));

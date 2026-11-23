@@ -9,6 +9,8 @@ import {
   addYears,
   contactErrors,
   dateOfBirthRange,
+  LATEST_UTC_OFFSET_HOURS,
+  latestCalendarDate,
   MAX_NAME_LENGTH,
   missingErrorsOf,
   missingFieldsOf,
@@ -19,6 +21,7 @@ import {
   requirementsOf,
   travelerErrors,
   tripOf,
+  utcDate,
   type CheckoutRequirements,
   type ContactInput,
   type TravelerCheckContext,
@@ -104,7 +107,7 @@ function context(
   requirements: CheckoutRequirements,
   stored: TravelerCheckContext["stored"] = [],
 ): TravelerCheckContext {
-  return { requirements, trip: { lastDate: "2026-11-28" }, today: TODAY, stored };
+  return { requirements, trip: { lastDate: "2026-11-28" }, today: TODAY, latestToday: TODAY, stored };
 }
 
 /** A complete adult as setTravelers takes it (synthetic data, no real person). */
@@ -411,6 +414,74 @@ describe("travelerErrors", () => {
       codes(travelerErrors([{ travelerId: "2", dateOfBirth: "2026-10-20" }], context(withInfant))),
     ).toEqual([["/travelers/0/dateOfBirth", "AGE_MISMATCH_TRAVELER_TYPE"]]);
     expect(travelerErrors([{ travelerId: "2", dateOfBirth: TODAY }], context(withInfant))).toEqual([]);
+  });
+
+  it("[FIX-W70-API AC1] takes the latest calendar date on Earth (UTC+14) as the last date that is not in the future", () => {
+    // Midnight in UTC+14 is 10:00 UTC the day before: from then until midnight UTC, the latest date is the next one.
+    expect(latestCalendarDate(new Date("2026-11-23T00:00:00.000Z"))).toBe("2026-11-23");
+    expect(latestCalendarDate(new Date("2026-11-23T09:59:59.999Z"))).toBe("2026-11-23");
+    expect(latestCalendarDate(new Date("2026-11-23T10:00:00.000Z"))).toBe("2026-11-24");
+    expect(latestCalendarDate(new Date("2026-11-23T23:59:59.999Z"))).toBe("2026-11-24");
+    // Across a month and a year.
+    expect(latestCalendarDate(new Date("2026-12-31T12:00:00.000Z"))).toBe("2027-01-01");
+    expect(LATEST_UTC_OFFSET_HOURS).toBe(14);
+  });
+
+  it("[FIX-W70-API AC1] accepts a date of birth and an issue date that are today in UTC+14 and refuses the day after; expiry stays on the UTC date", () => {
+    // 2026-10-19 at 15:00 UTC: already 2026-10-20 in UTC+14 (and in Tokyo, Sydney or Auckland), still 2026-10-19 in UTC.
+    const now = new Date("2026-10-19T15:00:00.000Z");
+    const late = {
+      ...context(
+        requirementsForPricedOffer(
+          pricedOffer({
+            travelers: [
+              { travelerId: "1", travelerType: "ADULT" },
+              { travelerId: "2", travelerType: "HELD_INFANT", associatedAdultId: "1" },
+            ],
+          }),
+        ),
+      ),
+      today: utcDate(now),
+      latestToday: latestCalendarDate(now),
+    };
+    expect([late.today, late.latestToday]).toEqual(["2026-10-19", "2026-10-20"]);
+    const passport = adult().documents?.[0];
+    if (passport === undefined) {
+      throw new Error("the adult has a document");
+    }
+
+    // Today somewhere on Earth: accepted (an infant born today, a passport issued today).
+    expect(
+      travelerErrors(
+        [
+          adult({ documents: [{ ...passport, issuanceDate: "2026-10-20" }] }),
+          { travelerId: "2", dateOfBirth: "2026-10-20" },
+        ],
+        late,
+      ),
+    ).toEqual([]);
+    // The day after: tomorrow everywhere, so in the future.
+    expect(
+      travelerErrors(
+        [
+          adult({ documents: [{ ...passport, issuanceDate: "2026-10-21" }] }),
+          { travelerId: "2", dateOfBirth: "2026-10-21" },
+        ],
+        late,
+      ).map((error) => [error.path, error.code, error.message]),
+    ).toEqual([
+      ["/travelers/0/documents/0/issuanceDate", "INVALID_FORMAT", "The issue date cannot be in the future."],
+      [
+        "/travelers/1/dateOfBirth",
+        "AGE_MISMATCH_TRAVELER_TYPE",
+        "The date of birth cannot be in the future.",
+      ],
+    ]);
+    // A document that expired yesterday in UTC is still expired, whatever the date in UTC+14 (KI-025 leaves expiry
+    // checks as they were).
+    expect(
+      codes(travelerErrors([adult({ documents: [{ ...passport, expiryDate: "2026-10-18" }] })], late)),
+    ).toEqual([["/travelers/0/documents/0/expiryDate", "DOCUMENT_EXPIRED"]]);
   });
 
   it("refuses expired documents, documents that expire before the last flight and identity cards abroad [OBE-036 AC1]", () => {
