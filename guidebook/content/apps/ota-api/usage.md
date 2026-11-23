@@ -67,10 +67,11 @@ Development connection strings (from `.env.example`, development only): `psql
 postgres://velexis_ota_app:dev_ota@127.0.0.1:5432/velexis` (DML on `tenant_*`), `redis-cli -a dev_redis`. Feature
 switches that matter: `AIRLINE_CARD_ENABLED=true` in `.env.example`; Stripe needs your own **test** keys in
 `ota/backend/.env.local` (`STRIPE_SECRET_KEY_TEST`, `STRIPE_PUBLISHABLE_KEY_TEST`, `STRIPE_WEBHOOK_SECRET_VELEXIS_TEST`)
-and `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test`. The card method is hidden only when the
-two key variables are **empty or absent**: the dummies copied from `.env.example` (`sk_test_replace_me`,
-`pk_test_replace_me`) pass the start-up check, so `storefront.get` lists `card` and `checkout.createPayment` then fails
-at Stripe (`502 PAYMENT_PROVIDER_ERROR`).
+and `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test`. The card method is hidden while the
+two key variables are empty, absent or a dummy that ends in `_replace_me`: the dummies copied from `.env.example`
+(`sk_test_replace_me`, `pk_test_replace_me`, `whsec_replace_me`) count as unset (`isStripePlaceholder`,
+`repo:ota/backend/src/config.ts`), so `storefront.get` lists no `card` and `checkout.createPayment` answers
+`424 PAYMENT_PROVIDER_NOT_CONFIGURED` without calling Stripe.
 
 ```note
 The stub picks a scenario per request from the header `X-Stub-Scenario` (`success`, `sold-out`, `price-changed`,
@@ -107,7 +108,7 @@ details only in console scope. Every answer carries `X-Request-Id` ([[request-id
 | `POST /v1/auth/sign-out` (`scope: current\|all`), `GET /v1/auth/session` | Sign out everywhere, then refresh elsewhere | `204`; other sessions fail on refresh |
 | `POST /v1/auth/password-resets`, `/confirm`, `POST /v1/auth/password/change` | Unknown address; reuse the reset link | Always `202`; `auth.password_reset` e-mail; confirm revokes every session; second use `400 PASSWORD_RESET_TOKEN_INVALID`; change needs the current password (`422 CURRENT_PASSWORD_INCORRECT`) |
 | `GET/PATCH /v1/account` | Change e-mail (needs `currentPassword`); wrong password; stale `If-Match` | New address becomes `pendingEmail` until its `auth.verify_email` link is used (sign-in keeps the old one); `account.email_changed` notice to the **current** address; `422 CURRENT_PASSWORD_INCORRECT`; `412 PRECONDITION_FAILED` |
-| `POST /v1/account/deletion` | Delete, then use the old access token; delete with a booking that still waits for payment, tickets or a refund; `exportData: true` | `202` with `erasureDueBy` (+30 days); `account.deleted` e-mail; old token `401` (Redis `t:<tenantId>:<env>:cust:<id>` = `0`); [[customer-erasure]] 30 days later; `409 ACCOUNT_DELETION_BLOCKED` with `details.bookingIds`; `403 FEATURE_DISABLED` (`dataExports`) |
+| `POST /v1/account/deletion` | Delete, then use the old access token; delete with a booking that still waits for payment, tickets or a refund; `exportData: true` | `202` with `erasureDueBy` (+30 days); `account.deleted` e-mail; old token `401` (Redis `t:<tenantId>:<env>:cust:<id>` = `0`); [[customer-erasure]] 30 days later; `409 ACCOUNT_DELETION_BLOCKED` with `details.bookingIds`; `403 FEATURE_DISABLED` (`dataExports`); a `comment` that holds a card number answers `400 VALIDATION_FAILED` (`card_data` at `/comment`) before the idempotency key is claimed, and nothing changes |
 
 ### Shopping — `repo:ota/backend/src/shopping`
 
@@ -164,14 +165,14 @@ seq-search-price
 | `POST …/issuance` | `bookings:issue` | Captures first, then issues; `allowUnpaid` owner/admin only; airline card only with `other` CASH/ACCOUNT; `409 BOOKING_NOT_MODIFIABLE` (`cancellation_pending`) |
 | `POST …/cancellation` | `bookings:cancel` | Release/void only; refund `none`/`full`/`amount`; a waiting customer request → `409` (`pending`) |
 | `POST …/review-closure` | `bookings:cancel` | Closes a [[reconcile-outcome]] `manual_review`: order found (record locator must carry the [[velexis-remark]]) or not booked |
-| `POST …/resync`, `POST …/notes` | `bookings:write` | Flight Order Management GET (`429` within 10 s of the last refresh); note = `booking_events` row `staff.note`, staff-only unless `visibleToCustomer`; a text that holds a card number is refused (`400 VALIDATION_FAILED`, `card_data` at `/text`). Finance cannot add notes (`403`), although the contract's description says it may |
+| `POST …/resync`, `POST …/notes` | `bookings:write` | Flight Order Management GET (`429` within 10 s of the last refresh); note = `booking_events` row `staff.note`, staff-only unless `visibleToCustomer`; a text that holds a card number is refused (`400 VALIDATION_FAILED`, `card_data` at `/text`). Finance cannot add notes (`403`): the permission is `bookings:write`, as the contract's description says |
 | `GET /v1/console/bookings/by-record-locator`, `POST …/imports`, `GET …/{id}/amadeus-order` | `bookings:read` / `bookings:write` | [[pnr-import]] with [[office-isolation]] (`403 OFFICE_NOT_ALLOWED`, `409 ORDER_ALREADY_IMPORTED`); verbatim order (audited `order.retrieve`) |
 
 ### Console queues, customers, supplier log, raw Amadeus — `repo:ota/backend/src/console`
 
 | Endpoint | Permission | Should happen |
 |---|---|---|
-| `GET /v1/console/queues/{queueId}`, `GET /v1/console/queue-snapshots` | `queues:read` | Queue List of the tenant's office, stored as a [[queue-snapshot]], each PNR linked to its booking or shown as orphan; the [[queue-poller]] adds snapshots every 15 min |
+| `GET /v1/console/queues/{queueId}`, `GET /v1/console/queue-snapshots` | `queues:read` | Queue List of the tenant's office, stored as a [[queue-snapshot]], each PNR linked to its booking or shown as orphan; the [[queue-poller]] adds snapshots every 15 min; `latest=true` lists only the newest snapshot of each office, queue and category |
 | `GET /v1/console/customers`, `/{customerId}` | `customers:read` | Search by e-mail/name prefix; the detail is an audited read (`customer.view`) |
 | `GET /v1/console/supplier-requests` | `supplier_requests:read` | The [[supplier-request]] log (redacted bodies with `includeBodies`) |
 | `/v1/console/amadeus/**` (8 read operations) | `amadeus:read` | [[raw-amadeus]] answers with net prices; foreign offices `403 OFFICE_NOT_ALLOWED`; each call audited `amadeus.<operationId>`; the four raw writes are deferred (`501`) |
@@ -346,14 +347,6 @@ evening UTC with a non-UTC OTA and check `cancellationMode` and `voidDeadlineAt`
 ```
 
 ```bug-hunt
-**Traveller dates use the UTC day.** `checkout.setTravelers` compares the date of birth and the document issue date
-with "today" in UTC (`utcDate(now)`, `repo:ota/backend/src/checkout/checkout.service.ts#L358`), not the OTA's
-`storefront_settings.time_zone`. Between local midnight and UTC midnight in a zone ahead of UTC (e.g. Asia), a baby
-born today or a passport issued today is refused with `422 TRAVELER_DATA_INVALID` ("The date of birth cannot be in the
-future." / "The issue date cannot be in the future.").
-```
-
-```bug-hunt
 **Tenancy isolation.** With two OTAs, every id of one (booking, checkout, payment, document storage key, asset) must
 answer `404` through the other's key, cookie or staff token; console lists must never mix `test` and `live`
 (`environment` column). Platform rows are never written by the OTA API (only `dev:seed` as migrator).
@@ -376,7 +369,7 @@ tenant table, Redis key, BullMQ job or log line; `payments` keeps `card_brand`, 
 
 ```note
 **Card numbers in free text are refused.** Every console note, reason, remark and tag, a markup rule's notes for staff,
-and the customer's cancellation comment, special requests and emergency-contact texts answer `400 VALIDATION_FAILED`
+and the customer's cancellation comment, account deletion comment, special requests and emergency-contact texts answer `400 VALIDATION_FAILED`
 with `card_data` at their pointer ("A note never holds a card number: remove it.", or "A reason …" / "A remark …" /
 "A comment …" / "An emergency contact's text …" / "A tag …") when it holds a card number (12 to 19 digits, grouped
 by single spaces or dashes or not, that start with 2 to 6 and pass the Luhn check), before the idempotency key is claimed and before anything is stored or sent to Amadeus; the audit keeps one
@@ -422,8 +415,7 @@ bookings and searches stay readable.
 | `403 TENANT_SUSPENDED` everywhere | Tenant not `active` (still `provisioning`, or suspended) | Check `platform.tenants.status`; rerun the OTA `dev:seed`; resume in the platform admin |
 | Searches answer `424 SUPPLIER_NOT_CONFIGURED` | No active Amadeus connection, or credentials refused (`amadeus:badcred:<credId>` for 5 min) | Start the stub (`pnpm stub:amadeus`); `node dist/cli.js amadeus:ping --tenant demo --env test` |
 | `503 SERVICE_UNAVAILABLE` on searches, sign-in, console | Redis down (limits and Amadeus buckets cannot be counted) | Start Redis with the `dev_redis` password |
-| Card method missing on the storefront | No Stripe test keys, or `424 PAYMENT_PROVIDER_NOT_CONFIGURED` | Set the three `STRIPE_*_TEST` variables and restart both processes |
-| Card method offered but paying fails with `502 PAYMENT_PROVIDER_ERROR` | The `replace_me` dummies of `.env.example` are still in `.env.local` | Put your own Stripe test keys there, or empty both key variables to hide the method |
+| Card method missing on the storefront | No Stripe test keys (empty, absent or the `_replace_me` dummies of `.env.example`), or `424 PAYMENT_PROVIDER_NOT_CONFIGURED` | Set the three `STRIPE_*_TEST` variables to your own test keys and restart both processes |
 | Airline card missing | `AIRLINE_CARD_ENABLED` false, switch `airline_card_enabled_test` off, or suspended after 20 declines (`t:…:ac:suspended`, 1 h) | See the airline-card flow; delete the suspension key locally |
 | No e-mails in Mailpit | Worker not running, or `SMTP_URL` wrong | Check port 4001 health; `notifications` rows `pending` with `last_error` |
 | Booking stays `pending` | Order outcome unknown, reconciler still looking (15 min) | Watch `reconcile_attempts`; `reconcile_outcome = manual_review` → close the review in the console |

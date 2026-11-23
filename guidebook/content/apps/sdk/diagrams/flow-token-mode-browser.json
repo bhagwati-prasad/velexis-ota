@@ -41,7 +41,7 @@
       "title": "Try the refusals",
       "actor": "Owner",
       "body": "`await v.console.auth.me()`; `Velexis.createVelexisClient({ secretKey: \"sk_test_x\" })`; `await v.checkout.completeWithAirlineCard({ … })`; from another origin (port 9999) `await v.storefront.get()`.",
-      "expect": "`PermissionError` `403 SCOPE_NOT_ALLOWED`; `TypeError` (secret key in a browser page, before any request); `403 SCOPE_NOT_ALLOWED` (`edge_only`); `403 ORIGIN_NOT_ALLOWED`, which the page cannot read without CORS (it surfaces as a `ConnectionError` `NETWORK_ERROR`, after two automatic retries of the GET)."
+      "expect": "`PermissionError` `403 SCOPE_NOT_ALLOWED`; `TypeError` (secret key in a browser page, before any request); `403 SCOPE_NOT_ALLOWED` (`edge_only`); `PermissionError` `403 ORIGIN_NOT_ALLOWED` after one request: the API opens that refusal to the page's origin so that the page can read it."
     }
   ]
 }

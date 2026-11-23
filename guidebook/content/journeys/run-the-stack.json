@@ -117,7 +117,7 @@
       "app": "storefront",
       "title": "Open the demo storefront and run a first search",
       "url": "http://localhost:5173",
-      "actions": "Start `pnpm --filter @velexis/ota-frontend dev`. On the home page search a one-way trip From `Madrid` (pick MAD) To `Paris` (pick PAR), a date about 40 days ahead, 1 adult, economy.",
+      "actions": "Start `pnpm --filter @velexis/ota-frontend dev`. On the home page search a one-way trip From `Madrid` (pick MAD) To `Paris` (pick PAR), a date about 40 days ahead, 1 adult, cabin left at \"No preference\" (the OTA's default cabin applies).",
       "expect": "The header shows \"Demo Travel\" and a \"Test mode\" note. The search moves to `/search.html?…&search=srch_…` and lists 5 flights (the stub's fixture) with prices in EUR. Searching destination `ZZZ` shows the empty state, not an error.",
       "data": "`SELECT id, status FROM tenant_demo.flight_searches ORDER BY created_at DESC LIMIT 1;` → `completed`. `SELECT operation, http_status FROM tenant_demo.supplier_requests ORDER BY created_at DESC LIMIT 3;` shows the Flight Offers Search call. Network tab: `/api/v1/storefront`, `POST /api/v1/flight-searches` and `/api/v1/flight-searches/srch_…/offers` answer 2xx with an `X-Request-Id` header.",
       "code": [

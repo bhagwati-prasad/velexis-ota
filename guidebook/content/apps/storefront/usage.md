@@ -63,7 +63,7 @@ expect: "Search flights" with Demo Travel in the header and the Test mode banner
 | Storefront (dev, HMR, no CSP) | `http://localhost:5173` | `pnpm --filter @velexis/ota-frontend dev`; the proxy sends `X-Velexis-Host: demo.ota.example.com` |
 | Storefront (production build) | `http://localhost:4173` | `pnpm --filter @velexis/ota-frontend build` then `… preview`; same proxy, the Caddyfile's headers and CSP |
 | Customer accounts | Create them on `/account/sign-up.html` | No customer is seeded; e-mails land in Mailpit `http://localhost:8025` |
-| Test cards (airline card, stub) | `4111 1111 1111 1111` accepted, `4000 0000 0000 0002` declined | Any future expiry, security code `123`, holder name of 2 to 64 ASCII letters, spaces, `.`, `'`, `-` |
+| Test cards (airline card, stub) | `4111 1111 1111 1111` accepted, `4000 0000 0000 0002` declined | Any future expiry up to 2099, security code `123`, holder name of 2 to 64 Latin letters A to Z, spaces, `.`, `'`, `-` (accents are removed before the check and the send: "José Müller" goes as "Jose Muller") |
 | Test cards (Stripe) | `4000 0027 6000 3184` (3-D Secure always) | Stripe test mode keys in `ota/backend/.env.local`, `bash tools/dev/stripe-listen.sh` |
 | Stub scenarios | Header `X-Stub-Scenario: sold-out` / `price-changed` / `server-error` / `timeout` / `ticketing-failed` | The OTA API forwards it to the stub outside production; set it with a header-editing browser extension on `/api/*` |
 | No offers | Destination `ZZZ` | The stub answers an empty search |
@@ -98,7 +98,7 @@ content pages, support contacts) and the [[page-state]]s of a failed `storefront
 | Suspend the OTA (platform admin) and reload | Full page "This travel site is temporarily unavailable", no Retry, `noindex`; an open tab shows it on its next page (cache dropped on any `403 TENANT_SUSPENDED`) | `repo:ota/frontend/src/lib/client.js` |
 | Set `STOREFRONT_DEV_HOST=nope.ota.example.com`, restart Vite, reload (the proxy names this host to the API whatever the browser used) | "This storefront does not exist" (`403 HOST_NOT_ALLOWED`) | `repo:ota/backend/src/tenancy/tenant-resolver.ts` |
 | Stop the OTA API, reload | "The service is not available right now. Nothing is lost…" with Retry; the dev proxy answers `503 SERVICE_UNAVAILABLE` with `Retry-After: 30` | `repo:ota/frontend/scripts/vite-plugins.js` |
-| Pick another [[display-currency]] in the header | Nothing reloads (WCAG 3.2.2); only the screen-reader live region says "Prices will be shown in {currency} from your next search" (nothing visible changes but the selector); the choice is stored in `localStorage` `vx.currency` and sent as `X-Currency` on later calls; prices change only with a new search (only `POST /v1/flight-searches` reads `X-Currency`) | `repo:ota/frontend/src/components/header.js`, `repo:ota/frontend/src/boot.js` |
+| Pick another [[display-currency]] in the header | Nothing reloads (WCAG 3.2.2); the screen-reader live region says "Prices will be shown in {currency} from your next search" once, and the same text shows as a small note below the header's end, in a place of no height so nothing moves, until the results page runs its next search or the page is left; the choice is stored in `localStorage` `vx.currency` and sent as `X-Currency` on later calls; prices change only with a new search (only `POST /v1/flight-searches` reads `X-Currency`) | `repo:ota/frontend/src/components/header.js`, `repo:ota/frontend/src/boot.js` |
 | Resize to 360 px | No sideways scroll; filters behind "Filters (n)"; below 1024 px the signed-in menu is one "Account" button | `repo:ota/frontend/src/lib/session.js` |
 
 ### Home `/`
@@ -112,13 +112,7 @@ The search form: trip type (one way, return, multi-city with 2 to 6 legs), From 
 | Leave a field empty, pick the same city twice, a past date, a return before departure, 2 infants with 1 adult, 10 seats | Focused error summary with links to the fields; no navigation |
 | Open `/?from=LHR&to=PAR&depart=<date>` | Fields pre-filled: "London Heathrow Airport (LHR)", "Paris (PAR)" |
 | Disable JavaScript | Plain form: 3-letter code inputs, number fields, no multi-city; after 5 s without the module the plain form appears by CSS |
-| Look at the cabin | Economy is preselected; the form always sends `cabin` |
-
-```bug-hunt
-**Default cabin ignored.** The OTA's default cabin (`storefront_settings.search_defaults`) applies on the server only
-to searches sent without a cabin, and this form always sends one (`repo:ota/frontend/src/components/search-form.js`,
-`SEARCH_DEFAULTS`). An owner who sets a default cabin sees no change on the hosted storefront.
-```
+| Look at the cabin | "No preference" is preselected and sends no `cabin`: a one-way or return search gets the OTA's default cabin (`storefront_settings.search_defaults.cabin`), and a multi-city search goes with no cabin restriction (the API applies no default cabin to ADVANCED searches); a chosen cabin is sent, and a cabin in the address (a deep link, Back, "Change search") preselects it |
 
 Code: `repo:ota/frontend/src/pages/index.js`, `repo:ota/frontend/src/components/search-form.js`,
 `repo:ota/frontend/src/components/location-combobox.js`, `repo:ota/frontend/partials/search-form.html`.
@@ -233,8 +227,8 @@ airline-card-states
 | Try | What should happen |
 |---|---|
 | Type six digits | Brand shown ("Visa card"), "Checking the airline's card fee…" (`PATCH /v1/payments/{id}` with brand + BIN only), then the review "Your final total" (brand, card fee, total); the button changes from **Review the total** to **Pay €…** |
-| `4111 1111 1111 1112` (bad check digit), past expiry, 2-digit code, accented holder name, then **Pay €…** | Focused summary "Check the card details" with links such as "Check the card number", "This card has expired", "Enter the security code: 3 digits, or 4 on an American Express card", "Enter the name as it is written on the card"; no completion request (only the earlier fee quote left the page), values kept |
-| Year `2100` (or any year above 2099) with an otherwise valid card | **Bug:** the page accepts it and sends the card; the API refuses it (`400 VALIDATION_FAILED`, contract maximum 2099), the page shows "Enter the expiry month (MM) and year (YYYY) of the card" and empties every input |
+| `4111 1111 1111 1112` (bad check digit), past expiry, 2-digit code, a holder name in another script (Мария) or with ß, Ø or Ł, then **Pay €…** | Focused summary "Check the card details" with links such as "Check the card number", "This card has expired", "Enter the security code: 3 digits, or 4 on an American Express card", "Type the name in Latin letters without accents (A to Z), as it is written on the card"; no completion request (only the earlier fee quote left the page), values kept |
+| Year `2100` (or any year above 2099) with an otherwise valid card | Refused at the expiry field before anything is sent ("Enter the expiry month (MM) and year (YYYY) of the card"; the contract's last year is 2099); the values stay in the inputs |
 | `4000 0000 0000 0002` three times | "The airline declined the card" twice (inputs emptied), then "Too many attempts" |
 | Leave the page with a card typed, press Back | Inputs empty |
 | Stub `server-error` on the completion | Confirmation in pending mode; the card is never sent again |

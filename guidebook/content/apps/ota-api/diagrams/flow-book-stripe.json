@@ -2,7 +2,7 @@
   "id": "flow-book-stripe",
   "type": "flow",
   "title": "Book as a guest with a Stripe card",
-  "caption": "Mirrors tools/e2e/specs/storefront/checkout-stripe.e2e.ts (nightly, needs Stripe test keys and stripe listen). Without STRIPE_SECRET_KEY_TEST / STRIPE_PUBLISHABLE_KEY_TEST the card method is not offered. The dummy values of .env.example (sk_test_replace_me, pk_test_replace_me) count as set: the card method is offered and creating the payment fails with 502 PAYMENT_PROVIDER_ERROR.",
+  "caption": "Mirrors tools/e2e/specs/storefront/checkout-stripe.e2e.ts (nightly, needs Stripe test keys and stripe listen). Without STRIPE_SECRET_KEY_TEST / STRIPE_PUBLISHABLE_KEY_TEST the card method is not offered. The dummy values of .env.example (sk_test_replace_me, pk_test_replace_me) count as unset too: the card method is not offered and creating a payment answers 424 PAYMENT_PROVIDER_NOT_CONFIGURED.",
   "steps": [
     {
       "title": "Forward Stripe events",

@@ -221,9 +221,10 @@ aide-baseline-states
   (`VELEXIS-EGRESS-DENY`); [[caddy-admin-socket]] instead of TCP 2019.
 - **Edge**: [[coraza-waf]] with [[owasp-core-rule-set]], HSTS, strict storefront CSP, `/internal/*` and private
   `/health/*` → 404, client copies of edge headers removed, [[log-query-filter]] on access, error and WAF logs.
-  The `(security_headers)` snippet sets `Referrer-Policy: strict-origin-when-cross-origin` only as a default
-  (`?Referrer-Policy`): an app's own policy reaches the browser (the portal's `no-referrer` on token pages and
-  `strict-origin` on the console hand-off, the platform admin's `same-origin`, the APIs' helmet values), and only
+  The `(security_headers)` and `(storefront_headers)` snippets set `Referrer-Policy: strict-origin-when-cross-origin`
+  only as a default (`?Referrer-Policy`): an app's own policy reaches the browser (the portal's `no-referrer` on token
+  pages and `strict-origin` on the console hand-off, the platform admin's `same-origin`, the APIs' helmet values, the
+  OTA API's own on a storefront's `/api/*`, helmet's `strict-origin-when-cross-origin` today), and only
   answers without one (Caddy's error pages, the maintenance page, the 404s, WAF refusals) get Caddy's value
   (`repo:deploy/caddy/Caddyfile#L147`).
 - **Integrity and audit**: [[aide]] daily, [[auditd]] watches (`velexis-keys`, `velexis-aide`, `caddy-config`,

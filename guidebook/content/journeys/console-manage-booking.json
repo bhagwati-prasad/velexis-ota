@@ -107,7 +107,7 @@
       "title": "Queues, shopping, supplier log and customers",
       "url": "http://localhost:3002/queues",
       "actions": "Open **Queues**, then **Open a queue** (number, category, office) and press **Read now from Amadeus**; **Shopping** (`/shopping`, a raw search with net prices); **Supplier log** (`/supplier-log`); **Customers** (`/customers`) and one customer.",
-      "expect": "`/queues` lists the stored reads (the poller's every 15 minutes and the staff's), newest 100 only. Opening a queue shows its last stored read without calling Amadeus; **Read now from Amadeus** reads and stores a snapshot; each PNR links its booking or shows \"No booking\" with **Import**. Shopping shows net prices only (console only). The supplier log lists calls with the request id and, on demand, redacted bodies. Viewing a customer is audited (the page says so).",
+      "expect": "`/queues` lists the newest stored read of each office, queue and category (the poller's every 15 minutes and the staff's), every queue read within the 30 days of retention (up to 1,000 queues). Opening a queue shows its last stored read without calling Amadeus; **Read now from Amadeus** reads and stores a snapshot; each PNR links its booking or shows \"No booking\" with **Import**. Shopping shows net prices only (console only). The supplier log lists calls with the request id and, on demand, redacted bodies. Viewing a customer is audited (the page says so).",
       "data": "`queue_snapshots` rows; `staff_actions` `customer.view` and `amadeus.<operation>` rows for audited reads.",
       "code": [
         "ota/backend/src/console/queues.service.ts",

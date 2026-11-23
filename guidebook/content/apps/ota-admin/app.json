@@ -175,7 +175,7 @@
     {
       "route": "/queues",
       "title": "Queues",
-      "purpose": "Newest 100 snapshots grouped by office, queue, category; open a queue",
+      "purpose": "The newest read of each office, queue and category (listSnapshots latest=true); open a queue",
       "code": "ota/admin/src/app/(console)/queues/page.tsx"
     },
     {

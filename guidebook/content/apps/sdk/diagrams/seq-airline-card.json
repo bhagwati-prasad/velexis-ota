@@ -51,7 +51,7 @@
     {
       "from": "ns",
       "to": "ns",
-      "label": "withoutCard(error): drop card-named fields from details/supplier, redact number, last 12 digits, CVC, holder name; drop a cause that holds any of them",
+      "label": "withoutCard(error): drop card-named fields from details/supplier, redact number, last 12 digits, CVC, holder name; drop a cause that holds any of them; replace an error that is not a VelexisError and holds any of them by a plain Error",
       "kind": "self"
     },
     {

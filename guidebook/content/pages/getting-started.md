@@ -183,10 +183,9 @@ OTA sends from its worker through `notifications`. No e-mail at all usually mean
 Needed for **card payments on the storefront** (Stripe.js, 3-D Secure) and for **Stripe Billing**. Use test mode only.
 
 1. Put your own Stripe **test** keys in `ota/backend/.env.local`: `STRIPE_SECRET_KEY_TEST=sk_test_…`,
-   `STRIPE_PUBLISHABLE_KEY_TEST=pk_test_…`. The committed `…_replace_me` dummies pass the format check, so the
-   storefront still offers card payment, but paying fails. Without real keys, empty both values: the card method then
-   disappears, and the only way to pay is the airline card, once it is switched on in the OTA admin's storefront
-   settings (it is off by default, also for the demo OTA).
+   `STRIPE_PUBLISHABLE_KEY_TEST=pk_test_…`. The committed `…_replace_me` dummies count as unset, as empty values do:
+   without real keys the storefront offers no card method, and the only way to pay is the airline card, once it is
+   switched on in the OTA admin's storefront settings (it is off by default, also for the demo OTA).
 2. `stripe login` once, then `bash tools/dev/stripe-listen.sh` (`repo:tools/dev/stripe-listen.sh`): one listener to
    `localhost:4000/webhooks/stripe/velexis/test` (OTA payments) and one to `localhost:3100/webhooks/stripe/billing`
    (platform billing). `--only ota` runs the first only.
@@ -261,7 +260,7 @@ credentials, MFA secrets, payout details) becomes undecryptable.
 | Storefront: "This travel site is temporarily unavailable" | The OTA is suspended (or `STOREFRONT_DEV_HOST` names an OTA that is not active) | Resume it in the platform admin; check the host |
 | Console link "expired or was already used" | The portal token is single use and lives 60 s | Press "Open console" again |
 | Cookies missing, endless redirects to sign-in | Mixed `localhost` / `127.0.0.1`, or Safari | Use `localhost` and Chromium or Firefox |
-| Card payment offered but fails on the storefront | The committed dummy Stripe keys (`sk_test_replace_me` passes validation) | Real test keys + Stripe CLI, or empty both keys and use the airline card |
+| No card payment on the storefront | No Stripe test keys: the committed `…_replace_me` dummies count as unset | Real test keys + Stripe CLI, or use the airline card |
 | `OOM command not allowed` from Redis | A cache key without TTL | `redis-cli --bigkeys`; every cache key needs a TTL (a bug) |
 | Port already in use | Another stack (for example an e2e run) holds 3000–4001 | Stop it; the e2e harness refuses to start on busy ports too |
 | Stale types after a contract or migration change | Generated files not rebuilt | `pnpm contracts:generate`, `pnpm db:codegen`, `pnpm build` |

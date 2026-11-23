@@ -46,7 +46,7 @@
       "title": "First call",
       "actor": "Developer",
       "body": "`curl -s -H 'X-Api-Key: pk_test_…' http://localhost:4000/v1/storefront | jq .brand`",
-      "expect": "The demo OTA's brand (\"Demo Travel\"), currencies, payment methods: `card` whenever both Stripe test variables are set, also to the `replace_me` dummies copied from `.env.example` (remove them to hide the method); `airline_card` only for the storefront edge, with `AIRLINE_CARD_ENABLED=true` and the storefront switch on (never through a `pk_` key)."
+      "expect": "The demo OTA's brand (\"Demo Travel\"), currencies, payment methods: `card` only when both Stripe test variables hold real test keys (the `_replace_me` dummies copied from `.env.example` count as unset); `airline_card` only for the storefront edge, with `AIRLINE_CARD_ENABLED=true` and the storefront switch on (never through a `pk_` key)."
     },
     {
       "title": "Optional: the storefront in a browser",

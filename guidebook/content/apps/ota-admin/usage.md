@@ -165,7 +165,7 @@ Booking actions (`repo:ota/admin/src/app/(console)/bookings/[bookingId]/actions.
 
 | Route | What it shows | Try | Should happen |
 |---|---|---|---|
-| `/queues` | Only the newest 100 [[queue-snapshot]]s, grouped by office, queue and category (columns Queue, Office, Category, Last read, Read by, PNRs, Monitored "Yes, by the scheduled poller") | **Open a queue** with queue 100 or category 255 | Refused at the field ("Enter a queue number from 0 to 99.", "Enter a category from 0 to 254."); no call |
+| `/queues` | The newest [[queue-snapshot]] of each office, queue and category (`latest=true`, up to 1,000 queues; columns Queue, Office, Category, Last read, Read by, PNRs, Monitored "Yes, by the scheduled poller") | **Open a queue** with queue 100 or category 255 | Refused at the field ("Enter a queue number from 0 to 99.", "Enter a category from 0 to 254."); no call |
 | `/queues/[queueId]` | The last stored read with its PNRs (no Amadeus call); **Read now from Amadeus** (a GET form to `?read=1`) stores a new snapshot; **Next page** pages the snapshot; **Earlier reads** (the newest 10) | An orphan PNR (no booking); reload the `?read=1` URL | "No booking" + **Import** → `/pnr?recordLocator=…`. A reload of `?read=1` reads Amadeus and stores a snapshot again |
 
 ### Shopping on behalf `/shopping`
@@ -505,9 +505,7 @@ finds no such row.
 - Lookup of another OTA's order: no traveller or office leaks, a `denied` staff action, no `bookings` row.
 - Import twice in parallel: one booking, the other answer `409 ORDER_ALREADY_IMPORTED` with a link.
 - `queue_snapshots` grows by one per **Read now from Amadeus** (and per reload of a `?read=1` URL), none for opening the stored view or paging.
-- `/queues` is built from the newest 100 snapshots only. With many monitored queues (the poller reads each every 15 minutes, up to 20 per connection) a queue staff read an hour or two ago drops off the list although its snapshots exist; open it again with **Open a queue**.
 - A shopping search that times out reaches Amadeus once: `supplier_requests` has one row per click.
-- `/shopping` looks for the default markup rule in at most 5 pages of 100 rules in priority order: with more than 500 rules before it, the tile says "This OTA has no default markup rule." (prices are not affected).
 ```
 
 ```bug-hunt

@@ -176,11 +176,12 @@ A forbidden action looks like this from the SDK: the promise rejects with `Permi
 **Option validation.** `createVelexisClient({ publishableKey: "sk_test_x" })`, `{ timeoutMs: 0 }`, `{ currency: "eur" }`,
 `{ baseUrl: "//evil.example.com" }`, `{ baseUrl: "https://u:p@api.ota.example.com" }`, an unknown option, two keys:
 each must throw a `TypeError` whose message names the option and **never** contains its value. Per call:
-`{ idempotencyKey: "short" }` (needs 16–128 visible ASCII). A client with **no key at all** is accepted (token mode)
-and every call is then refused by the API (`401`): note it if you think it should be refused at construction.
-Two gaps to confirm: an `Idempotency-Key` passed in `options.headers` skips the 16–128 check (`{ headers:
-{ "Idempotency-Key": "short" } }` goes out and the API refuses it), and `client.request("GET", "/../v1/storefront")`
-is accepted although method params refuse `.` and `..` (with `baseUrl: "/api"` the browser resolves it outside `/api`).
+`{ idempotencyKey: "short" }` (needs 16–128 visible ASCII). A client with **no key at all** is accepted (token mode,
+no `X-Api-Key`) and every call is refused by the API with `401 INVALID_API_KEY`, as README §4 documents; it is not
+refused at construction. An `Idempotency-Key` in `options.headers` or the client's `headers` (any letter case) meets
+the same 16–128 check (`{ headers: { "Idempotency-Key": "short" } }` is a `TypeError` before any request), and
+`client.request("GET", "/../v1/storefront")`, also `/%2e%2e/…`, is a `TypeError` like a method param of `.` or `..`;
+`/v1/files/a.b` and dots in the query still pass.
 ```
 
 ```bug-hunt
@@ -195,8 +196,9 @@ ORDER BY created_at DESC LIMIT 5;` (one row per key, `completed` after success).
 **Retries and timeouts.** Only GET / PUT / DELETE, calls with an `Idempotency-Key` and `x-idempotent-by-design` POSTs
 are retried, at most `maxRetries` (2) times, on 429, 503, 504 and network errors; a PATCH is never retried. Use the stub's
 `X-Stub-Scenario: server-error` / `rate-limited` / `timeout` (non-production only) through `options.headers` and check
-the attempts in `onResponse`. A `Retry-After` above 30 s ends the call at once. A custom `fetch` that throws (a programming error) is reported as
-`ConnectionError NETWORK_ERROR` and retried like a network failure. `flights.search` / `upsell` / `price`
+the attempts in `onResponse`. A `Retry-After` above 30 s ends the call at once. A custom `fetch` that throws synchronously (a programming
+error) has its error rethrown as it is, at once, never retried; a `fetch` that rejects is a
+`ConnectionError NETWORK_ERROR`, retried like a network failure. `flights.search` / `upsell` / `price`
 and the long console actions time out at 60 s, `checkout.complete*` at 90 s, everything else at 30 s.
 ```
 
@@ -275,8 +277,8 @@ tenant_demo.notifications ORDER BY created_at DESC LIMIT 5;`.
 | `TypeError: Velexis SDK: session "cookie" needs a browser page (document)` | Cookie mode in Node.js or a worker | Use a key (token or server mode) outside a page |
 | `TypeError: … "secretKey" belongs on servers only` | `secretKey` in a page (or a test environment with `document`, such as happy-dom) | Move the call to server code; in tests use the Node environment |
 | `TypeError: … this runtime has no global fetch` | Old runtime | Pass `fetch` or run Node.js 22.12+ / 24 |
-| Every call `401 INVALID_API_KEY` | Wrong, revoked or expired key; key of another environment | `SELECT prefix, revoked_at, expires_at FROM platform.api_keys WHERE prefix = '<first 14 chars>';` |
-| Browser shows a CORS error / `ConnectionError NETWORK_ERROR` | Page origin not in the publishable key's `allowed_origins` (`403 ORIGIN_NOT_ALLOWED` unreadable without CORS) | Add the origin in the portal (API keys) |
+| Every call `401 INVALID_API_KEY` | Wrong, revoked or expired key; key of another environment; no key at all, or a `hostingKey` (README §4) | `SELECT prefix, revoked_at, expires_at FROM platform.api_keys WHERE prefix = '<first 14 chars>';` |
+| `PermissionError 403 ORIGIN_NOT_ALLOWED` in a browser page | Page origin not in the publishable key's `allowed_origins` (the API opens this refusal to the page's origin, so the SDK reads it after one request) | Add the origin in the portal (API keys) |
 | `403 SCOPE_NOT_ALLOWED` on `console.*` | `pk_` key, or `sk_` scoped `storefront` | Use a `console:automation` key or the OTA admin |
 | `ServerError 501 NOT_IMPLEMENTED` | A [[deferred-operation]] | Expected in the MVP; `details.milestone = "deferred"` |
 | Smoke run stops at once | API not reachable on `OTA_API_URL` within 3 s, or a missing `SDK_SMOKE_*` | Start `pnpm --filter @velexis/ota-backend dev`; set the three keys |

@@ -9,7 +9,7 @@
       "id": "validated",
       "label": "options and params validated",
       "kind": "normal",
-      "detail": "Unknown or invalid option, missing path param, `.`/`..` path param, missing `ifMatch`, cookie-mode token → `TypeError` before any request."
+      "detail": "Unknown or invalid option (an `Idempotency-Key` header outside 16–128 visible ASCII included), missing path param, `.`/`..` path param or `request()` path segment, missing `ifMatch`, cookie-mode token → `TypeError` before any request."
     },
     {
       "id": "csrf",
@@ -46,7 +46,7 @@
       "id": "connerror",
       "label": "rejected: ConnectionError",
       "kind": "error",
-      "detail": "`NETWORK_ERROR` (after retries), `TIMEOUT` (never retried), `ABORTED` (never retried); status 0."
+      "detail": "`NETWORK_ERROR` (a rejected `fetch`, after retries), `TIMEOUT` (never retried), `ABORTED` (never retried); status 0. A custom `fetch` that throws synchronously is no ConnectionError: its error is rethrown as it is, at once."
     },
     { "id": "typeerror", "label": "rejected: TypeError", "kind": "error" }
   ],

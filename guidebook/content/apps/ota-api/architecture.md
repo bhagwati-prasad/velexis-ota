@@ -248,8 +248,10 @@ platform-api/tenant-states
 - **Callers** (`repo:ota/backend/src/tenancy/caller-resolver.ts`, `repo:ota/backend/src/common/auth`): the
   [[edge-secret]] and the [[service-key]] are compared in constant time before any lookup; the service key is accepted
   only on a direct loopback connection without `X-Forwarded-For`; a request with both an edge header and an API key
-  is refused; [[publishable-key]]s answer CORS only for their allowed origins; [[key-scope]]s decide customer vs
-  console scope.
+  is refused; [[publishable-key]]s answer CORS only for their allowed origins, except their `403 ORIGIN_NOT_ALLOWED`,
+  which is opened to the refused origin so that a browser page can read it (`allowCorsRefusal` in
+  `repo:ota/backend/src/common/http/cors.ts`; an unknown, revoked or expired key's `401` stays closed); [[key-scope]]s
+  decide customer vs console scope.
 - **Tokens** (`repo:ota/backend/src/identity/token.service.ts`, `jwt-keys.ts`): EdDSA JWTs signed with the OTA's own
   Ed25519 key (`kid` = JWK thumbprint); customer access 15 min, refresh 12 h (30 days with remember me) rotating in
   `customer_sessions` with reuse detection ([[refresh-family]]); staff refresh families in Redis with four deny keys;
@@ -275,7 +277,7 @@ platform-api/tenant-states
 - **Audit**: one [[staff-action]] row per state-changing or refused console call and per audited read
   (`repo:ota/backend/src/console/staff-actions.writer.ts`). Every free-text field the OTA stores or forwards (the
   console's notes, reasons, remarks, process and emergency-contact texts, tags and a markup rule's notes for staff; the
-  customer's cancellation comment, special requests and emergency-contact texts) refuses a card number in the request
+  customer's cancellation comment, account deletion comment, special requests and emergency-contact texts) refuses a card number in the request
   validation, before the idempotency key is claimed and before any booking write or supplier call (`400
   VALIDATION_FAILED`, field code `card_data`; `holdsCardNumber` of `@velexis/logger`,
   `repo:ota/backend/src/common/http/card-free-text.ts`); a console refusal's audit row holds the action and target only;
