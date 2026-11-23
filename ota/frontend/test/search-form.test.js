@@ -15,6 +15,7 @@ import { DEBOUNCE_MS } from "../src/components/location-combobox.js";
 import { checkPassengers, passengerSummary } from "../src/components/passenger-picker.js";
 import {
   MAX_LEGS,
+  SEARCH_DEFAULTS,
   formatLegs,
   mount,
   parseLegs,
@@ -256,8 +257,10 @@ describe("search form: without JavaScript", () => {
     field("#search-return").value = "2026-11-27";
 
     expect(searchUrl(plain)).toBe(
-      "/search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=1&children=0&infants=0&cabin=ECONOMY",
+      "/search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=1&children=0&infants=0",
     );
+    // The plain form's GET sends "No preference" as an empty `cabin=`, which the results page reads as no cabin.
+    expect(new FormData(plain).get("cabin")).toBe("");
     expect(form().querySelector("[data-trip-multi]")?.hasAttribute("hidden")).toBe(true);
     expect(tripRadio("multi").disabled).toBe(true);
     // The passenger inputs are plain number fields; the toggle and the steppers need JavaScript.
@@ -309,7 +312,7 @@ describe("search form: submit", () => {
     submit();
 
     expect(navigate).toHaveBeenCalledWith(
-      "/search.html?trip=oneway&from=LON&to=MIA&depart=2026-12-01&adults=1&children=0&infants=0&cabin=ECONOMY",
+      "/search.html?trip=oneway&from=LON&to=MIA&depart=2026-12-01&adults=1&children=0&infants=0",
     );
   });
 
@@ -351,7 +354,7 @@ describe("search form: submit", () => {
     submit();
 
     expect(navigate).toHaveBeenCalledWith(
-      "/search.html?trip=multi&legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25,MIA-PAR-2026-12-01&adults=1&children=0&infants=0&cabin=ECONOMY",
+      "/search.html?trip=multi&legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25,MIA-PAR-2026-12-01&adults=1&children=0&infants=0",
     );
   });
 
@@ -385,9 +388,78 @@ describe("search form: submit", () => {
       from: "PAR",
       adults: 1,
       infants: 0,
-      cabin: "ECONOMY",
+      cabin: null,
     });
     expect(readSearchQuery(new URLSearchParams("")).trip).toBe("return");
+  });
+});
+
+describe("search form: the cabin (KI-018)", () => {
+  it("[FIX-W70-STOREFRONT AC3] starts on No preference, which sends no cabin; a cabin the traveller chooses is sent", async () => {
+    const select = /** @type {HTMLSelectElement} */ (/** @type {unknown} */ (field("#search-cabin")));
+    expect(Array.from(select.options, (option) => [option.value, text(option)])).toEqual([
+      ["", "No preference"],
+      ["ECONOMY", "Economy"],
+      ["PREMIUM_ECONOMY", "Premium economy"],
+      ["BUSINESS", "Business"],
+      ["FIRST", "First"],
+    ]);
+    expect(select.value).toBe("");
+    // "No preference" is the preselected choice; no cabin is.
+    expect(Array.from(select.options, (option) => option.hasAttribute("selected"))).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(SEARCH_DEFAULTS.cabin).toBeNull();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { navigate } = mountForm();
+    await choose(field("#search-from"), "Paris");
+    await choose(field("#search-to"), "New York");
+    setDate(field("#search-depart"), "2026-11-20");
+    setDate(field("#search-return"), "2026-11-27");
+
+    submit();
+    expect(navigate).toHaveBeenLastCalledWith(
+      "/search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=1&children=0&infants=0",
+    );
+    expect(
+      new URL(String(navigate.mock.lastCall?.[0]), "https://demo.ota.example.com").searchParams.has("cabin"),
+    ).toBe(false);
+
+    select.value = "ECONOMY";
+    submit();
+    expect(navigate).toHaveBeenLastCalledWith(
+      "/search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=1&children=0&infants=0&cabin=ECONOMY",
+    );
+  });
+
+  it("[FIX-W70-STOREFRONT AC3] a cabin in the address preselects it; no cabin, cabin= or an unknown one is No preference", async () => {
+    for (const [query, value] of /** @type {Array<[string, string]>} */ ([
+      ["from=LHR&to=PAR&depart=2026-11-20&cabin=BUSINESS", "BUSINESS"],
+      ["from=LHR&to=PAR&depart=2026-11-20&cabin=ECONOMY", "ECONOMY"],
+      ["from=LHR&to=PAR&depart=2026-11-20&cabin=", ""],
+      ["from=LHR&to=PAR&depart=2026-11-20&cabin=LUXURY", ""],
+      ["from=LHR&to=PAR&depart=2026-11-20", ""],
+    ])) {
+      document.body.replaceChildren(
+        ...Array.from(homePage.body.childNodes, (node) => document.importNode(node, true)),
+      );
+      const { view, navigate } = mountForm(query);
+      await settle();
+      expect(field("#search-cabin").value, query).toBe(value);
+      submit();
+      const sent = new URL(String(navigate.mock.lastCall?.[0]), "https://demo.ota.example.com").searchParams;
+      // What the address said round-trips: a cabin as itself, no cabin as no parameter.
+      expect(sent.get("cabin"), query).toBe(value === "" ? null : value);
+      view.destroy();
+    }
+    expect(readSearchQuery(new URLSearchParams("from=LHR&cabin=BUSINESS")).cabin).toBe("BUSINESS");
+    expect(readSearchQuery(new URLSearchParams("from=LHR&cabin=")).cabin).toBeNull();
+    expect(readSearchQuery(new URLSearchParams("from=LHR")).cabin).toBeNull();
   });
 });
 
@@ -552,7 +624,7 @@ describe("search form: pre-filled from the address", () => {
 
     submit();
     expect(navigate).toHaveBeenCalledWith(
-      "/search.html?trip=multi&legs=MIA-LHR-2026-11-20,LHR-MIA-2026-11-28&adults=1&children=0&infants=0&cabin=ECONOMY",
+      "/search.html?trip=multi&legs=MIA-LHR-2026-11-20,LHR-MIA-2026-11-28&adults=1&children=0&infants=0",
     );
   });
 });

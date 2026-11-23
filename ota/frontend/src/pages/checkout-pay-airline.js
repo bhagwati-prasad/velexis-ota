@@ -71,6 +71,12 @@ const PRICED_OFFER_ID = /^prc_[0-9A-Za-z]{16,40}$/;
 const DECIMAL = /^-?\d+(?:\.\d+)?$/;
 /** The holder name as the API takes it: 2 to 64 letters, spaces, `.`, `'` and `-`. */
 const HOLDER = /^[A-Za-z .'-]{2,64}$/;
+/** A character the holder name may not hold: anything but Latin letters A to Z, spaces, `.`, `'` and `-`. */
+const NOT_HOLDER_CHARACTER = /[^A-Za-z .'-]/;
+/** The combining marks (accents) that NFD splits off their letters. */
+const COMBINING_MARKS = /\p{M}/gu;
+/** The latest expiry year the API takes (the contract's maximum of `expiryYear`). */
+const MAX_EXPIRY_YEAR = 2099;
 /** `checkout.completeWithAirlineCard` waits up to 90 s (the airline books and charges in one call). */
 export const COMPLETION_TIMEOUT_MS = 90_000;
 /** Payment statuses that take a card: awaiting one, or declined (the same payment takes the next card). */
@@ -124,6 +130,7 @@ export const TEXT = Object.freeze({
   booked: "Your booking is confirmed. Opening your confirmation…",
   heldUntil: "We hold this price until {time}.",
   errorHolder: "Enter the name as it is written on the card",
+  errorHolderLatin: "Type the name in Latin letters without accents (A to Z), as it is written on the card",
   errorNumber: "Check the card number",
   errorExpiry: "Enter the expiry month (MM) and year (YYYY) of the card",
   errorExpired: "This card has expired",
@@ -164,6 +171,17 @@ export const TEXT = Object.freeze({
  */
 const format = (text, params = {}) =>
   text.replace(/\{(\w+)\}/g, (match, key) => (Object.hasOwn(params, key) ? String(params[key]) : match));
+
+/**
+ * The holder name as the page checks and sends it (KI-019, lead decision (39o)): spaces trimmed and collapsed, and
+ * accents removed (NFD, then the combining marks stripped), so "José Müller" becomes "Jose Muller". Letters that do not
+ * decompose (ß, Æ, Ø, Œ, Ł, Đ, Þ, ı and the like) stay as typed and are refused with `TEXT.errorHolderLatin`: their
+ * spelling in Latin letters differs between conventions (Ø as O or OE, ß as SS or S), and the card shows the name in
+ * Latin letters to copy.
+ * @param {string} value
+ */
+export const holderNameOf = (value) =>
+  value.normalize("NFD").replace(COMBINING_MARKS, "").trim().replace(/\s+/g, " ");
 
 /**
  * Money as the API gives it (`{ amount: "412.30", currency: "EUR" }`), formatted with `Intl` from the decimal text.
@@ -962,7 +980,7 @@ export function start(context, env = {}) {
     const year = inputs.year.value.trim();
     return {
       brand: acceptedCardBrand(number.slice(0, BIN_LENGTH), cardBrands())?.amadeus ?? "",
-      holderName: inputs.holder.value.trim().replace(/\s+/g, " "),
+      holderName: holderNameOf(inputs.holder.value),
       number,
       expiryMonth: /^\d{1,2}$/.test(month) ? Number(month) : 0,
       expiryYear: /^\d{4}$/.test(year) ? Number(year) : /^\d{2}$/.test(year) ? 2000 + Number(year) : 0,
@@ -978,14 +996,22 @@ export function start(context, env = {}) {
     /** @type {Array<{ field: CardField, message: string }>} */
     const problems = [];
     if (!HOLDER.test(card.holderName)) {
-      problems.push({ field: "holder", message: TEXT.errorHolder });
+      // Letters the API never takes (a Cyrillic name, or ß, Ø, Ł, …) ask for Latin letters; a name too short or too long
+      // asks for the name on the card.
+      const message = NOT_HOLDER_CHARACTER.test(card.holderName) ? TEXT.errorHolderLatin : TEXT.errorHolder;
+      problems.push({ field: "holder", message });
     }
     if (!luhnValid(card.number)) {
       problems.push({ field: "number", message: TEXT.errorNumber });
     } else if (card.brand === "") {
       problems.push({ field: "number", message: brandMessage() });
     }
-    if (card.expiryMonth < 1 || card.expiryMonth > 12 || card.expiryYear < 2000) {
+    if (
+      card.expiryMonth < 1 ||
+      card.expiryMonth > 12 ||
+      card.expiryYear < 2000 ||
+      card.expiryYear > MAX_EXPIRY_YEAR
+    ) {
       problems.push({ field: "expiry", message: TEXT.errorExpiry });
     } else if (cardExpired(card.expiryMonth, card.expiryYear, now())) {
       problems.push({ field: "expiry", message: TEXT.errorExpired });
@@ -1063,6 +1089,10 @@ export function start(context, env = {}) {
     el.notice.replaceChildren();
     const card = readCard();
     const problems = cardProblems(card);
+    if (!problems.some((problem) => problem.field === "holder")) {
+      // The field shows the name as it is sent (accents removed, KI-019); a refused name stays as typed.
+      inputs.holder.value = card.holderName;
+    }
     if (problems.length > 0) {
       // Nothing was sent: the values stay in the inputs for the traveller to correct.
       showFieldErrors(problems);

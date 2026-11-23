@@ -280,12 +280,15 @@
 # `worker-src 'none'`: no script of the origin can register a service worker in front of the airline-card page
 # (OADR-0017 point 3). No storefront answer but that page's sends Cross-Origin-Opener-Policy: the OTA API's helmet
 # adds `same-origin` to every answer, so `-Cross-Origin-Opener-Policy` removes it from the proxied /api/* answers
-# (the airline-card page's own block sets it again, after this one).
+# (the airline-card page's own block sets it again, after this one). Referrer-Policy is a default (`?`), as in
+# security_headers: the OTA API's own value (helmet's) is kept on the proxied /api/* answers, and the storefront's
+# files and Caddy's own answers (404 page, WAF refusals, 503) get `strict-origin-when-cross-origin` (lead decision
+# (38j), FIX-W70-STOREFRONT; caddy-smoke.sh checks both cases).
 (storefront_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		Content-Security-Policy "default-src 'self'; script-src 'self' https://js.stripe.com https://*.js.stripe.com; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.stripe.com; frame-src https://js.stripe.com https://*.js.stripe.com https://hooks.stripe.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; worker-src 'none'"
-		Referrer-Policy "strict-origin-when-cross-origin"
+		?Referrer-Policy "strict-origin-when-cross-origin"
 		X-Content-Type-Options "nosniff"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 		-Cross-Origin-Opener-Policy

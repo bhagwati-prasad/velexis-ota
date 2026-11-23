@@ -22,6 +22,7 @@
 
 import { CURRENCY_CHANGE_EVENT, boot, renderState } from "../boot.js";
 import { todayIso } from "../components/date-range.js";
+import { clearCurrencyStatus } from "../components/header.js";
 import { filtersToQuery, hasFilters, mount as mountFilters, readFilters } from "../components/filters.js";
 import { airlineLabel } from "../components/itinerary.js";
 import { mount as mountLiveRegion } from "../components/live-region.js";
@@ -152,7 +153,8 @@ export function summaryFromQuery(query) {
 /**
  * The `flights.search` parameters of a trip (without `resultOptions`): SIMPLE mode for one-way and return trips,
  * ADVANCED mode with the Amadeus body for multi-city (one traveller entry per person, each infant on an adult's lap,
- * the cabin for most segments of every flight).
+ * a chosen cabin for most segments of every flight). Without a chosen cabin neither mode sends one: the API applies the
+ * OTA's default cabin to a SIMPLE search only (KI-018).
  * @param {TripSummary} summary
  * @returns {FlightSearchParams}
  */
@@ -891,6 +893,8 @@ export function start(context, env = {}) {
    */
   const runSearch = async (searchRequest, { focus = false } = {}) => {
     request = searchRequest;
+    // This search uses the currency chosen last: the header's note of a currency change has done its job (KI-020).
+    clearCurrencyStatus(doc);
     // Until the new search answers there is no search to list (a sort change waits for it).
     searchId = null;
     controller?.abort();

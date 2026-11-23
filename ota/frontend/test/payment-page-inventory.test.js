@@ -542,7 +542,8 @@ function caddyHeaders(caddyfile) {
     const headers = {};
     for (const raw of block.split("\n")) {
       const line = raw.trim();
-      const set = line.match(/^([A-Za-z0-9-]+)\s+"((?:[^"\\]|\\.)*)"$/);
+      // `?Name "value"` is a default, set when the answer has none: every storefront file has none, so it is theirs.
+      const set = line.match(/^\??([A-Za-z0-9-]+)\s+"((?:[^"\\]|\\.)*)"$/);
       const removed = line.match(/^-([A-Za-z0-9-]+)$/);
       if (set) {
         headers[set[1] ?? ""] = (set[2] ?? "").replace(/\\(.)/g, "$1");

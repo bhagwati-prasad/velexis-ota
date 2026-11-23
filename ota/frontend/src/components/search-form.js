@@ -3,8 +3,8 @@
 // without JavaScript; mount() enhances it and, on submit, checks it and goes to the results page with the query
 // string the form itself would send:
 //
-//   /search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=2&children=0&infants=0&cabin=ECONOMY
-//   /search.html?trip=multi&legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25&adults=1&children=0&infants=0&cabin=ECONOMY
+//   /search.html?trip=return&from=PAR&to=NYC&depart=2026-11-20&return=2026-11-27&adults=2&children=0&infants=0
+//   /search.html?trip=multi&legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25&adults=1&children=0&infants=0&cabin=BUSINESS
 //
 // - The parameters are the form's own successful controls in document order (lib/url.js `withQuery`, lists with
 //   literal commas): hidden sections are disabled, so a one-way trip sends no `return` and a multi-city trip sends
@@ -15,9 +15,12 @@
 //   lib/forms.js (`aria-invalid`, messages, an error summary that receives focus).
 // - `readSearchQuery(params)` reads the same query back (the home page's address pre-fills the form; the results page
 //   runs the search from it). Pre-filled codes get their labels from `reference.airports.get`.
-// - Defaults: 1 adult, economy, return trip (`SEARCH_DEFAULTS`). `StorefrontConfig` publishes no search defaults, so
-//   these are the storefront's own; the OTA's default cabin (`storefront_settings.search_defaults`) applies on the
-//   server only to searches sent without a cabin, which this form never sends.
+// - Defaults: 1 adult, return trip, no cabin (`SEARCH_DEFAULTS`). The cabin select's first, preselected choice ("No
+//   preference", value "") sends no `cabin`, so for a one-way or return trip the OTA's default cabin
+//   (`storefront_settings.search_defaults.cabin`, which the server applies only to SIMPLE searches sent without one)
+//   decides; a multi-city trip (ADVANCED) without a cabin goes with no cabin restriction, since the server applies no
+//   default cabin there. A cabin the traveller chooses is sent (KI-018, lead decision (39n) of 2026-11-23,
+//   FIX-W70-STOREFRONT). `StorefrontConfig` publishes no search defaults.
 // - The page mounts the form once storefront.get has answered, after the first paint. Its enhanced shape is there from
 //   the first paint in a browser with JavaScript on (`@media (scripting: enabled)` in main.css, until the form is
 //   marked `data-enhanced`), so mounting it moves nothing below it (OFE-030); without JavaScript the plain form shows.
@@ -52,7 +55,7 @@ import { MAX_SEATS, PASSENGER_TYPES, mount as mountPassengers } from "./passenge
  * @property {number} adults
  * @property {number} children
  * @property {number} infants
- * @property {Cabin} cabin
+ * @property {Cabin | null} cabin `null`: no cabin chosen (the OTA's default cabin applies)
  */
 /** @typedef {"ECONOMY" | "PREMIUM_ECONOMY" | "BUSINESS" | "FIRST"} Cabin */
 /**
@@ -77,7 +80,8 @@ export const SEARCH_DEFAULTS = Object.freeze({
   adults: 1,
   children: 0,
   infants: 0,
-  cabin: /** @type {Cabin} */ ("ECONOMY"),
+  /** No cabin: the search goes without one, so the OTA's default cabin applies (KI-018). */
+  cabin: /** @type {Cabin | null} */ (null),
 });
 
 const IATA_CODE = /^[A-Z]{3}$/;
@@ -165,6 +169,7 @@ export function readSearchQuery(params) {
   } else if (query.from || query.to || query.depart) {
     trip = "oneway";
   }
+  // `cabin=` (the plain form's "No preference") and an unknown cabin are no cabin.
   const cabin = params.get("cabin");
   return {
     trip,
@@ -477,7 +482,7 @@ function enhance(
       passengers.open();
     }
     errors.push(...passengerErrors);
-    if (!CABINS.includes(/** @type {Cabin} */ (cabin.value))) {
+    if (cabin.value !== "" && !CABINS.includes(/** @type {Cabin} */ (cabin.value))) {
       errors.push({ path: "/cabin", code: "enum" });
     }
     return errors;
@@ -540,7 +545,7 @@ function enhance(
     Object.fromEntries(PASSENGER_TYPES.filter((type) => params.has(type)).map((type) => [type, query[type]])),
   );
   if (params.has("cabin")) {
-    cabin.value = query.cabin;
+    cabin.value = query.cabin ?? "";
   }
   for (const leg of query.legs) {
     addLeg({ from: { code: leg.from }, to: { code: leg.to }, date: leg.date });

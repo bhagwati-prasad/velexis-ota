@@ -584,6 +584,17 @@ describe("lookup page: the page", () => {
     expect($("[data-lookup-my-bookings]").hidden).toBe(true);
   });
 
+  it("[FIX-W70-STOREFRONT] the reference's hint shows a booking reference of the real format (VX and 6 characters, KI-027)", () => {
+    openLookup();
+    const hint = text($("#lookup-reference-hint"));
+    expect(hint).toContain("for example VX9M4TQ7.");
+    const example = /for example (\S+?)\./.exec(hint)?.[1] ?? "";
+    // The format every booking reference has (ota/backend/src/bookings/booking-reference.ts), which the page's own
+    // format check takes.
+    expect(example).toMatch(/^VX[A-HJ-NP-Z2-9]{6}$/);
+    expect(formatErrors(example, "Rossi")).toEqual([]);
+  });
+
   it("[OFE-016] start() does nothing on a page without the lookup area", () => {
     document.body.replaceChildren();
     expect(

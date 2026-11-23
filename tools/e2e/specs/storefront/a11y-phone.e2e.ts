@@ -28,7 +28,11 @@
 //      whole in the DOM, the accessibility tree and its title, the row not wrapping when the session answers, axe.
 //      From lg both hold the bar of lead decision (22e) of 2026-11-15 (OFE-032's own test since lead decision (23e)
 //      of 2026-11-15): when the session answers nothing moves up or down (the wider navigation moves along its line,
-//      as from lg before) and the session's whole shift stays at or below 0.01.
+//      as from lg before) and the session's whole shift stays at or below 0.01;
+//   7. (FIX-W70-STOREFRONT, KI-020) a currency change with the header at its fullest on home and results: the note
+//      "Prices will be shown in USD from your next search" shows under the header over main's top padding, covering
+//      no content and no link, nothing moves (no layout shift at all, the header and main where they were), the live
+//      region says the same text and the note is no live region, axe and no sideways scrolling with the note.
 //
 // What the stack cannot answer on demand is answered in the browser (`page.route`), and only that: the shared states
 // of `storefront.get` (the API's error envelope) and, for parts 3 and 6, storefront.get's own answer with the OTA's
@@ -1493,4 +1497,109 @@ test.describe("the search form's plain form when its module never mounts, on a p
     expect(await page.evaluate(formShape)).toEqual(PLAIN_SHAPE);
     await guards.checkA11y(page);
   });
+});
+
+/**
+ * Where the header's note of a currency change is (KI-020), against what it must not cover: the header's bottom, the
+ * top of main's content (main's top plus its top padding) and the header's links and controls.
+ */
+const currencyNoteGeometry = (page: Page) =>
+  page.evaluate(() => {
+    const note = document.querySelector("body > header [data-currency-status]");
+    const banner = document.querySelector("body > header");
+    const main = document.querySelector("main");
+    if (!(note instanceof HTMLElement) || banner === null || main === null) {
+      return null;
+    }
+    const box = note.getBoundingClientRect();
+    const mainBox = main.getBoundingClientRect();
+    const overlaps = (other: DOMRect) =>
+      box.left < other.right && other.left < box.right && box.top < other.bottom && other.top < box.bottom;
+    return {
+      top: box.top,
+      bottom: box.bottom,
+      left: box.left,
+      right: box.right,
+      headerBottom: banner.getBoundingClientRect().bottom,
+      contentTop: mainBox.top + parseFloat(getComputedStyle(main).paddingTop),
+      coversControl: Array.from(
+        document.querySelectorAll(
+          "body > header a, body > header button, body > header select, main a, main button, main input, main select, main summary",
+        ),
+      ).some((control) => control.getClientRects().length > 0 && overlaps(control.getBoundingClientRect())),
+      liveRegion: note.closest("[aria-live], [role]") !== null,
+    };
+  });
+
+test.describe("a currency change on a phone shows its note and moves nothing (FIX-W70-STOREFRONT)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  // A browser of its own for each page: the currency a test chooses is remembered (localStorage `vx.currency`), and
+  // the demo OTA sells only in EUR (the second currency is storefront.get's routed answer), so a later search in the
+  // chosen currency would be refused.
+  let browsing: Browsing;
+
+  test.beforeEach(async ({ browser }) => {
+    browsing = await openBrowsing(browser);
+    await withFullestHeader(browsing.context);
+    await watchShifts(browsing);
+  });
+
+  test.afterEach(async () => {
+    await browsing?.guards.finish(browsing.page);
+    await browsing?.context.close();
+  });
+
+  const results = new URLSearchParams({
+    trip: "oneway",
+    from: "MAD",
+    to: "PAR",
+    depart: departureDate(SEARCH_DAYS_AHEAD),
+    adults: "1",
+    children: "0",
+    infants: "0",
+  });
+  for (const target of [
+    { label: "home", path: "/", ready: searchForm },
+    {
+      label: "results",
+      path: `/search.html?${results.toString()}`,
+      ready: (page: Page) => page.getByRole("link", { name: /^Select this flight for / }).first(),
+    },
+  ]) {
+    test(`${target.label} at 360 px: the note shows over main's top padding, nothing moves, the live region says it [FIX-W70-STOREFRONT AC4]`, async () => {
+      const { page } = browsing;
+      await page.goto(target.path);
+      await expect(target.ready(page)).toBeVisible();
+      const parts = header(page);
+      await expect(parts.currency.locator("option")).toHaveCount(2);
+      const message = `Prices will be shown in ${SECOND_CURRENCY.code} from your next search`;
+      const note = page.locator("body > header [data-currency-status]");
+      await expect(note).toHaveCount(0);
+      const before = await headerGeometry(page);
+      // What the page recorded up to here (its load, the fonts) is not this check's.
+      await takeShifts(page);
+
+      await parts.currency.selectOption(SECOND_CURRENCY.code);
+
+      await expect(note).toBeVisible();
+      await expect(note).toHaveText(message);
+      await expect(page.locator("[data-live-region]")).toHaveText(message);
+      const shifts = await takeShifts(page);
+      expect(shifts, "no layout shift at all, input or not").toEqual([]);
+      expect(await headerGeometry(page), "the header and main where they were").toEqual(before);
+      const geometry = await currencyNoteGeometry(page);
+      expect(geometry, "the note").not.toBeNull();
+      expect(geometry?.liveRegion, "the note is no live region").toBe(false);
+      expect(geometry?.coversControl, "the note covers no link or control").toBe(false);
+      expect(geometry?.top ?? -1).toBeGreaterThanOrEqual((geometry?.headerBottom ?? 0) - 0.5);
+      expect(geometry?.bottom ?? Infinity, "within main's top padding").toBeLessThanOrEqual(
+        (geometry?.contentTop ?? 0) + 0.5,
+      );
+      expect(geometry?.left ?? -1).toBeGreaterThanOrEqual(0);
+      expect(geometry?.right ?? Infinity).toBeLessThanOrEqual(PHONE.viewport.width);
+      expect(await reflowsOnPhone(page), "no sideways scrolling with the note").toBe(true);
+      await browsing.guards.checkA11y(page);
+    });
+  }
 });

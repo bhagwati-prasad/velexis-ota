@@ -28,7 +28,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { BUDGETS, KB, PAGE_JS_BUDGETS, checkBudgets, passes } from "../scripts/check-budgets.mjs";
 import { STOREFRONT_HEADERS, includePartials } from "../scripts/vite-plugins.js";
-import { COMPLETION_TIMEOUT_MS, TEXT, airlineCardOffered, start } from "../src/pages/checkout-pay-airline.js";
+import {
+  COMPLETION_TIMEOUT_MS,
+  TEXT,
+  airlineCardOffered,
+  holderNameOf,
+  start,
+} from "../src/pages/checkout-pay-airline.js";
 import {
   NAVIGATION,
   REPO_ROOT,
@@ -744,6 +750,102 @@ describe("airline-card page: states of pages.md §9", () => {
     await submit();
     expect(text($("#card-expiry-error"))).toBe(TEXT.errorExpired);
     expect(field("holder").hasAttribute("aria-invalid")).toBe(false);
+    expect(page.client.checkout.completeWithAirlineCard).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W70-STOREFRONT AC1] an expiry year above 2099 is refused at the field before anything is sent; the values stay", async () => {
+    const page = await openPage();
+    await fillCard({ year: "2100" });
+    await submit();
+    expect(page.client.checkout.completeWithAirlineCard).not.toHaveBeenCalled();
+    expect(text($("#card-expiry-error"))).toBe(TEXT.errorExpiry);
+    expect(field("month").getAttribute("aria-invalid")).toBe("true");
+    expect(field("year").getAttribute("aria-invalid")).toBe("true");
+    expect(field("number").hasAttribute("aria-invalid")).toBe(false);
+    expect(document.activeElement).toBe($("[data-card-errors]"));
+    expect(cardInputs().map((input) => [input.getAttribute("data-card-input"), input.value])).toEqual([
+      ["holder", "Maria Rossi"],
+      ["number", VISA],
+      ["month", "12"],
+      ["year", "2100"],
+      ["csc", "123"],
+    ]);
+
+    // 2099, the contract's last year, goes.
+    type("year", "2099");
+    await submit();
+    expect(page.client.checkout.completeWithAirlineCard).toHaveBeenCalledTimes(1);
+    expect(page.client.checkout.completeWithAirlineCard.mock.calls[0]?.[0]?.card).toEqual(
+      sentCard({ expiryYear: 2099 }),
+    );
+  });
+
+  it("[FIX-W70-STOREFRONT AC2] holderNameOf removes accents and keeps letters that do not decompose", () => {
+    expect(holderNameOf("José Müller")).toBe("Jose Muller");
+    expect(holderNameOf("  Zoë   O'Brien-Núñez ")).toBe("Zoe O'Brien-Nunez");
+    expect(holderNameOf("ÅSA ÇELIK İLHAN")).toBe("ASA CELIK ILHAN");
+    expect(holderNameOf("Nguyễn Thị Ánh")).toBe("Nguyen Thi Anh");
+    // Composed and decomposed input give the same name.
+    expect(holderNameOf("Jose\u0301 Mu\u0308ller")).toBe("Jose Muller");
+    for (const name of [
+      "Øyvind Ødegård",
+      "Groß",
+      "Łukasz",
+      "Đorđe",
+      "Þóra",
+      "Æsa",
+      "Œuvre",
+      "Işık",
+      "Мария Иванова",
+    ]) {
+      expect(holderNameOf(name), name).toMatch(/[^A-Za-z .'-]/);
+    }
+  });
+
+  it("[FIX-W70-STOREFRONT AC2] an accented holder name goes without its accents, and the field shows the name sent", async () => {
+    /** @type {(value?: unknown) => void} */
+    let answer = () => {};
+    const fake = fakeApi({
+      updatePayment: () =>
+        new Promise((resolve) => {
+          answer = () => resolve(payment({ cardFee: eur("6.20"), amount: eur("418.50") }));
+        }),
+    });
+    const page = await openPage({ fake });
+    await fillCard({ holder: " José  Müller " });
+    await submit();
+    // No total yet: the review comes first, and the field already shows the name as it will be sent.
+    expect(page.client.checkout.completeWithAirlineCard).not.toHaveBeenCalled();
+    expect(field("holder").value).toBe("Jose Muller");
+    expect(field("holder").hasAttribute("aria-invalid")).toBe(false);
+    answer();
+    await settle();
+
+    await submit();
+    expect(page.client.checkout.completeWithAirlineCard).toHaveBeenCalledTimes(1);
+    expect(page.client.checkout.completeWithAirlineCard.mock.calls[0]?.[0]?.card).toEqual(
+      sentCard({ holderName: "Jose Muller" }),
+    );
+  });
+
+  it("[FIX-W70-STOREFRONT AC2] a name that still fails asks for Latin letters without accents; a short one for the name on the card", async () => {
+    const page = await openPage();
+    for (const holder of ["Мария Иванова", "Øyvind Ødegård", "Groß"]) {
+      await fillCard({ holder });
+      await submit();
+      expect(page.client.checkout.completeWithAirlineCard, holder).not.toHaveBeenCalled();
+      expect(text($("#card-holder-error")), holder).toBe(TEXT.errorHolderLatin);
+      expect(field("holder").getAttribute("aria-invalid"), holder).toBe("true");
+      expect(text($("[data-card-errors]")), holder).toContain(TEXT.errorHolderLatin);
+      // The typed name stays for the correction, and no message repeats it.
+      expect(field("holder").value, holder).toBe(holder);
+      expect(text($("[data-card-errors]")), holder).not.toContain(holder);
+    }
+    expect(TEXT.errorHolderLatin).toMatch(/Latin letters without accents/);
+
+    await fillCard({ holder: "M" });
+    await submit();
+    expect(text($("#card-holder-error"))).toBe(TEXT.errorHolder);
     expect(page.client.checkout.completeWithAirlineCard).not.toHaveBeenCalled();
   });
 

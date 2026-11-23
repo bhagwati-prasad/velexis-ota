@@ -68,6 +68,9 @@
 #     the APIs' no-referrer; echo-upstream.mjs sends the one a path /referrer-policy/<policy> names) reaches the client
 #     once and unchanged, with HSTS, X-Frame-Options DENY and no Server header still set, while an answer without one
 #     (an app's, Caddy's own 404, the maintenance page, the SERVICE_UNAVAILABLE envelope, a WAF refusal) gets
+#     strict-origin-when-cross-origin once; on the storefront too (lead decision (38j), each line ends with
+#     [FIX-W70-STOREFRONT AC6]): the OTA API's own policy on /api/* reaches the client once and unchanged, with the
+#     storefront's other headers, while the storefront's files, an API answer without one and its 404 page get
 #     strict-origin-when-cross-origin once;
 #   - with the upstream stopped, platform.localhost and both admin hosts serve the maintenance page with 503, and
 #     the API hosts (and the storefront /api) the JSON SERVICE_UNAVAILABLE envelope with the request id;
@@ -604,6 +607,35 @@ check "an unknown storefront path serves the storefront's 404.html" cmp -s "$BOD
 check "the storefront 404 page has the storefront CSP" csp_ok
 same "the storefront 404 page has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
 same "the storefront 404 page hides the Server header" "$(header_count Server)" 0
+
+# Lead decision (38j): the storefront's Referrer-Policy is a default (`?`) too, so the OTA API's own value reaches the
+# client on /api/* once and unchanged, while the storefront's files, an API answer without one and Caddy's own 404
+# page get strict-origin-when-cross-origin once.
+storefront_referrer_is() { # label policy -> the last response carries exactly one Referrer-Policy, and it is this one
+  same "$1 [FIX-W70-STOREFRONT AC6]" "$(header_count Referrer-Policy) $(header Referrer-Policy)" "1 $2"
+}
+fetch "$TENANT" /
+storefront_referrer_is "/ (a storefront page) gets the storefront's default Referrer-Policy" "$DEFAULT_REFERRER"
+fetch "$TENANT" /assets/a.js
+storefront_referrer_is "/assets/a.js (a storefront file) gets the storefront's default Referrer-Policy" "$DEFAULT_REFERRER"
+fetch "$TENANT" /no/such/page
+storefront_referrer_is "the storefront 404 page (Caddy's own answer) gets the storefront's default Referrer-Policy" \
+  "$DEFAULT_REFERRER"
+fetch "$TENANT" /api/x
+same "/api/x reaches the OTA API on 4000, which sends no Referrer-Policy for it [FIX-W70-STOREFRONT AC6]" \
+  "$STATUS $(json port)" "200 4000"
+storefront_referrer_is "/api/x (no Referrer-Policy from the OTA API) gets the storefront's default" "$DEFAULT_REFERRER"
+for policy in no-referrer same-origin; do
+  fetch "$TENANT" "/api/referrer-policy/$policy"
+  same "/api/referrer-policy/$policy reaches the OTA API as /referrer-policy/$policy [FIX-W70-STOREFRONT AC6]" \
+    "$STATUS $(json port) $(json url)" "200 4000 /referrer-policy/$policy"
+  storefront_referrer_is "/api/referrer-policy/$policy: the OTA API's own Referrer-Policy reaches the client unchanged" \
+    "$policy"
+  check "/api/referrer-policy/$policy: the storefront CSP still replaces the API's [FIX-W70-STOREFRONT AC6]" csp_ok
+  same "/api/referrer-policy/$policy: HSTS, nosniff and Permissions-Policy are still set, COOP and Server removed [FIX-W70-STOREFRONT AC6]" \
+    "$(header Strict-Transport-Security) | $(header X-Content-Type-Options) | $(header Permissions-Policy) | $(header_count Cross-Origin-Opener-Policy) $(header_count Server)" \
+    "max-age=31536000 | nosniff | camera=(), microphone=(), geolocation=() | 0 0"
+done
 
 # ---- 5b. the airline-card page (OFE-014, OADR-0017 point 3) ----------------------------------------------------
 step "Airline-card page on $TENANT: its own CSP, COOP same-origin and no-store; COOP same-origin nowhere else"

@@ -905,6 +905,21 @@ The links of the e-mails are opened as from web mail: the journey clicks them on
 
 `specs/portal-team.e2e.ts` follows the same way back since FIX-W69-SIGNUP: after the verification its invitee signs in to `/invitations/accept` instead of `/dashboard` (and still opens the link again before accepting, the way from another browser).
 
+## Tests of FIX-W70-STOREFRONT
+
+The search form's cabin and the visible note of a currency change (guidebook known issues KI-018 and KI-020, lead decision (39n) of 2026-11-23; [`ota/frontend/README.md`](../../ota/frontend/README.md) §7, [`ota/frontend/docs/pages.md`](../../ota/frontend/docs/pages.md) §3), in the `storefront` project with `E2E_WITH_OTA=1`:
+
+```bash
+pnpm --filter @velexis/ota-frontend build && \
+  E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/search-cabin.e2e.ts specs/storefront/a11y-phone.e2e.ts -g "FIX-W70-STOREFRONT"
+```
+
+| Step or acceptance criterion | Proof |
+|---|---|
+| Arrangement (`beforeAll`) | The demo OTA's default cabin, `storefront_settings.search_defaults.cabin = "BUSINESS"`, set with `tenantTx` as velexis_ota_app (a fixture: the OTA admin edits only `search_defaults.maxResults`), merged into the column and removed again in `afterAll`, every other key kept; flights.search reads the column per request, and the stub answers every search with the same offers whatever the cabin |
+| AC3: no cabin unless the traveller chooses one, and the OTA's default applies | [`specs/storefront/search-cabin.e2e.ts`](specs/storefront/search-cabin.e2e.ts): the home page's cabin starts on "No preference"; a one-way search from Madrid to Paris sent with it has no `cabin` in its address, and the Flight Offers Search call the OTA API made for it (`supplier_requests.path` of the search) carries `travelClass=BUSINESS`; "Change search" keeps "No preference". With Economy chosen the address and the call carry `ECONOMY`, and "Change search" and the home page opened from the address preselect it. Every page passes axe |
+| AC4: a currency change shows a visible status, nothing moves, the live region announces | [`specs/storefront/a11y-phone.e2e.ts`](specs/storefront/a11y-phone.e2e.ts) part 7, at 360 px with a long OTA name and two currencies (each page in a browser of its own, since the chosen currency is remembered): on home and results, choosing USD shows "Prices will be shown in USD from your next search" under the header, between the header's bottom and the top of main's content, covering no link or control and inside the viewport; no layout shift at all is recorded after the change and the header and main stay where they were; the live region says the same text and the note is no live region; axe and no sideways scrolling with the note. Run it a second time with a fontconfig without Inter (as for parts 5 and 6) |
+
 ## Troubleshooting
 
 | Problem | Cause | Fix |

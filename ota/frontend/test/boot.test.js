@@ -17,6 +17,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { htmlInputs, includePartials } from "../scripts/vite-plugins.js";
 import { CURRENCY_CHANGE_EVENT, CURRENCY_STORAGE_KEY, boot, renderState } from "../src/boot.js";
+import { clearCurrencyStatus } from "../src/components/header.js";
 import { mount as mountLiveRegion } from "../src/components/live-region.js";
 import { HEIGHT_PROPERTY, mount as mountTestBanner } from "../src/components/test-banner.js";
 import { NEUTRAL_PALETTE } from "../src/lib/theme.js";
@@ -667,6 +668,63 @@ describe("boot: theme, header, footer, banner and session", () => {
     expect(changes.length).toBe(1);
     expect(changes[0]?.detail.currency).toBe("CHF");
     expect(changes[0]?.detail.client.derivedWith).toEqual({ currency: "CHF" });
+  });
+
+  it("[FIX-W70-STOREFRONT AC4] a currency change shows its note under the header, in a place of no height, and the live region says it once", async () => {
+    const doc = openPage();
+    await boot({ client: fakeClient([CONFIG]), storage: null, preferences: memoryStorage(), doc });
+    const header = /** @type {HTMLElement} */ (doc.querySelector("body > header"));
+    const region = /** @type {HTMLElement} */ (doc.querySelector("[data-live-region]"));
+    const view = /** @type {typeof globalThis} */ (/** @type {unknown} */ (doc.defaultView));
+    // Before any change there is no note, and the header holds only its row.
+    expect(header.querySelector("[data-currency-status]")).toBeNull();
+    const children = header.children.length;
+    // Every text the live region says from now on.
+    /** @type {string[]} */
+    const said = [];
+    const observer = new view.MutationObserver(() => {
+      if (region.textContent !== "") {
+        said.push(region.textContent ?? "");
+      }
+    });
+    observer.observe(region, { childList: true, characterData: true, subtree: true });
+
+    const select = /** @type {HTMLSelectElement} */ (header.querySelector("select"));
+    select.value = "CHF";
+    select.dispatchEvent(new view.Event("change", { bubbles: true }));
+
+    const note = /** @type {HTMLElement} */ (header.querySelector("[data-currency-status]"));
+    expect(note.hidden).toBe(false);
+    expect(text(note)).toBe("Prices will be shown in CHF from your next search");
+    // A paragraph that is no live region (the live region speaks for it), floating in a place of no height that ends
+    // the header, so nothing on the page moves.
+    expect(note.tagName).toBe("P");
+    expect(note.closest("[aria-live], [role]")).toBeNull();
+    const place = /** @type {HTMLElement} */ (note.parentElement);
+    expect(place.parentElement).toBe(header);
+    expect(header.lastElementChild).toBe(place);
+    expect(header.children.length).toBe(children + 1);
+    expect(place.classList.contains("h-0")).toBe(true);
+    expect(place.classList.contains("relative")).toBe(true);
+    expect(note.classList.contains("absolute")).toBe(true);
+    // At most two 14 px lines and 2 px of padding: within the 32 px of every page's top padding.
+    expect(note.className).toMatch(/(^| )text-xs\/\[14px\]( |$)/);
+    expect(note.className).toMatch(/(^| )py-0\.5( |$)/);
+    expect(note.className).not.toMatch(/(^| )border( |$)/);
+
+    // The live region says it once, after its short delay.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(said).toEqual(["Prices will be shown in CHF from your next search"]);
+
+    // A second change rewrites the same note; the next search hides it.
+    select.value = "EUR";
+    select.dispatchEvent(new view.Event("change", { bubbles: true }));
+    expect(header.querySelectorAll("[data-currency-status]")).toHaveLength(1);
+    expect(text(note)).toBe("Prices will be shown in EUR from your next search");
+    clearCurrencyStatus(doc);
+    expect(note.hidden).toBe(true);
+    expect(note.textContent).toBe("");
+    observer.disconnect();
   });
 
   it("[OFE-003] ignores a remembered currency the storefront no longer offers, and a refusing storage", async () => {

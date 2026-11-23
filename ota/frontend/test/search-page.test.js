@@ -21,11 +21,13 @@ import {
   RESULTS_LIMIT,
   SEARCH_TIMEOUT_MS,
   nearbyDates,
+  searchHref,
   searchRequestFor,
   shiftDate,
   start,
   summaryFromQuery,
 } from "../src/pages/search.js";
+import { mount as mountHeader } from "../src/components/header.js";
 import { readSearchQuery } from "../src/components/search-form.js";
 import { STOREFRONT_ROOT } from "./helpers/storefront.js";
 
@@ -703,6 +705,50 @@ describe("results page: search and address", () => {
     );
   });
 
+  it("[FIX-W70-STOREFRONT AC3] a search without a cabin sends none, so the OTA's default cabin applies; its links keep none", async () => {
+    const query = QUERY.replace("&cabin=ECONOMY", "");
+    expect(query).not.toContain("cabin");
+    const { view, client } = open(query);
+    await view.done;
+    await settle();
+
+    expect(client.flights.search).toHaveBeenCalledTimes(1);
+    const [request] = client.flights.search.mock.calls[0] ?? [];
+    expect(request).toEqual({
+      mode: "simple",
+      originLocationCode: "PAR",
+      destinationLocationCode: "NYC",
+      departureDate: "2026-11-20",
+      returnDate: "2026-11-27",
+      adults: 2,
+      children: 0,
+      infants: 0,
+      resultOptions: { limit: 0 },
+    });
+    // The "Change search" form and the results page's links carry no cabin either.
+    expect(/** @type {HTMLSelectElement} */ ($("#search-cabin")).value).toBe("");
+
+    const read = (/** @type {string} */ text) => summaryFromQuery(readSearchQuery(new URLSearchParams(text)));
+    const oneWay = /** @type {NonNullable<ReturnType<typeof read>>} */ (
+      read("trip=oneway&from=LON&to=MAD&depart=2026-12-01&cabin=")
+    );
+    expect(oneWay.travelClass).toBeNull();
+    expect(searchRequestFor(oneWay)).not.toHaveProperty("travelClass");
+    expect(searchHref(oneWay)).toBe(
+      "/search.html?trip=oneway&from=LON&to=MAD&depart=2026-12-01&adults=1&children=0&infants=0",
+    );
+    const multi = /** @type {NonNullable<ReturnType<typeof read>>} */ (
+      read("trip=multi&legs=PAR-NYC-2026-11-20,NYC-MIA-2026-11-25")
+    );
+    expect(searchRequestFor(multi)).not.toHaveProperty("query.searchCriteria");
+    // A chosen cabin still goes, and comes back in the links.
+    const business = /** @type {NonNullable<ReturnType<typeof read>>} */ (
+      read("trip=oneway&from=LON&to=MAD&depart=2026-12-01&cabin=BUSINESS")
+    );
+    expect(searchRequestFor(business)).toMatchObject({ travelClass: "BUSINESS" });
+    expect(searchHref(business)).toContain("&cabin=BUSINESS");
+  });
+
   it("[OFE-005] trips read from the query: return, one way and incomplete", () => {
     const read = (/** @type {string} */ query) =>
       summaryFromQuery(readSearchQuery(new URLSearchParams(query)));
@@ -1044,6 +1090,53 @@ describe("results page: states", () => {
     expect(lastList(client)).toEqual({ searchId: NEXT_SEARCH_ID, sort: "best", stops: [0], limit: 20 });
     expect(cards()).toHaveLength(2);
     expect(document.activeElement).toBe($("[data-results-count]"));
+  });
+
+  it("[FIX-W70-STOREFRONT AC4] the header's note of a currency change stays until the page runs its next search", async () => {
+    const expired = new ExpiredError({ code: "SEARCH_EXPIRED", message: "Expired", status: 410 });
+    let listed = 0;
+    const client = fakeClient({
+      search: async () => ({ ...structuredClone(SEARCH), id: NEXT_SEARCH_ID }),
+      listResults: async () => {
+        listed += 1;
+        if (listed === 1) {
+          throw expired;
+        }
+        return resultsPage();
+      },
+    });
+    const { view } = open(`${QUERY}&search=${SEARCH_ID}`, client);
+    await view.done;
+    await settle();
+    // The header as boot() mounts it, with two currencies; the traveller changes the currency.
+    const header = mountHeader(/** @type {HTMLElement} */ ($("body > header")), {
+      config: /** @type {never} */ ({
+        ...CONFIG,
+        defaultCurrency: "EUR",
+        currencies: [
+          { code: "EUR", name: "Euro", symbol: "€", decimals: 2 },
+          { code: "USD", name: "US Dollar", symbol: "$", decimals: 2 },
+        ],
+      }),
+    });
+    const select = /** @type {HTMLSelectElement} */ ($("body > header select"));
+    commit(select, "USD");
+    const note = $("body > header [data-currency-status]");
+    expect(note.hidden).toBe(false);
+    expect(text(note)).toBe("Prices will be shown in USD from your next search");
+    // Until the page runs a search, the note stays.
+    expect($("[data-results-state] [data-state]").getAttribute("data-state")).toBe("search-expired");
+    expect(client.flights.search).not.toHaveBeenCalled();
+    expect(note.hidden).toBe(false);
+
+    // Refresh runs the search again, in the new currency: the note has done its job.
+    /** @type {HTMLButtonElement} */ ($('[data-results-state] [data-action="retry"]')).click();
+    await settle();
+    expect(client.flights.search).toHaveBeenCalledTimes(1);
+    expect(note.hidden).toBe(true);
+    expect(note.textContent).toBe("");
+    header.destroy();
+    expect($("body > header [data-currency-status]")).toBeNull();
   });
 
   it("[OFE-005 AC3] a search that getSearch reports expired shows the same state without listing offers", async () => {

@@ -14,7 +14,13 @@
 // - Currency: a labelled `<select>` of `config.currencies` (only with two or more), preselected with the remembered
 //   choice or the default currency, in the header's own place for it (`[data-header-currency]`, beside the name and
 //   no higher than the name's line, so it moves nothing when it appears, OFE-030). A change calls
-//   `onCurrencyChange(code)` and changes nothing else on the page.
+//   `onCurrencyChange(code)` (boot() announces it in the live region and tells the page) and shows the same text
+//   visibly, "Prices will be shown in {currency} from your next search", as a small note under the header's right end
+//   (`[data-currency-status]`, KI-020, FIX-W70-STOREFRONT). The note floats over the top padding of `main` (every
+//   page's is at least 32 px; the note is at most two 14 px lines with 2 px padding), so it moves nothing; it is no
+//   live region, so a screen reader hears the change once, from the live region. The prices on the page stay as they
+//   are (WCAG 3.2.2): the next search uses the new currency, and the results page hides the note when it runs one
+//   (`clearCurrencyStatus`); any other page loses it with the next navigation.
 // - Account menu (lib/session.js): a sign-in link when signed out; the customer's first name, the account link and
 //   "Sign out" (with the `client` given) when signed in. Hidden, with "My bookings", when the OTA has no customer
 //   accounts (`features.customerAccounts = false`).
@@ -36,6 +42,51 @@ import { NEUTRAL_PALETTE, isHexColor, safeImageUrl, textColorOn } from "../lib/t
  */
 
 const CURRENCY_SELECT_ID = "vx-currency";
+/** The attribute of the visible note of a currency change (KI-020). */
+const CURRENCY_STATUS = "data-currency-status";
+/**
+ * The note's classes: over the top padding of `main`, right-aligned with the header's content, above the page's own
+ * content there but under the account menu's panel (`z-20`, lib/session.js); at most two lines of 14 px and 2 px of
+ * padding (32 px), with a ring that takes no room.
+ */
+const CURRENCY_STATUS_CLASSES =
+  "absolute top-0 right-4 z-10 max-w-[calc(100%-2rem)] rounded-b-ui bg-panel px-2 py-0.5 text-xs/[14px] text-ink shadow-sm ring-1 ring-muted/30";
+
+/**
+ * Shows the visible note of a currency change below the header (KI-020): the live region's text, in a zero-height
+ * place at the header's end, so nothing on the page moves.
+ * @param {HTMLElement} root the page's `<header>`
+ * @param {string} code
+ */
+function showCurrencyStatus(root, code) {
+  const doc = root.ownerDocument;
+  let note = /** @type {HTMLElement | null} */ (root.querySelector(`[${CURRENCY_STATUS}]`));
+  if (!note) {
+    const place = doc.createElement("div");
+    place.className = "relative mx-auto h-0 max-w-6xl";
+    place.dataset.currencyStatusPlace = "";
+    note = doc.createElement("p");
+    note.setAttribute(CURRENCY_STATUS, "");
+    note.className = CURRENCY_STATUS_CLASSES;
+    place.append(note);
+    root.append(place);
+  }
+  note.textContent = t("header.currencyChanged", { currency: code });
+  note.hidden = false;
+}
+
+/**
+ * Hides the visible note of a currency change (KI-020): the results page calls it when it runs a new search, which uses
+ * the new currency.
+ * @param {Document} [doc]
+ */
+export function clearCurrencyStatus(doc = document) {
+  const note = /** @type {HTMLElement | null} */ (doc.querySelector(`body > header [${CURRENCY_STATUS}]`));
+  if (note) {
+    note.hidden = true;
+    note.textContent = "";
+  }
+}
 
 /**
  * The logo for the header, or `null`: the dark variant when the header colour is dark and one is uploaded, else the
@@ -153,6 +204,7 @@ export function mount(root, props) {
     currency?.remove();
     currency = currencyItem(doc, config, current.currency ?? config.defaultCurrency, (code) => {
       current = { ...current, currency: code };
+      showCurrencyStatus(root, code);
       current.onCurrencyChange?.(code);
     });
     if (currency && currencyPlace) {
@@ -192,6 +244,7 @@ export function mount(root, props) {
     destroy() {
       currency?.remove();
       currency = null;
+      root.querySelector("[data-currency-status-place]")?.remove();
     },
   };
 }

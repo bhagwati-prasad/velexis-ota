@@ -80,7 +80,8 @@ function caddyStorefrontHeaders(caddyfile) {
   const headers = {};
   for (const raw of blockAt(body, header, "header").split("\n")) {
     const line = raw.trim();
-    const m = line.match(/^([A-Za-z0-9-]+)\s+(?:"((?:[^"\\]|\\.)*)"|(\S+))$/);
+    // `?Name "value"` is a default, set when the answer has none: every storefront file has none, so it is theirs.
+    const m = line.match(/^\??([A-Za-z0-9-]+)\s+(?:"((?:[^"\\]|\\.)*)"|(\S+))$/);
     if (m) {
       headers[m[1] ?? ""] = (m[2] ?? m[3] ?? "").replace(/\\(.)/g, "$1");
     } else if (line !== "" && !line.startsWith("-") && !line.startsWith("#")) {
