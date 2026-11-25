@@ -52,7 +52,7 @@ They would rest on proposals or open questions; nobody writes them yet.
 
 ### Follow-ups
 
-- The owner confirms or changes items 7 to 14 and answers the questions below; the developer then sets the status. Nothing is built before. Then the platform keeps Velexis's rules and grants the OTA backend a read (A21).
+- The owner confirms or changes items 7 to 14 and answers the questions below; the developer then sets the status. Nothing is built before. As proposed in the plan (A21, in no item above), the platform would then keep Velexis's rules and grant the OTA backend a read.
 
 ## Alternatives considered
 
@@ -66,5 +66,5 @@ The plan sets aside a separate engine service (A1; [ADR-0003](../../../docs/mvp/
 
 Each recommendation is the lead's proposal, not a decision.
 
-1. **Markup in two places** (plan 9.6 item 1). OTAs already have markup rules ([OADR-0005](0005-markup-and-fee-engine.md)). Options: an OTA's engine rule may also adjust the price; or not, and the markup rules gain a supply id condition. The lead's recommendation: the first, as drafted (plan 4.3).
+1. **Markup in two places** (plan 9.6 item 1). OTAs already have markup rules ([OADR-0005](0005-markup-and-fee-engine.md)). Options: an OTA's engine rule may also adjust the price; or not, and the markup rules gain a supply id condition. No recommendation in plan 9.6; as drafted (plan 4.3) an OTA's engine rule may adjust the price.
 2. **Ticketing policy** (plan 4.9, 9.6 item 7). For a source paid from a supplier balance, an OTA on `manual_review` gets none of its content, and `issue_at_booking` runs as `issue_after_payment`: an exception to items 2 and 3. Options: confirm it; or refuse it, and the plan must find another way. The lead's recommendation: confirm.

@@ -71,6 +71,7 @@ These would rest on a proposal or an open question. Nobody writes them before th
 ### Follow-ups
 
 - The owner confirms or changes items 14 to 18 and answers the open questions. The developer then sets the status.
+- Ten assumptions of the plan are in no item of the five records. A13, A29 and A43 are in open questions; A21 and A41 are in Follow-ups; A25, A27, A35, A40 and A42 are named in no record. They stay proposals of the plan until the owner confirms them.
 - The waiting notes and the task blocks follow.
 
 ## Alternatives considered
@@ -103,4 +104,4 @@ Only the owner answers these. Each recommendation is the lead's proposal. The se
 | 8 | Does staff Shopping go with the other Amadeus screens? (9.3) | Hidden with PNR lookup, Queues and Supplier log; or kept | Hidden |
 | 9 | The traveller's reference when Amadeus returns no airline locator (9.3) | Amadeus's own locator; or none until a ticket number exists | No recommendation in plan 9.3; as drafted the plan shows the airline's reference or none (item 17) |
 
-Plan 9.6 lists more points to confirm. They belong to the four detail records.
+Plan 9.6 lists more points to confirm. Items 1, 3 and 7 are questions in OADR-0019 and OADR-0020, and item 5 is under Consequences in OADR-0019. Item 4 (schedule changes of PKFare orders) is in no record: the plan leaves it to the task blocks of P7.

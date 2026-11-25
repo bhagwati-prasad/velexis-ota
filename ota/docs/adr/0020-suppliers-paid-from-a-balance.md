@@ -50,7 +50,7 @@ Rows 5, 7 and 12 change no sentence of an older OTA record, so no OTA record has
 ### Follow-ups
 
 - The owner confirms or changes items 4 to 13 and answers the questions below; the developer then sets the status.
-- The task blocks of PKFare booking wait for the facts of phase P1 (A41).
+- As proposed (A41), the task blocks of PKFare booking wait for the facts of phase P1.
 
 ## Alternatives considered
 

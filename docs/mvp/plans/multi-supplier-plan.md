@@ -364,17 +364,17 @@ One question goes to the owner's counsel; it is a step, not advice. Is Velexis a
 
 ## 5. Decisions and records
 
-`docs/mvp/decisions.md` fixes the order: that file, then the decision records, then the plans. On 2026-11-25 the owner's decisions of 2026-11-24 were recorded in that order: in `decisions.md`, and in ADR-0030, OADR-0019, OADR-0020, PADR-0020 and PADR-0021. The proposals (section 3 and the lead's four proposals) and the open questions (section 9) are not decided: the records mark them **Proposed** or list them as open questions for the owner. No task block exists yet. [Annex A](#annex-a-proposed-wording-for-the-decisionsmd-rows) proposed the wording; `decisions.md` took only the sentences that rest on an owner's decision. Dated notes were written only where an owner's decision changes a sentence of an older record; the other notes of the table below wait for a decision, and each new record lists those of its subject.
+`docs/mvp/decisions.md` fixes the order: that file, then the decision records, then the plans. On 2026-11-25 the owner's decisions of 2026-11-24 were recorded in that order: in `decisions.md`, and in ADR-0030, OADR-0019, OADR-0020, PADR-0020 and PADR-0021. The proposals (section 3 and the lead's four proposals) and the open questions (section 9) are not decided: the records mark them **Proposed** or list them as open questions for the owner. No task block exists yet. [Annex A](#annex-a-proposed-wording-for-the-decisionsmd-rows) proposed the wording; `decisions.md` took only the sentences that rest on an owner's decision. Dated notes were written in eight records: ADR-0010, ADR-0011, ADR-0012, OADR-0001, PADR-0006, PADR-0010, PADR-0012 and PADR-0015. Each rests on an owner's decision that changes a sentence of the record or, for ADR-0011, the `decisions.md` row that the record details. The other notes of the table below wait for a decision, and each new record lists those of its subject.
 
 | Record | Scope | Revises, by a dated note |
 |---|---|---|
-| `decisions.md` | the rows of Annex A | its lines 7, 14, 15, 18, 32, 34 and 68 |
-| ADR-0030 (new) | supply sources, hidden suppliers, `sup_` ids, the engine's place, the meaning of `FlightOffer.source` | ADR-0012, ADR-0006, ADR-0011, ADR-0015, ADR-0004; `docs/mvp/conventions.md` §1 (the id format) |
+| `decisions.md` | the Annex A sentences that rest on an owner's decision, changed in place on 2026-11-25 (the file carries no dated notes) | the rows at its former lines 7, 14, 15, 18, 32, 34 and 68, and six new rows after the row "Whose supplier account" |
+| ADR-0030 (new) | the thirteen decisions in the owner's words; proposed: supply sources, hiding rules, `sup_` ids, the engine's place, the meaning of `FlightOffer.source`; the open questions for the owner | ADR-0010, ADR-0012, ADR-0006, ADR-0011, ADR-0015, ADR-0004; `docs/mvp/conventions.md` §1 (the id format) |
 | OADR-0019 (new) | the engine: interface, capabilities, routing, hooks, rules as data | OADR-0001, OADR-0002, OADR-0003, OADR-0005 |
-| OADR-0020 (new) | suppliers paid from a balance: capture first, one ticketing request, open cases, stops | OADR-0003, OADR-0008, OADR-0010, OADR-0013 |
+| OADR-0020 (new) | suppliers paid from a balance: capture first, one ticketing request, open cases, stops; extras and low-cost content | OADR-0003, OADR-0008, OADR-0010, OADR-0013 |
 | PADR-0020 (new) | the registry: switches, supply sources, id history, Velexis accounts, wallet watch, Suppliers page, the rename in the platform API | PADR-0015 item 6, PADR-0010, PADR-0012 item 4, PADR-0018 |
-| PADR-0021 (new) | the reconciliation role: ledger, cases, the audited support interface | PADR-0006 item 8, ADR-0003, ADR-0009 item 3, OADR-0009, OADR-0011 |
-| ADR-0025 (revised) | item 3: how M7 runs beside M6 | — |
+| PADR-0021 (new) | the reconciliation role: ledger, cases, the audited support interface; offline recovery; disclosure on request | PADR-0006 item 8, ADR-0003, ADR-0009 item 3, OADR-0009, OADR-0011 |
+| ADR-0025 (not revised yet: the note waits for the owner's answer to question 1 of ADR-0030) | item 3: how M7 runs beside M6 | — |
 
 Nine of the records named for dated notes were not opened when this plan was written; a waiting note is checked against its record when it is written. The lead's four proposals stay proposals. OADR-0019 and OADR-0020 hold three of them as items marked **Proposed**; ADR-0030 names the fourth, the SDK notes. Merging the records does not decide them: only the owner's confirmation does.
 
@@ -565,7 +565,7 @@ PKFare's saved reference states none of these. Each is a question for PKFare.
 
 ## Annex A: proposed wording for the `decisions.md` rows
 
-On 2026-11-25 `decisions.md` took the sentences of this table that rest on an owner's decision, some reworded (section 5); the parts that rest on an assumption are not in force. The column "Rests on" shows what is the owner's decision (a row number of section 2) and what is still an assumption. An assumption must be confirmed before its sentence is merged.
+On 2026-11-25 `decisions.md` took the sentences of this table that rest on an owner's decision, some reworded (section 5); the parts that rest on an assumption are not in force. The column "Rests on" shows what is the owner's decision (a row number of section 2) and what is still an assumption. An assumption must be confirmed before its sentence is merged. The line numbers in the first column are those of `decisions.md` before 2026-11-25; the rows it added moved the Secrets rule down.
 
 | Place in `decisions.md` | Proposed text | Rests on |
 |---|---|---|
