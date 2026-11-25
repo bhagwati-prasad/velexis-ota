@@ -13,7 +13,7 @@ Humans should read it too. It is the short version of [`docs/mvp/conventions.md`
 
 ## 1. The project in five lines
 
-Velexis is a multi-tenant OTA platform. A person signs up on the **portal**, subscribes, and gets their own **OTA** (a tenant with its own PostgreSQL schema `tenant_<key>`). The OTA sells **Amadeus Enterprise** flights through a hosted **storefront** and runs operations in the **OTA admin**. There are six components in two groups (`platform/`, `ota/`), a vanilla JS **SDK** (`ota/sdk`), shared packages (`packages/`), and everything runs on **one VM without Docker**.
+Velexis is a multi-tenant OTA platform. A person signs up on the **portal**, subscribes, and gets their own **OTA** (a tenant with its own PostgreSQL schema `tenant_<key>`). The OTA sells flights from one or more **suppliers** (Amadeus Enterprise first, PKFare second; [ADR-0030](docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md)) through a hosted **storefront** and runs operations in the **OTA admin**. There are six components in two groups (`platform/`, `ota/`), a vanilla JS **SDK** (`ota/sdk`), shared packages (`packages/`), and everything runs on **one VM without Docker**.
 
 Status: **325 of the plans' 354 tasks were done on 2026-11-20, and every open task waits on a human step, a nightly run with the Stripe test secrets or the launch**; `node tools/plan-lint/plan-lint.mjs` prints the live count (updated 2026-11-20, lead decision (32g), approved by the owner; FIX-W63-DOCS).
 

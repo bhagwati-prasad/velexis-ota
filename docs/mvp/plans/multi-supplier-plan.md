@@ -1,10 +1,10 @@
 # Multi-supplier plan: ingestion engine, supplier adapters and Velexis supply
 
-> **Status: Proposed on 2026-11-24. Not in force.**
+> **Status: Proposed on 2026-11-24. The plan is not in force. The owner's decisions it lists were recorded on 2026-11-25.**
 >
-> - This file is a plan, not a decision record. No task starts before [`docs/mvp/decisions.md`](../decisions.md) is changed.
-> - The owner's decisions of 2026-11-24 are recorded in [section 2](#2-what-the-owner-decided). Everything else is proposed: the design of section 4 rests on the assumptions of [section 3](#3-assumptions-to-confirm) and leaves the open questions of [section 9](#9-risks-and-open-questions).
-> - Task keys such as `E2-08` are placeholders. Phase P0 gives the real ids.
+> - This file is a plan, not a decision record. On 2026-11-25 the owner's thirteen decisions of 2026-11-24 ([section 2](#2-what-the-owner-decided)) were recorded in [`docs/mvp/decisions.md`](../decisions.md) and in ADR-0030 (the entry record), OADR-0019, OADR-0020, PADR-0020 and PADR-0021.
+> - Everything else is proposed and not decided: the assumptions of [section 3](#3-assumptions-to-confirm), the design of section 4 that rests on them, the lead's four proposals and the open questions of [section 9](#9-risks-and-open-questions). The five records mark each item **Decided** or **Proposed**.
+> - No task block exists yet, so no task starts from this plan. Task keys such as `E2-08` are placeholders. Phase P0 gives the real ids.
 
 ## 1. Summary
 
@@ -364,7 +364,7 @@ One question goes to the owner's counsel; it is a step, not advice. Is Velexis a
 
 ## 5. Decisions and records
 
-`docs/mvp/decisions.md` fixes the order: that file, then the decision records, then the plans. Nothing is decided until the owner merges those changes. [Annex A](#annex-a-proposed-wording-for-the-decisionsmd-rows) proposes the wording.
+`docs/mvp/decisions.md` fixes the order: that file, then the decision records, then the plans. On 2026-11-25 the owner's decisions of 2026-11-24 were recorded in that order: in `decisions.md`, and in ADR-0030, OADR-0019, OADR-0020, PADR-0020 and PADR-0021. The proposals (section 3 and the lead's four proposals) and the open questions (section 9) are not decided: the records mark them **Proposed** or list them as open questions for the owner. No task block exists yet. [Annex A](#annex-a-proposed-wording-for-the-decisionsmd-rows) proposed the wording; `decisions.md` took only the sentences that rest on an owner's decision. Dated notes were written only where an owner's decision changes a sentence of an older record; the other notes of the table below wait for a decision, and each new record lists those of its subject.
 
 | Record | Scope | Revises, by a dated note |
 |---|---|---|

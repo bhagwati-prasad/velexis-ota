@@ -35,6 +35,7 @@ This folder holds the cross-cutting architecture decision records (ADRs) of the 
 | [0027](0027-pci-scope-and-vm-controls.md) | PCI DSS scope and controls on the single VM | Accepted | The whole VM and the systems that change it are the CDE; every applicable requirement has a control and an owning task (SSH MFA, off-VM logs, WAF, scans). |
 | [0028](0028-how-work-reaches-main.md) | How work reaches main | Accepted | The integration branch reaches `main` once with a merge commit after the developer's deep review of X-037, X-038, X-039 and X-041; `main` then becomes the default branch; each later wave reaches it as one pull request merged with a merge commit, a single task's pull request is squash-merged; 0 required approvals while the developer works alone (1 once a second person with write access joins), the six required checks, the second-agent review comment and the developer's merge being the review record; only the wave integrator merges task branches, into the integration branch. Supersedes ADR-0020's points on merging and approvals. Since 2026-11-16 (item 7): once `main` is the default branch, the wave integrator takes in what landed on `main` by merging `main` into the integration branch with a merge commit at the start of a wave, never by a rebase; the developer squash-merges Dependabot pull requests on `main`. |
 | [0029](0029-nodejs-24-runtime.md) | Node.js 24 LTS as the runtime of Velexis | Accepted | Node.js 24 everywhere Velexis is built, tested or run (the owner's request of 2026-11-15, decisions D1–D18 approved on 2026-11-16): one major kept in step from `.nvmrc`, a Turborepo global dependency, pinned young generations, `NODE_MAJOR` moving the VM both ways, punycode host names checked, TLS level 2 accepted, the SDK on 22.12 and later and 24; the switch (X-048) lands alone, before the first VM step; Node 26 later, before 2028-04-30. |
+| [0030](0030-suppliers-supply-sources-and-ingestion-engine.md) | Suppliers, supply sources and the ingestion engine | Proposed | Entry record for the owner's thirteen supplier decisions of 2026-11-24, which are in force through `decisions.md`: several suppliers behind one ingestion engine with adapters and three hooks, PKFare second, switches globally and per tenant, Velexis supply and own accounts, Velexis's suppliers hidden behind an id with a history, the PKFare wallet, offline cost recovery, a reconciliation role, extras and low-cost content. Its five proposals (supply source, id format, the engine's place, `FlightOffer.source`, hiding rules) and its nine open questions for the owner are not decided. Detail: OADR-0019, OADR-0020, PADR-0020, PADR-0021. |
 
 ## Component ADRs
 
@@ -42,8 +43,8 @@ Decisions that concern only one component group are recorded next to it. They mu
 
 | Prefix | Index | Holds |
 |---|---|---|
-| **PADR-NNNN** | [`platform/docs/adr/README.md`](../../../platform/docs/adr/README.md) | Platform backend, portal and platform admin decisions (18 records) |
-| **OADR-NNNN** | [`ota/docs/adr/README.md`](../../../ota/docs/adr/README.md) | OTA backend, storefront, OTA admin and SDK decisions (18 records) |
+| **PADR-NNNN** | [`platform/docs/adr/README.md`](../../../platform/docs/adr/README.md) | Platform backend, portal and platform admin decisions (21 records) |
+| **OADR-NNNN** | [`ota/docs/adr/README.md`](../../../ota/docs/adr/README.md) | OTA backend, storefront, OTA admin and SDK decisions (20 records) |
 
 A bare ADR-NNNN always means a record in this folder.
 

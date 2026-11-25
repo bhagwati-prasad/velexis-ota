@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (envelope encryption, master key outside the database, no raw card data stored or logged), lead architect (algorithms, key files, rotation)
-**Revisions:** 2026-10-12 (planning review): one key directory per trust zone ([ADR-0026](0026-system-users-per-trust-zone.md)); env files read by systemd only; the re-wrap commands that KEK rotation needs are planned (X-040 and one command per backend).
+**Revisions:** 2026-10-12 (planning review): one key directory per trust zone ([ADR-0026](0026-system-users-per-trust-zone.md)); env files read by systemd only; the re-wrap commands that KEK rotation needs are planned (X-040 and one command per backend). 2026-11-25 (the owner's decisions of 2026-11-24, recorded by [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 2, 3 and 6): a dated note under Context. `decisions.md` §5 now reads "supplier credentials (Amadeus, PKFare) and Stripe credentials", so PKFare credentials are envelope-encrypted like Amadeus credentials.
 
 ## Context
 
@@ -13,6 +13,8 @@
 - `platform.payment_provider_connections.secret_ciphertext` and `webhook_secret_ciphertext`;
 - `platform.accounts.mfa_secret_ciphertext`;
 - tenant columns for identity documents, discount eligibility, idempotent replays and notification secrets.
+
+**2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 2, 3 and 6):** `decisions.md` §5 no longer says "Amadeus and Stripe credentials". It says "supplier credentials (Amadeus, PKFare) and Stripe credentials". The owner: "I would add multiple suppliers. PKFare is first in line." For an OTA's own account: "If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration". So PKFare credentials, Velexis's and an OTA's own, are envelope-encrypted as this record describes. Where they are stored and which module decrypts them is a proposal (plan 4.6; PADR-0020), not a decision.
 
 ## Decision
 

@@ -3,13 +3,15 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (both models: Velexis shared account by default, OTA-owned credentials later), lead architect (data model, isolation, rate limits)
-**Revisions:** 2026-11-02 (lead decision (2n) of 2026-11-02, recording FIX-W39-OTA): the office isolation says which offices are "the tenant's": its connection's `office_ids` and the Velexis offices `assigned` or `releasing` for it (dated note under Office isolation).
+**Revisions:** 2026-11-02 (lead decision (2n) of 2026-11-02, recording FIX-W39-OTA): the office isolation says which offices are "the tenant's": its connection's `office_ids` and the Velexis offices `assigned` or `releasing` for it (dated note under Office isolation). 2026-11-25 (the owner's decisions of 2026-11-24, recorded by [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 2, 3, 6 and 8): dated notes under Context, under Lifecycle item 3 and under Office isolation. `decisions.md` now reads "Velexis supply by default, own Amadeus or PKFare accounts as well", so own credentials need no longer replace the Velexis connection, and the Amadeus tools are for an OTA with its own Amadeus account. No task builds this yet, and the code is unchanged.
 
 ## Context
 
 [`decisions.md`](../decisions.md) §2: by default an OTA books through **Velexis's Amadeus Enterprise account** with an office assigned to the OTA, for a quick start. An OTA can switch to **its own Amadeus credentials** (client id and secret, office ids).
 
 The reference schema has one `platform.supplier_connections` row per tenant and environment, holding `client_id`, an encrypted `client_secret_ciphertext` (both `NOT NULL`), `office_ids`, default, queuing and owner offices, ticketing defaults and monitored queues. The platform admin manages "the shared Amadeus account and offices" (`decisions.md` §1). The OTA backend uses 12 Amadeus operations from 9 specifications ([`docs/amadeus-api/`](../../amadeus-api/)).
+
+**2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 2, 3, 6 and 8):** `decisions.md` changed in both places quoted above. In §2 the row "Whose Amadeus account" is now "Whose supplier account": "Velexis supply by default, own Amadeus or PKFare accounts as well." It no longer says "An OTA can switch to **its own Amadeus credentials**". In §1 the platform admin no longer manages "the shared Amadeus account and offices" but "the suppliers and their switches, Velexis's supplier accounts and offices, the reconciliation role with a reference to OTA bookings". The owner: "Each OTA can have their own Amadeus or PKFare. OTA can use either the velexis as supplier OR their own (Amadeus or PKFare or something else, it could be all or some of them)." This record stays the account model for Amadeus.
 
 ## Decision
 
@@ -32,6 +34,8 @@ The reference schema has one `platform.supplier_connections` row per tenant and 
    - It flips `credential_source` to `tenant` and publishes a cache invalidation.
    - The shared office goes back to the pool after a grace period, once no open booking still depends on it.
 
+   **2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 3 and 6):** "It flips `credential_source` to `tenant`" and "The shared office goes back to the pool after a grace period" describe own credentials that replace the Velexis connection. The owner decided that an OTA may have both: "If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration". So own credentials need no longer replace the Velexis connection. How the two stand side by side is a proposal (plan 4.5; PADR-0020), not a decision. No task builds it yet, and the code still does what this item says.
+
 ### Runtime in the OTA backend
 
 - An **`AmadeusClient`** module is the only code that calls Amadeus. It covers the 12 operations, typed from `docs/amadeus-api/*.json`, and uses Node's built-in `fetch`.
@@ -40,6 +44,8 @@ The reference schema has one `platform.supplier_connections` row per tenant and 
 - **Office isolation on the shared account.** The client always sets the tenant's own office ids (`queuingOfficeId`, `ownerOfficeId`, queue office, PNR retrieval office). Requests for an office outside the tenant's `office_ids` fail with `403 OFFICE_NOT_ALLOWED` (already in the error catalogue). Imports by record locator are accepted only for orders owned by one of the tenant's offices.
 
   **2026-11-02 (lead decision (2n) of 2026-11-02, FIX-W39-OTA; [PADR-0012](../../../platform/docs/adr/0012-amadeus-office-pool.md) point 4):** the tenant's offices are its connection's `office_ids` and the offices of the Velexis account `assigned` or `releasing` for it. A call on an existing order or queue of such an office is served through the Velexis account even after a switch to the OTA's own credentials (OBE-079), and the console's raw order and queue reads and the import by record locator accept its orders. New orders use the connection's offices only; another tenant's office, or one released to the pool, still answers `403 OFFICE_NOT_ALLOWED`.
+
+  **2026-11-25 (the owner's decision of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) item 6):** the queue office, the PNR retrieval office and "Imports by record locator are accepted only for orders owned by one of the tenant's offices" describe tools that every OTA on the shared account can reach today. The owner: "The Amadeus surface (making queues etc) would only be useful if they integrate their own Amadeus account. For now, do not surface those APIs." So these tools are for an OTA with its own Amadeus account. The isolation rule itself stays. Which operations close, and how, is proposed in ADR-0030 item 18 and not decided. No task builds it yet.
 
 - **Rate limiting:**
   - a Redis token bucket per credential set protects the shared account's quota;
