@@ -22,7 +22,7 @@ Every plan uses exactly these ids and meanings.
 
 | Document | One line |
 |---|---|
-| [`decisions.md`](decisions.md) | The product owner's decisions: components, hosting, payments, Amadeus and Stripe models, placeholder hosts, cross-cutting rules. **Binding for everything below.** |
+| [`decisions.md`](decisions.md) | The product owner's decisions: components, hosting, payments, supplier and Stripe models, placeholder hosts, cross-cutting rules. **Binding for everything below.** |
 | [`architecture.md`](architecture.md) | System context and containers, hosts and ports, data ownership, request flows (sign-up, booking, SSO, webhooks, custom domains), configuration matrix, failure domains. |
 | [`tech-stack.md`](tech-stack.md) | Versions and libraries per component with a one-line reason each, and what we deliberately do not use. |
 | [`conventions.md`](conventions.md) | Code organisation (NestJS, Next.js, vanilla storefront, SDK), error model, logging, configuration, migrations, testing, git workflow, security checklist. |
@@ -98,7 +98,7 @@ There are two plan styles ([ADR-0020](adr/0020-ai-agent-development-workflow.md)
 | [`../../ota/docs/plans/implementation-plan.md`](../../ota/docs/plans/implementation-plan.md) | Implementation plan | references `OBE-`, `OFE-`, `OAD-`, `SDK-` | OTA goals, epics, demos, exit criteria, interfaces with the platform group and risks per milestone. |
 | [`../../ota/docs/plans/agent-tasks.md`](../../ota/docs/plans/agent-tasks.md) | Agent tasks | `OBE-`, `OFE-`, `OAD-`, `SDK-` | OTA backend, storefront, OTA admin and SDK tasks, M0–M6. |
 | [`../../ota/docs/plans/solo-developer-plan.md`](../../ota/docs/plans/solo-developer-plan.md) | Solo developer | references OTA ids | The OTA group week by week without agents (46 weeks: Weeks 1–40, the follow-up Week 39a, added 2026-11-06, Weeks 39b, 39c and 39d, added 2026-11-11, Week 39e, added 2026-11-13, and Week 39f, added 2026-11-16 for the move to Node.js 24). |
-| [`plans/multi-supplier-plan.md`](plans/multi-supplier-plan.md) | Proposal (**Proposed, not in force**; 2026-11-24) | none yet: placeholder keys | What a multi-supplier milestone M7 would build (ingestion engine, supplier adapters, PKFare as the second supplier, supply sources and switches, reconciliation role), in which phases and for how many agent-hours and review weeks. No task starts from it. |
+| [`plans/multi-supplier-plan.md`](plans/multi-supplier-plan.md) | Proposal (**Proposed, not in force**; 2026-11-24). The owner's decisions it lists were recorded on 2026-11-25 ([ADR-0030](adr/0030-suppliers-supply-sources-and-ingestion-engine.md)) | none yet: placeholder keys | What a multi-supplier milestone M7 would build (ingestion engine, supplier adapters, PKFare as the second supplier, supply sources and switches, reconciliation role), in which phases and for how many agent-hours and review weeks. No task starts from it. |
 
 ## 6. Repository-level documents
 

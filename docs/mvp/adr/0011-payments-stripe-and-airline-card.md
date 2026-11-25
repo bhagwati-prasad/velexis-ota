@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (two methods, Velexis Stripe account by default, OTA's own Stripe later), lead architect (account modes, PCI controls, flow details)
-**Revisions:** 2026-10-12 (planning review): §C states the real scope (the whole VM and the systems that can change it, no segmentation) and every environment control has an owning task in [ADR-0027](0027-pci-scope-and-vm-controls.md). 2026-11-25 (the owner's decisions of 2026-11-24, recorded by [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 5 and 7): a dated note under Settlements. Velexis pays PKFare for Velexis-supplied tickets from its PKFare wallet and recovers the cost from the OTA offline, so the monthly statement gets no line for it. The two payment methods are unchanged.
+**Revisions:** 2026-10-12 (planning review): §C states the real scope (the whole VM and the systems that can change it, no segmentation) and every environment control has an owning task in [ADR-0027](0027-pci-scope-and-vm-controls.md). 2026-11-25 (the owner's decisions of 2026-11-24, recorded by [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 5 and 7): a dated note under Settlements. Velexis pays PKFare for Velexis-supplied tickets from its PKFare wallet and recovers the cost from the OTA offline; the lead reads this as no line on the monthly statement. The two payment methods are unchanged.
 
 ## Context
 
@@ -46,7 +46,7 @@ Common rules for all modes:
 
 The platform never reads tenant schemas for this ([ADR-0003](0003-six-components-two-nestjs-backends.md)).
 
-**2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 5 and 7):** `decisions.md` §2 "Customer payments" gained one sentence: "Velexis pays PKFare for Velexis-supplied tickets from its PKFare wallet and recovers the cost from the OTA offline." The owner: "OTAs pay through the Velexis PKFare wallet. OTAs don't have to worry about it." On getting the ticket cost back from OTAs: "I will do it offline. I would reconcile with OTA later." So the statement of step 1 stays "captured amounts, minus refunds, disputes, Stripe fees and Velexis fees": it gets no line for that ticket cost. The two payment methods are unchanged. What the system records for the offline reconciliation is proposed in PADR-0021 and OADR-0020, not decided.
+**2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 5 and 7):** `decisions.md` §2 "Customer payments" gained one sentence: "Velexis pays PKFare for Velexis-supplied tickets from its PKFare wallet and recovers the cost from the OTA offline." The owner: "OTAs pay through the Velexis PKFare wallet. OTAs don't have to worry about it." On getting the ticket cost back from OTAs: "I will do it offline. I would reconcile with OTA later." No sentence of this record changes. The lead reads "offline" as: the statement of step 1 stays "captured amounts, minus refunds, disputes, Stripe fees and Velexis fees" and gets no line for that ticket cost (plan 4.13). The two payment methods are unchanged. What the system records for the offline reconciliation is proposed in [PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md) and [OADR-0020](../../../ota/docs/adr/0020-suppliers-paid-from-a-balance.md), not decided.
 
 ### B. Airline card through Amadeus
 

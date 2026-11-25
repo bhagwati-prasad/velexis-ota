@@ -34,7 +34,7 @@ The reference schema has one `platform.supplier_connections` row per tenant and 
    - It flips `credential_source` to `tenant` and publishes a cache invalidation.
    - The shared office goes back to the pool after a grace period, once no open booking still depends on it.
 
-   **2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 3 and 6):** "It flips `credential_source` to `tenant`" and "The shared office goes back to the pool after a grace period" describe own credentials that replace the Velexis connection. The owner decided that an OTA may have both: "If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration". So own credentials need no longer replace the Velexis connection. How the two stand side by side is a proposal (plan 4.5; PADR-0020), not a decision. No task builds it yet, and the code still does what this item says.
+   **2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 3 and 6):** "It flips `credential_source` to `tenant`" and "The shared office goes back to the pool after a grace period" describe own credentials that replace the Velexis connection. The owner decided that an OTA may have both: "If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration". So own credentials need no longer replace the Velexis connection. How the two stand side by side is a proposal (plan 4.5; [PADR-0020](../../../platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md)), not a decision. No task builds it yet, and the code still does what this item says.
 
 ### Runtime in the OTA backend
 

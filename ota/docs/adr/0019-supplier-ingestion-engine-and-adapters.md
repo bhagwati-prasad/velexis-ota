@@ -4,7 +4,7 @@
 **Date:** 2026-11-25
 **Deciders:** Product owner (items 1 to 6: decisions of 2026-11-24), lead architect (items 7 to 14: proposals, not confirmed)
 
-**What is in force.** The status is `Proposed`: [ADR-0001](../../../docs/mvp/adr/0001-record-architecture-decisions.md) (items 6 and 7) and this folder's [README](README.md) allow no other before the developer merges a record. The **Decided** items are the owner's decisions of 2026-11-24, already in force through [`decisions.md`](../../../docs/mvp/decisions.md). The **Proposed** items are the lead's proposals, not in force until the owner confirms them.
+**What is in force.** The status is `Proposed`: [ADR-0001](../../../docs/mvp/adr/0001-record-architecture-decisions.md) (items 6 and 7) and this folder's [README](README.md) allow no other before the developer merges a record. The **Decided** items are the owner's decisions of 2026-11-24, in force through [`decisions.md`](../../../docs/mvp/decisions.md). The **Proposed** items are the lead's proposals, not in force until the owner confirms them.
 
 ## Context
 
@@ -19,42 +19,40 @@ Amadeus Enterprise is the only supplier today, and business code calls its clien
 5. **Decided (owner, 2026-11-24).** **The same engine for OTAs** (row 13). "The same engine would be provided to OTAs as well, so that they can manage things if they use their own supplier."
 6. **Decided (owner, 2026-11-24).** **Extras in the interface** (row 12). "Bake in the extras in the interface, if there are no extras then it should be skipped for that booking."
 7. **Proposed (lead).** **The module's place** (A1). One module of the OTA backend, `ota/backend/src/supply/`, not a new service. Business code calls the engine, never an adapter.
-8. **Proposed (lead).** **Actions, outcomes and routing** (A3, A16 to A18; plan 4.1). The actions: Search, Price and extras, Create order, Find order, Check payable (new), Request ticketing, Read order, Cancel or release, Service request, each with a fixed set of outcomes. Only Search fans out. Any other action goes to the source of the offer or booking, and an unknown source is refused. A search fails only when no called source answers. The merged list has shares and no duplicates.
+8. **Proposed (lead).** **Actions, outcomes and routing** (A3, A16 to A18). The actions and the fixed set of outcomes of each are the table of plan 4.1; Check payable is new. Only Search fans out. Any other action goes to the source of the offer or booking, and an unknown source is refused. A search fails only when no called source answers. The merged list has shares and no duplicates.
 9. **Proposed (lead).** **Capabilities** (plan 4.2). An adapter declares what it can do: search limits, extras, find order, ticketing, and cancel, void, refund and change. The flow skips a step whose capability is missing and never tests a supplier's name.
 10. **Proposed (lead).** **What stays an Amadeus-only tool** (plan 4.2, 9.1). Offices, queues, PNR import, the raw operations and the card paid to the airline stay outside the interface. The advanced search body stays open; a source that cannot serve it is skipped.
 11. **Proposed (lead).** **What each hook may do** (plan 4.3). Pre-action may remove a source or refuse the action. Post-action may drop offers or adjust the price, on Search and Price only. Post-merge removes duplicates and applies the shares and the limit. No hook adds a switched-off source.
 12. **Proposed (lead).** **Rules are data** (A2, A20). Staff manage rules: conditions, one effect from a fixed list, a priority, an active window and a version. No code, script, expression, template or URL from a tenant or from staff is stored or run.
 13. **Proposed (lead).** **Who may write rules** (A14, A15). Velexis staff write the rules for Velexis sources, in the platform admin; an OTA writes those for its own sources, in the OTA admin. No rule crosses ownership. A Velexis price rule turns the supplier's net price into the OTA's cost price; the net price is never returned.
-14. **Proposed (lead).** **Hooks on money actions** (A3, A19). No hook changes an amount or the supplier. A hook may refuse Search, Price and Create order, and a failing hook fails closed there. No hook stops Check payable, ticketing, a read, a release or a service request.
+14. **Proposed (lead).** **Hooks on money actions** (A3, A19). A hook may refuse Search, Price and Create order; a failing hook fails closed there. On a money action no hook changes an amount or the supplier, and none stops Check payable, ticketing, reads, releases or service requests.
 
 ## Revisions to other records
 
-One dated note of 2026-11-25 points here: [OADR-0001](0001-amadeus-client-design.md), point 1. Its trigger "a second supplier is added" is met (items 1 and 3); the code is unchanged.
+One dated note of 2026-11-25 points here: [OADR-0001](0001-amadeus-client-design.md), point 1. Its trigger "a second supplier is added" is met (items 1, 3).
 
 ## Notes that wait for a decision
 
-These notes would rest on a proposal or an open question. Nobody writes them before the owner decides.
+They would rest on proposals or open questions; nobody writes them yet.
 
-- [OADR-0001](0001-amadeus-client-design.md) point 4 (the resolver) and the client's folder: items 7 and 8.
-- [OADR-0002](0002-offer-and-priced-offer-caching.md) points 2 and 4 (single flight, re-pricing): items 8 and 9.
-- [OADR-0003](0003-booking-orchestration-and-supplier-timeout-recovery.md) (lost answers): items 8 and 9.
-- [OADR-0005](0005-markup-and-fee-engine.md) point 2 (the engine's inputs): items 12 and 13, question 1.
-- [OADR-0011](0011-console-access-staff-sessions-and-environments.md) point 7 (raw Amadeus access): item 10 and ADR-0030.
+- [OADR-0001](0001-amadeus-client-design.md) point 4 and the client's folder: items 7 and 8.
+- [OADR-0002](0002-offer-and-priced-offer-caching.md) points 2 and 4, and [OADR-0003](0003-booking-orchestration-and-supplier-timeout-recovery.md): items 8 and 9.
+- [OADR-0005](0005-markup-and-fee-engine.md) point 2: items 12 and 13, question 1.
+- [OADR-0011](0011-console-access-staff-sessions-and-environments.md) point 7: item 10 and ADR-0030.
 
 ## Consequences
 
 ### Positive
 
-- A new supplier is a new adapter; the booking flow stays one flow.
+- A new supplier is a new adapter; the flow stays one.
 
 ### Negative
 
-- A search waits for several suppliers. The deadline of the second source has no number yet (plan 9.6 item 5).
+- A search waits for several suppliers; the second source's deadline has no number yet (plan 9.6 item 5).
 
 ### Follow-ups
 
-- This record builds nothing. No task starts before the owner confirms the proposed items.
-- If items 12 and 13 are confirmed, the platform keeps Velexis's rules and grants the OTA backend a read (A21).
+- The owner confirms or changes items 7 to 14 and answers the questions below; the developer then sets the status. Nothing is built before. Then the platform keeps Velexis's rules and grants the OTA backend a read (A21).
 
 ## Alternatives considered
 
@@ -62,12 +60,11 @@ The plan sets aside a separate engine service (A1; [ADR-0003](../../../docs/mvp/
 
 ## References
 
-- [`decisions.md`](../../../docs/mvp/decisions.md), [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md), [OADR-0020](0020-suppliers-paid-from-a-balance.md); PADR-0020 and PADR-0021 in the [platform index](../../../platform/docs/adr/README.md)
-- [Multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md): sections 2, 3, 4.1 to 4.3, 4.9 and 9
+- [`decisions.md`](../../../docs/mvp/decisions.md), [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md), [OADR-0020](0020-suppliers-paid-from-a-balance.md), [PADR-0020](../../../platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md), [PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md)
 
 ## Open questions for the owner
 
 Each recommendation is the lead's proposal, not a decision.
 
-1. **Markup in two places** (plan 9.6 item 1). OTAs already have markup rules ([OADR-0005](0005-markup-and-fee-engine.md)). Options: an OTA's engine rule may also adjust the price; or not, and the markup rules gain a supply id condition. The lead's recommendation: the first, as the plan is drafted (4.3).
+1. **Markup in two places** (plan 9.6 item 1). OTAs already have markup rules ([OADR-0005](0005-markup-and-fee-engine.md)). Options: an OTA's engine rule may also adjust the price; or not, and the markup rules gain a supply id condition. The lead's recommendation: the first, as drafted (plan 4.3).
 2. **Ticketing policy** (plan 4.9, 9.6 item 7). For a source paid from a supplier balance, an OTA on `manual_review` gets none of its content, and `issue_at_booking` runs as `issue_after_payment`: an exception to items 2 and 3. Options: confirm it; or refuse it, and the plan must find another way. The lead's recommendation: confirm.

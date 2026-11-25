@@ -376,7 +376,7 @@ One question goes to the owner's counsel; it is a step, not advice. Is Velexis a
 | PADR-0021 (new) | the reconciliation role: ledger, cases, the audited support interface | PADR-0006 item 8, ADR-0003, ADR-0009 item 3, OADR-0009, OADR-0011 |
 | ADR-0025 (revised) | item 3: how M7 runs beside M6 | — |
 
-Nine of the records named for dated notes were not opened; the drafting tasks confirm each one. The lead's proposals enter OADR-0019, OADR-0020 and the SDK notes; merging those decides them.
+Nine of the records named for dated notes were not opened when this plan was written; a waiting note is checked against its record when it is written. The lead's four proposals stay proposals. OADR-0019 and OADR-0020 hold three of them as items marked **Proposed**; ADR-0030 names the fourth, the SDK notes. Merging the records does not decide them: only the owner's confirmation does.
 
 **Milestone M7.** ADR-0025 item 3 starts a milestone's tasks "after the previous milestone's go/no-go"; for M6 that is the launch. A dated revision must say how M7 runs beside M6 (A13). plan-lint accepts `M7` (`tools/plan-lint/plan-lint.mjs:115`). Its `--remaining` mode (`tools/plan-lint/plan-lint.mjs:230-236`) and `AGENTS.md` ("Take the lowest milestone that still has open tasks") offer only the lowest open milestone, and six M6 tasks may stay open after the launch (the launch exceptions of ADR-0025 item 4). Beside M6, the lead hands out M7 tasks by id and the revision of ADR-0025 item 3 says so, or G0-03 changes the rule and the tool. The contract generator knows M0 to M6 only (`packages/api-types/scripts/generate.mjs:123`), so a new operation carries `x-milestone: M6` (A40).
 
@@ -565,7 +565,7 @@ PKFare's saved reference states none of these. Each is a question for PKFare.
 
 ## Annex A: proposed wording for the `decisions.md` rows
 
-The owner merges these rows; nothing here is in force. The column "Rests on" shows what is the owner's decision (a row number of section 2) and what is still an assumption. An assumption must be confirmed before its sentence is merged.
+On 2026-11-25 `decisions.md` took the sentences of this table that rest on an owner's decision, some reworded (section 5); the parts that rest on an assumption are not in force. The column "Rests on" shows what is the owner's decision (a row number of section 2) and what is still an assumption. An assumption must be confirmed before its sentence is merged.
 
 | Place in `decisions.md` | Proposed text | Rests on |
 |---|---|---|

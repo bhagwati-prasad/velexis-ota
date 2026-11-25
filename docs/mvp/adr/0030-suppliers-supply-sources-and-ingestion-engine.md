@@ -23,13 +23,13 @@ Items 1 to 13 are the owner's. "Detail" names where the design of an item is. Th
 5. **Decided (owner, 2026-11-24).** "OTAs pay through the Velexis PKFare wallet. OTAs don't have to worry about it." Detail: OADR-0020; PADR-0020 (the wallet watch).
 6. **Decided (owner, 2026-11-24).** "The OTA need not to know the supplier. They should focus on selling only. The Amadeus surface (making queues etc) would only be useful if they integrate their own Amadeus account. For now, do not surface those APIs. Change the Amadeus section to "Suppliers", it should have a single config page with "Velexis", "Amadeus" and "PKFare" as sections. If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration and then the current Amadeus APIs would be useful." Detail: item 18; PADR-0020 (the Suppliers page).
 7. **Decided (owner, 2026-11-24).** "I will do it offline. I would reconcile with OTA later." This answers how the ticket cost comes back from OTAs. Detail: PADR-0021; OADR-0020.
-8. **Decided (owner, 2026-11-24).** "I would make another role for reconciliation which would get reference to OTA bookings." Detail: PADR-0021.
+8. **Decided (owner, 2026-11-24).** "I would make another role for reconciliation which would get reference to OTA bookings." The owner said this when asked who can work a booking that Velexis supplies: Velexis staff have no access to tenant bookings today. So `decisions.md` records a role for Velexis staff. Detail: PADR-0021.
 9. **Decided (owner, 2026-11-24).** "The search would contain some form of ID. If need be, they can ask for supplier, but they do not need to know. They should focus on marketing and selling tickets." Detail: item 14; PADR-0021 (disclosure on request).
 10. **Decided (owner, 2026-11-24).** "PKFare agrees, we have signed up with them." No record details this. Sandbox credentials, certification and the live co-test remain (plan §8).
 11. **Decided (owner, 2026-11-24).** "Choose a good format for id, even if id changes it should be discernable. I suggest making a log table for supplier ID to get historic IDs if they change." Detail: item 15; PADR-0020 (the id history).
 12. **Decided (owner, 2026-11-24).** "the extras and low-cost should be in the first release. Bake in the extras in the interface, if there are no extras then it should be skipped for that booking." Detail: OADR-0020; OADR-0019 (extras in the interface).
 13. **Decided (owner, 2026-11-24).** "I propose creating an ingestion engine. The interface would be used by current app. For a given action (for example search), it should fan out the action and parameters to all enabled supplier's (Amadeus, PKFare, Duffle or anyone else) adapter which would form the appropriate request, the results should then be merged and sent from the ingestion engine. I also want to expose "pre-action", "post-action" and "post-merge" hooks so that I can manage them better. I would then be able to add markup for certain suppliers, or disable some supplier for some specific search query (maybe based on origin or destination or time or airline or something else) or do some other management. The same engine would be provided to OTAs as well, so that they can manage things if they use their own supplier." Detail: OADR-0019.
-14. **Proposed (lead).** **Supply source** (A4): one supplier used through one account, Velexis's or the OTA's own. Offers and bookings carry its id as `supplyId`.
+14. **Proposed (lead).** **Supply source** (A4). `decisions.md` §2 says that an opaque id identifies the supplier on the OTA's side and that search results carry it (items 3, 9 and 11). It does not use the term "supply source". Proposed: the id belongs to a supply source, which is one supplier used through one account, Velexis's or the OTA's own. Velexis supply then has one source and one id per Velexis supplier account. Also proposed: offers and bookings carry the id in a member named `supplyId`.
 15. **Proposed (lead).** **Id format** (A4): `sup_` plus 16 random base32 characters, never reused, with no time part and no hash of a name. It would be an exception to the prefixed ULIDs of [`conventions.md`](../conventions.md) §1: a ULID shows when a source was created.
 16. **Proposed (lead).** **Where the engine lives** (A1): in the OTA backend, as the module `ota/backend/src/supply/`, not in a new service.
 17. **Proposed (lead).** **`FlightOffer.source`** (A10, A28): the content type, whatever the supplier, with the new values `LCC` and `OTHER`. `netPrice` becomes the OTA's cost price, and `recordLocator` the airline's reference or none (plan 4.8).
@@ -39,7 +39,7 @@ The lead's four earlier proposals stay proposals: capture before the ticketing r
 
 ## Revisions to other records
 
-Dated notes of 2026-11-25 point here. Each rests on an owner's decision: [ADR-0010](0010-secrets-envelope-encryption.md) (Context), [ADR-0011](0011-payments-stripe-and-airline-card.md) (Settlements) and [ADR-0012](0012-amadeus-account-model.md) (Context, Lifecycle item 3, Office isolation).
+Dated notes of 2026-11-25 point here. Each rests on an owner's decision: [ADR-0010](0010-secrets-envelope-encryption.md) (Context), [ADR-0011](0011-payments-stripe-and-airline-card.md) (Settlements) and [ADR-0012](0012-amadeus-account-model.md) (Context, Lifecycle item 3, Office isolation). The component records have their own notes of the same date, listed in OADR-0019, PADR-0020 and PADR-0021: OADR-0001 (point 1), PADR-0006 (item 8), PADR-0010 (Context), PADR-0012 (item 4) and PADR-0015 (item 6).
 
 ## Notes that wait for a decision
 
@@ -63,7 +63,8 @@ These would rest on a proposal or an open question. Nobody writes them before th
 ### Negative
 
 - The decisions are in force before any code follows them. The code still knows one supplier.
-- Hiding has limits: the contract keeps Amadeus-named members, and `supplyId` lets anyone count Velexis's sources (plan 9.3).
+- The documents below `decisions.md` that describe the system as built (`README.md`, `AGENTS.md`, [`architecture.md`](../architecture.md), the component documents and the guidebook) still describe one supplier. Each changes with the task that builds its part.
+- Hiding has limits. As proposed, the contract keeps Amadeus-named members (item 18), and `supplyId` lets anyone count Velexis's sources (item 14; plan 9.3).
 - Offline recovery is credit given by Velexis (plan 9.4).
 - The plan counts 836 to 1,254 agent-hours (plan §7).
 
@@ -83,23 +84,23 @@ These would rest on a proposal or an open question. Nobody writes them before th
 - [`../decisions.md`](../decisions.md) §1, §2 and §5
 - [`../plans/multi-supplier-plan.md`](../plans/multi-supplier-plan.md) §2 (the owner's words), §3 (A1 to A43), §4, §5 and §9
 - [OADR-0019](../../../ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md) (the ingestion engine), [OADR-0020](../../../ota/docs/adr/0020-suppliers-paid-from-a-balance.md) (suppliers paid from a balance, extras, low-cost content)
-- PADR-0020 (the supplier registry) and PADR-0021 (the reconciliation role), in [`platform/docs/adr/`](../../../platform/docs/adr/README.md)
+- [PADR-0020](../../../platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md) (the supplier registry), [PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md) (the reconciliation role)
 - [ADR-0010](0010-secrets-envelope-encryption.md), [ADR-0011](0011-payments-stripe-and-airline-card.md), [ADR-0012](0012-amadeus-account-model.md)
 
 ## Open questions for the owner
 
-Only the owner answers these. Each recommendation is the lead's proposal. The sections are the plan's.
+Only the owner answers these. Each recommendation is the lead's proposal. The sections are the plan's. For questions 2 to 7 the detail record named has the options and the recommendation.
 
 | # | Question | Options | Recommendation (the lead's proposal) |
 |---|---|---|---|
-| 1 | When does M7 run against the launch? (§7, 9.5) | After it; before it, where each M7 review week moves the launch by one week; or a fixed weekly share | Beside M6; the SDK 1.0.0 publish first; PKFare live after the launch (A13, A43) |
-| 2 | Who works an OTA's queues between hiding the supplier (P5) and the reconciliation tools (P9)? (9.3) | Hide in production only once the staff tools are merged; or build them before P5 | None in the plan |
-| 3 | The wallet's default daily limit per OTA, and the Stripe modes allowed with Velexis supply (9.1, 9.4) | The limit off by default (A6), or on; every mode, or not those where the OTA collects the traveller's money | A limit for the first live OTA; the owner names the modes for the first live weeks |
-| 4 | Counsel: is Velexis a processor for each OTA, or a controller of its own? (4.14) | If a processor, "on request" (item 9) may not be enough, and the owner decides again | No supplier hidden in live use before the answer |
-| 5 | Who staffs the reconciliation role? (§8) | A named holder, a stand-in, cover hours | Named before the live co-test |
-| 6 | Low-cost content, if PKFare's sandbox shows no reliable mark for it (9.1) | A first release without it; or a later release | None; it stays in the first release until the sandbox facts are known |
-| 7 | Paid bags after ticketing (9.6) | Bags and seats booked with the order are enough; or two more tasks in P7 | Later: a second payment and a second supplier order |
+| 1 | When does M7 run against the launch? (§7, 9.5) | After it; before it, where each M7 review week moves the launch by one week; or a fixed weekly share | A13 says beside M6; plan 9.1 says that this must become one of the three. The SDK 1.0.0 publish first; PKFare live after the launch (A43) |
+| 2 | Who works an OTA's queues between hiding the supplier (P5) and the reconciliation tools (P9)? (9.3) | [PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md), question 3 | There |
+| 3 | The wallet's default daily limit per OTA, and the Stripe modes allowed with Velexis supply (9.1, 9.4) | [PADR-0020](../../../platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md), question 1 | There |
+| 4 | Counsel: is Velexis a processor for each OTA, or a controller of its own? (4.14) | [PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md), question 1 | There |
+| 5 | Who staffs the reconciliation role? (§8) | [PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md), question 2 | There |
+| 6 | Low-cost content, if PKFare's sandbox shows no reliable mark for it (9.1) | [OADR-0020](../../../ota/docs/adr/0020-suppliers-paid-from-a-balance.md), question 1 | There |
+| 7 | Paid bags after ticketing (9.6) | [OADR-0020](../../../ota/docs/adr/0020-suppliers-paid-from-a-balance.md), question 2 | There |
 | 8 | Does staff Shopping go with the other Amadeus screens? (9.3) | Hidden with PNR lookup, Queues and Supplier log; or kept | Hidden |
-| 9 | The traveller's reference when Amadeus returns no airline locator (9.3) | Amadeus's own locator; or none until a ticket number exists | None in the plan |
+| 9 | The traveller's reference when Amadeus returns no airline locator (9.3) | Amadeus's own locator; or none until a ticket number exists | No recommendation in plan 9.3; as drafted the plan shows the airline's reference or none (item 17) |
 
 Plan 9.6 lists more points to confirm. They belong to the four detail records.

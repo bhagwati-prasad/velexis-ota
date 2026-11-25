@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when Velexis has more than two staff (admin sub-roles), or when a customer contract requires an external audit store.
-**Revisions:** 2026-10-30 (lead decision (2j) of 2026-10-30, recorded with FIX-W35-PLATFORM): item 5's 5–500 characters count after trimming (dated note under item 5).
+**Revisions:** 2026-10-30 (lead decision (2j) of 2026-10-30, recorded with FIX-W35-PLATFORM): item 5's 5–500 characters count after trimming (dated note under item 5). 2026-11-25 (the owner's decision of 2026-11-24, recorded by [PADR-0021](0021-reconciliation-role-ledger-and-cases.md) item 2 and [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 8): item 8's sentence on supporting an OTA's bookings is no longer the only way, because a reconciliation role for Velexis staff gets a reference to OTA bookings; admin endpoints still never touch tenant schemas, and no code changes with the note (dated note under item 8).
 
 ## Context
 
@@ -22,6 +22,7 @@
 6. **Bootstrap.** The first admin is granted by a CLI command run on the VM by the developer (`node dist/cli.js admin:grant <email>`), which requires an existing, verified account with MFA enabled and writes an audit row with `actor_type = 'system'` and the operator's name. `admin:reset-mfa <email>` exists for the case where the only admin loses their authenticator. No admin is created by migrations or seeds in production.
 7. **Network.** The admin host is served by Caddy like the portal; an optional IP allow-list can be set in the Caddy configuration. The admin app sets `X-Robots-Tag: noindex`.
 8. **No tenant data.** Admin endpoints never touch tenant schemas. Supporting an OTA's bookings means being invited as a member like anyone else, which is then visible to the OTA in its team list.
+   - *Note (2026-11-25, the owner's decision of 2026-11-24; [PADR-0021](0021-reconciliation-role-ledger-and-cases.md) item 2).* "Supporting an OTA's bookings means being invited as a member like anyone else, which is then visible to the OTA in its team list" is no longer the only way. The owner decided: "I would make another role for reconciliation which would get reference to OTA bookings." [`decisions.md`](../../../docs/mvp/decisions.md) §2 has the new row "Staff access to bookings", and its §1 now gives the platform admin "the reconciliation role with a reference to OTA bookings"; the Context above still gives the earlier row. The first sentence of this item stays: admin endpoints never touch tenant schemas. What the role sees, how the reference reaches it, and whether it is one of the "admin sub-roles" of the Follow-ups are proposals of PADR-0021 (items 4 and 5), not decisions. No task builds the role yet, and the code is unchanged.
 9. **No impersonation** of portal users in the MVP.
 
 ### Audit

@@ -14,7 +14,7 @@
 - `platform.accounts.mfa_secret_ciphertext`;
 - tenant columns for identity documents, discount eligibility, idempotent replays and notification secrets.
 
-**2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 2, 3 and 6):** `decisions.md` §5 no longer says "Amadeus and Stripe credentials". It says "supplier credentials (Amadeus, PKFare) and Stripe credentials". The owner: "I would add multiple suppliers. PKFare is first in line." For an OTA's own account: "If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration". So PKFare credentials, Velexis's and an OTA's own, are envelope-encrypted as this record describes. Where they are stored and which module decrypts them is a proposal (plan 4.6; PADR-0020), not a decision.
+**2026-11-25 (the owner's decisions of 2026-11-24; [ADR-0030](0030-suppliers-supply-sources-and-ingestion-engine.md) items 2, 3 and 6):** `decisions.md` §5 no longer says "Amadeus and Stripe credentials". It says "supplier credentials (Amadeus, PKFare) and Stripe credentials". The owner: "I would add multiple suppliers. PKFare is first in line." For an OTA's own account: "If they select "Amadeus" or "PKFare" as well, then they should provide their credentials for Integration". So PKFare credentials, Velexis's and an OTA's own, are envelope-encrypted as this record describes. Where they are stored and which module decrypts them is a proposal (plan 4.6; [PADR-0020](../../../platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md)), not a decision.
 
 ## Decision
 
