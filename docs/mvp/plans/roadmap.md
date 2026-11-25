@@ -528,20 +528,20 @@ The 16 tasks of the re-baseline of 2026-11-06 (§1.1) joined the batches by the 
 | B10 | W40–W41 | E: OBE-128^; G: OBE-150, OBE-151, **OBE-153**, OBE-154, OAD-025; I: OBE-176 |
 | B11 | W41 | E: OBE-129, OBE-132, OBE-142; G: OBE-157, OAD-026; H: **OBE-161**; I: OBE-186, OAD-027 |
 | B12 | W41–W42 | E: OBE-133, OBE-137, OBE-144; G: OBE-155; H: **OBE-162** |
-| B13 | W42 | E: OBE-140; G: OBE-152, OBE-156; H: **OBE-163**, OBE-164; L: OBE-202 |
+| B13 | W42 | E: OBE-140; G: OBE-152, OBE-156; H: **OBE-163**, OBE-164; L: OBE-202\* |
 | B14 | W42–W43 | E: OBE-141; G: OBE-158, OFE-033, SDK-021^; H: OBE-165; I: **OBE-169** |
 | B15 | W43 | G: X-063; H: OBE-166; I: **OBE-170**, OBE-185, OBE-187, OBE-188; J: OBE-192 |
 | B16 | W43–W44 | H: OBE-167; I: **OBE-171**, OBE-180; J: OBE-194 |
 | B17 | W44 | I: **OBE-172** |
 | B18 | W44 | I: X-066, **OBE-173** |
 | B19 | W44–W45 | I: **OBE-174**, OBE-177^, OBE-179, OBE-182; K: X-067, OBE-198 |
-| B20 | W45 | I: OBE-178, OBE-181, OBE-184; K: PBE-092, **OBE-195**, OBE-199; L: OBE-204 |
+| B20 | W45 | I: OBE-178, OBE-181, OBE-184; K: PBE-092, **OBE-195**, OBE-199; L: OBE-204\* |
 | B21 | W45–W46 | I: X-065, OBE-183; K: PBE-093, PBE-095, PBE-096, **OBE-200**, OAD-028 |
 | B22 | W46 | K: PBE-094, PBE-097^; L: X-070, OBE-201 |
 | B23 | W46–W47 | K: PBE-098, **PAD-022**, PAD-023 |
 | B24 | W47 | K: **X-068**; L: X-069 |
 | B25 | W47 | L: **X-072**, X-074, PBE-101, OBE-203 |
-| B26 | W47 | L: **OBE-205** |
+| B26 | W47 | L: **OBE-205**\* |
 | B27 | W47 | L: **OBE-206**^ |
 | B28 | W47 | L: X-073\*^ |
 
@@ -590,8 +590,8 @@ The 169 tasks joined the batches by the rule of §2.0, from each block's **Depen
 
 | Batch | Tasks |
 |---|---|
-| B1 | PBE-102, PBE-106, PBE-107, **OBE-209**^, OBE-210^, OBE-213, OBE-215\*, OBE-216 |
-| B2 | PBE-103, PFE-034, **OBE-211**, OBE-214^ |
+| B1 | PBE-102, PBE-106, PBE-107, **OBE-209**\*^, OBE-210\*^, OBE-213, OBE-215\*, OBE-216 |
+| B2 | PBE-103, PFE-034, **OBE-211**, OBE-214\*^ |
 | B3 | PBE-104, OBE-207, **OBE-212**^ |
 | B4 | OBE-208 |
 | B5 | OAD-029 |

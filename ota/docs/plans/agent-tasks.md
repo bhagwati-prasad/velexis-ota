@@ -3395,7 +3395,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Milestone:** M7
 - **Depends on:** —
 - **Size:** M
-- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A42), §4.6, §4.9 to §4.12, §8 and §9.2 (plan key G1-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5, 10 and 12); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context; items 4 to 13, proposed); docs/mvp/README.md §7; ota/docs/README.md
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A42), §4.6, §4.9 to §4.12, §8 and §9.2 (plan key G1-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5, 10 and 12); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context; items 4 to 13, proposed: read for the PKFare facts they rest on, not built here); docs/mvp/README.md §7; ota/docs/README.md
 - **Files:** `ota/docs/suppliers/pkfare-facts.md`, `docs/pkfare-api/README.md`, `ota/docs/README.md`, `docs/mvp/README.md`
 - **Steps:**
   1. **Human step first:** the developer puts the saved pages of PKFare's API reference where the agent can read them, outside the repository.
@@ -3410,6 +3410,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - `docs/pkfare-api/` holds the index only, and neither file holds a partner id, a key, a signature or personal data.
 - **Verify:** `test -f ota/docs/suppliers/pkfare-facts.md && test "$(ls docs/pkfare-api)" = README.md && grep -cE '(stated|observed|assumed)' ota/docs/suppliers/pkfare-facts.md`
 - **Note (2026-11-25):** Files outside the OTA group (the lead's ruling G4): the index and its row in `docs/mvp/README.md` stand beside the Amadeus reference, as the plan's row names them; no test reads them.
+- **Note (2026-11-25):** This task builds none of the Proposed record items its Read first names. It reads OADR-0020 items 4 to 13 only for the PKFare facts they rest on. Under ADR-0030 item 26 (proposed) a block names in Read first the record items it builds, so the lead lists none of items 4 to 13 for this task when its wave is proposed, and the owner's go for that wave does not accept them on this task's account.
 
 ### OBE-108 · Measure PKFare's sandbox response times and limits and record them in the facts file
 - **Status:** todo
@@ -5803,7 +5804,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Milestone:** M7
 - **Depends on:** X-071, X-072, OBE-107
 - **Size:** S
-- **Read first:** docs/mvp/plans/multi-supplier-plan.md §6 (P10: the four steps of going live) and §8 (plan key G10-10); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 10 and 19); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 9, proposed); ota/docs/runbooks/airline-card-go-live.md (the form); the blocks of X-065, X-068, X-071 and X-072
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §6 (P10: the four steps of going live) and §8 (plan key G10-10); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 10 and 19; open question (44b)); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 9, proposed); ota/docs/runbooks/airline-card-go-live.md (the form); the blocks of X-065, X-068, X-071 and X-072
 - **Files:** `ota/docs/runbooks/supplier-pilot.md`, `ota/docs/runbooks/README.md`
 - **Steps:**
   1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. It says which scenarios PKFare's sandbox can produce.
@@ -5819,6 +5820,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - The record tables are empty, the runbook index links the file, and it holds no key and no personal data.
 - **Verify:** `test -f ota/docs/runbooks/supplier-pilot.md && grep -q supplier-pilot.md ota/docs/runbooks/README.md`
 - **Note (2026-11-25):** OBE-107 is added as a dependency: step 1 reads its facts file.
+- **Note (2026-11-25):** Rests on ADR-0030, question (44b): the lead recommends that PKFare stays off in production until it is certified, and that the launch does not wait for it. The wave proposal names it; the owner's go for the wave accepts it. So the pilot, which runs before the launch, does not wait for PKFare's certification, and step 3 names no certification (plan §6, P10 and its note of 2026-11-25). If the owner decides instead that the launch waits for the certification, the pilot starts only once PKFare's certification is on file, and step 3 says so.
 
 ### OBE-206 · Write the supplier go-live runbook: eight preconditions with sign-off, co-test, caps and the switch
 - **Status:** todo
@@ -5826,25 +5828,26 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Milestone:** M7
 - **Depends on:** X-069, X-070, OBE-201, X-071, X-072, OBE-202, OBE-203, PBE-101, OBE-204, OBE-205, X-074, OBE-107, PAD-018, PAD-019, OBE-177
 - **Size:** M
-- **Read first:** docs/mvp/plans/multi-supplier-plan.md §6 (P10 and its eight preconditions) and §8 (plan key G10-11); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 5, 10, 19, 22 and 23; open questions 3 and (44a)); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed; item 17; question 1); ota/docs/runbooks/airline-card-go-live.md (the model: preconditions, turning on, turning off, sign-off); the blocks of X-073, X-074, PBE-082, PAD-018, PAD-019 and OBE-177
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §6 (P10 and its eight preconditions) and §8 (plan key G10-11); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 5, 10, 19, 22 and 23; open questions 3, (44a) and (44b)); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed; item 17; question 1); ota/docs/runbooks/airline-card-go-live.md (the model: preconditions, turning on, turning off, sign-off); the blocks of X-073, X-074, PBE-082, PAD-018, PAD-019 and OBE-177
 - **Files:** `ota/docs/runbooks/supplier-go-live.md`, `ota/docs/runbooks/README.md`
 - **Steps:**
   1. **Gate** (step 7, the caps): the meaning of 0 is the owner's answer to (44a); this part does not start before it. The other steps can start.
   2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
   3. Write `supplier-go-live.md` with the sections of the model, from the current state to the sign-off. PKFare is off in production today, and agents never run the runbook.
   4. Preconditions: the eight of plan §6, in its order and words, one row each with a check and its evidence. The evidence comes from the tasks this one depends on: the proofs (X-069, X-070, OBE-201), the reviews and the PCI pack (OBE-203, PBE-101, OBE-202), the certification record (OBE-204), the pilot record (OBE-205), the alert drill (X-072) and the after-sales gate (X-074); precondition 7 names the line of X-073. The facts file, the roadmap and the owner give the rest.
-  5. Order: certification, the pilot, the co-test, live for one OTA (plan §6). Preconditions 1 to 7 come before the co-test, and X-073 merges only when 1 to 6 are signed.
+  5. Order (plan §6, P10 and its note of 2026-11-25): the co-test comes after both the pilot and PKFare's certification, and live for one OTA comes after the co-test. The pilot does not wait for the certification: the pilot runs before the launch (roadmap M7), and the certification may come after the launch, as the lead recommends in ADR-0030 question (44b), open (see the Note on (44b)). The certification is part of precondition 2, so it also comes before X-073. Preconditions 1 to 7 come before the co-test, and X-073's pull request opens only when 1 to 6 are signed (its Gate).
   6. Co-test and turning on: a funded wallet above the floor; the OTA's Stripe mode is one that the owner named for the first live weeks (ADR-0030 question 3); the global switch and the one OTA's switch, set in the platform admin with a reason; one real round-trip ticket; then expected debit, reported debit and PKFare's statement are compared.
   7. Caps, each with the place where it is set: the wallet floor (the change form of the Velexis account, PAD-018); the OTA's daily limit (the tenant page, PAD-019, a column of `platform.tenants` that OBE-177 reads from the cached tenant row, the lead's ruling S8); and the cap K of open cases (a named constant that OBE-177 counts inside the tenant for the first release, Proposed (lead) in the lead's ruling S15; the count per source over every OTA is PBE-107, after the launch). The meaning of 0 is the owner's answer to (44a); this part does not start before it.
   8. Turning off: one step in the platform admin, at once and without a review. The text says what stays served.
 - **Acceptance:**
   - The runbook has the eight preconditions of plan §6 in order, each with a check and an evidence link, and an empty sign-off row for each.
-  - It says that preconditions 1 to 7 come before the co-test, and that X-073 waits for 1 to 6.
+  - It gives the order of step 5: the co-test after both the pilot and PKFare's certification, the pilot not waiting for the certification, and live for one OTA after the co-test. It says that preconditions 1 to 7 come before the co-test, and that X-073 waits for 1 to 6.
   - Turning off is one step without a review. The runbook holds no key and no personal data.
 - **Verify:** `test -f ota/docs/runbooks/supplier-go-live.md && grep -c '^| P[1-8] ' ota/docs/runbooks/supplier-go-live.md && grep -q supplier-go-live.md ota/docs/runbooks/README.md`
 - **Note (2026-11-25):** Added dependencies: OBE-107, whose facts file step 2 reads, and PAD-018, PAD-019 and OBE-177, where the switches and caps of steps 6 and 7 are set and enforced.
 - **Note (2026-11-25):** Rests on ADR-0030, question (44a) (PADR-0020 item 17): the caps step names what 0 means only after the owner's answer; the lead asks the owner when the wave is proposed.
 - **Note (2026-11-25):** Rests on ADR-0030, question 3 (PADR-0020, question 1: the Stripe modes of (43c), still open): the lead recommends that the owner names the Stripe modes allowed with Velexis supply for the first live weeks. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-25):** Rests on ADR-0030, question (44b): the lead recommends that PKFare stays off in production until it is certified, and that the launch does not wait for it. The wave proposal names it; the owner's go for the wave accepts it. The pilot runs before the launch (roadmap M7, Human steps and Demo), so step 5 does not make the pilot wait for the certification. If the owner decides instead that the launch waits for the certification, step 5 and the second Acceptance line take the order of plan §6: certification, the pilot, the co-test, live for one OTA.
 
 ## M8 — Own supplier accounts (after the launch)
 

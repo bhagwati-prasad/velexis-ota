@@ -1572,7 +1572,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Milestone:** M7
 - **Depends on:** X-057, OBE-108, OBE-107
 - **Size:** S
-- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6, A8, A9), §6 (the exit of P1), §9.1 and §9.2 (plan key G1-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5, 12 and 23; open question 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context; items 4, 12 and 13, proposed; open question 1); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed)
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6, A8, A9), §6 (the exit of P1), §9.1 and §9.2 (plan key G1-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5, 12 and 23; open question 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context; items 4, 12 and 13, proposed: read for the assumptions A6, A8 and A9 they rest on, not built here; open question 1); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed: read for the assumption A6 it rests on, not built here)
 - **Files:** `ota/docs/suppliers/pkfare-facts.md`, `docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md`, `ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
 - **Steps:**
   1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107) with the manifest of X-057 and the measurements of OBE-108.
@@ -1587,6 +1587,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - ADR-0030 and OADR-0020 carry a dated note with the outcome; no item's status changes.
 - **Verify:** `grep -q 'Still assumed' ota/docs/suppliers/pkfare-facts.md && grep -q 'pkfare-facts.md' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'pkfare-facts.md' ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
 - **Note (2026-11-25):** OBE-107 is added: this task writes the exit into its facts file. The facts file and OADR-0020 are OTA documents (the lead's ruling G4): the exit is recorded where the facts are; no test reads them.
+- **Note (2026-11-25):** This task builds none of the Proposed record items its Read first names. It reads OADR-0020 items 4, 12 and 13 and PADR-0020 item 13 only for the assumptions they rest on, and it decides nothing (step 2). So, as for OBE-107, the lead lists none of them for this task when its wave is proposed, and the owner's go for that wave does not accept them on this task's account (ADR-0030 item 26, proposed). If a task that builds one of them is in the same wave, as PBE-083 may be for PADR-0020 item 13, the go accepts that item for that task.
 
 ### X-060 · Add the lint boundary between business code and supplier adapters
 - **Status:** todo
