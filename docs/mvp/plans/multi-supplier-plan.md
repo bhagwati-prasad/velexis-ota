@@ -284,7 +284,7 @@ Three terms: a **write-ahead** is a marker committed before a request leaves; th
 
 Rules 7 and 8 are the lead's safety set (proposal). The owner sets N, K and H (A32).
 
-A lost order answer opens a case of the kind "order unknown" for the reconciliation role, without a supplier order number. The role looks the order up in PKFare's portal and records its number or "no order". The engine then releases a found order; the booking fails and the card hold is voided. Deadline: H hours (proposal). Until PKFare confirms A33 in writing, nothing fails the booking without this step. On an OTA's own account, OTA staff decide at close-review (BM7-14).
+A lost order answer opens a case of the kind "order unknown" for the reconciliation role, without a supplier order number. The role looks the order up in PKFare's portal and records its number or "no order". The engine then releases a found order; the booking fails and the card hold is voided. Deadline: H hours after the case opens (proposal). Until PKFare confirms A33 in writing, nothing fails the booking without this step. On an OTA's own account, OTA staff decide at close-review (BM7-14).
 
 - The traveller is told the truth: "We are finalising your booking" until ticketing is accepted; never "not charged" after a capture; for an open case, tickets or a full refund within H hours. H counts from the capture (proposal). The role records the outcome before its own, shorter deadline (A39); OTA staff then refund.
 - PKFare's notifications are not authenticated: one only triggers a read. Polling is the source of truth.
@@ -369,7 +369,7 @@ One question goes to the owner's counsel; it is a step, not advice. Is Velexis a
 | Record | Scope | Revises, by a dated note |
 |---|---|---|
 | `decisions.md` | the rows of Annex A | its lines 7, 14, 15, 18, 32, 34 and 68 |
-| ADR-0030 (new) | supply sources, hidden suppliers, `sup_` ids, the engine's place, the meaning of `FlightOffer.source` | ADR-0012, ADR-0006, ADR-0011, ADR-0015, ADR-0004 |
+| ADR-0030 (new) | supply sources, hidden suppliers, `sup_` ids, the engine's place, the meaning of `FlightOffer.source` | ADR-0012, ADR-0006, ADR-0011, ADR-0015, ADR-0004; `docs/mvp/conventions.md` §1 (the id format) |
 | OADR-0019 (new) | the engine: interface, capabilities, routing, hooks, rules as data | OADR-0001, OADR-0002, OADR-0003, OADR-0005 |
 | OADR-0020 (new) | suppliers paid from a balance: capture first, one ticketing request, open cases, stops | OADR-0003, OADR-0008, OADR-0010, OADR-0013 |
 | PADR-0020 (new) | the registry: switches, supply sources, id history, Velexis accounts, wallet watch, Suppliers page, the rename in the platform API | PADR-0015 item 6, PADR-0010, PADR-0012 item 4, PADR-0018 |
@@ -430,7 +430,7 @@ The deliverables, exits, going-live steps and preconditions below are proposals.
 
 **P7.** Delivers PKFare orders, ticketing, open cases, limits, extras and low-cost. Exit: the failure matrix passes with its fourteen assertions (Annex B, after the P7 tasks); the tests of the eight money rules pass; end-to-end runs on the fake cover full-service, low-cost, extras and an open case.
 
-**P8.** Delivers rule tables on both sides, the handlers and the two screens. Exit: `rule-ownership` and `supply-net-leak` pass; both hook tests pass with stored rules; the cost of rules is measured in the search load test.
+**P8.** Delivers rule tables on both sides, the handlers and the two screens. Exit: `rule-ownership` and `supply-net-leak` pass; the three hook tests of E2-07 pass with stored rules; the cost of rules is measured in the search load test.
 
 **P9.** Delivers the role, the ledger, the support interface, cases, export and disclosure. Exit: the case and redaction tests pass; an admin without the role is refused; an end-to-end run takes the cases of 4.12 through both admins and finds no supplier word on the OTA side.
 
@@ -800,7 +800,7 @@ The fourteen assertions of the failure matrix (BM7-21):
 | E8-05 | Handler: carrier rules at post-action (default: every carrier on) | S | OTA backend | E8-04 |
 | E8-06 | Handler: price rules per supply source at post-action of Search and Price; the adjustment is stored as its own component; rule versions pinned on the priced offer; test `supply-net-leak` | L | OTA backend | E8-04, OS-07 (raw payload hidden) |
 | E8-07 | Rules for shares, deadlines, preferred source and minimum saving | M | OTA backend | E8-04, E2-10 |
-| E8-08 | Proof: `rule-ownership` in both directions; the two hook tests repeated with stored rules; the cost of rules measured in the search load test | M | OTA backend (tests), tools/perf | E8-05 to E8-07 |
+| E8-08 | Proof: `rule-ownership` in both directions; the three hook tests of E2-07 repeated with stored rules; the cost of rules measured in the search load test | M | OTA backend (tests), tools/perf | E8-05 to E8-07 |
 | ED8-01 | Velexis's rules on the platform (added by the editor): platform migration for the rules table (version, window, priority), validation with the rule model of E8-01, admin operations (list, create, change, switch on and off) with reason, audit row and invalidation event | L | Platform backend, `packages/api-types` | E8-01, SP-01 |
 | ED8-02 | Rules screen in the platform admin (added by the editor): list, form (hook, conditions, effect, priority, window), versions, switch with a reason; for Velexis sources, for all OTAs or named ones | L | Platform admin | ED8-01 |
 | ED8-03 | Console operations for an OTA's own rules (added by the editor; contract first, additive): list, create, change, switch off; `FEATURE_DISABLED` without an own supplier account; SDK methods | M | OTA contract, OTA backend | E8-02 |
