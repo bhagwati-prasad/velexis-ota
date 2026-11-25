@@ -10,12 +10,12 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done |
-| Platform work | 125 tasks = 153.5 days (M0 3, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 22.5, of which PBE-064's 1 day falls after the launch; M0's 3 days are the scaffolds' 2.5 and, since 2026-11-16, PBE-077's ½ day, which carries the M0 tag but runs in Week 30f; M6's 22.5 days are the first plan's 7.5, the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, PBE-072 and PBE-073, 2 days, in Week 30c and PBE-074, 1 day, in Week 30d since 2026-11-11, PBE-075, 1 day, in Week 30e since 2026-11-13, PFE-031, ½ day, in Week 30e since 2026-11-15, and PBE-076, 1 day, in Week 30f since 2026-11-16, §4) |
-| Buffer | 11.5 days inside platform weeks (Weeks 1, 17, 29, 30b, 30e, 31; 12 from 2026-11-13 until PFE-031 took ½ day of Week 30e's on 2026-11-15) |
+| Platform work | 166 tasks = 201.5 days since 2026-11-25: M0 3, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 22.5, M7 42 and M8 6 (§6). PBE-064's 1 day and M8's 6 days fall after the launch. Until 2026-11-25: 125 tasks = 153.5 days (M0 3, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 22.5, of which PBE-064's 1 day falls after the launch; M0's 3 days are the scaffolds' 2.5 and, since 2026-11-16, PBE-077's ½ day, which carries the M0 tag but runs in Week 30f; M6's 22.5 days are the first plan's 7.5, the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, PBE-072 and PBE-073, 2 days, in Week 30c and PBE-074, 1 day, in Week 30d since 2026-11-11, PBE-075, 1 day, in Week 30e since 2026-11-13, PFE-031, ½ day, in Week 30e since 2026-11-15, and PBE-076, 1 day, in Week 30f since 2026-11-16, §4) |
+| Buffer | 11.5 days inside platform weeks (Weeks 1, 17, 29, 30b, 30e, 31; 12 from 2026-11-13 until PFE-031 took ½ day of Week 30e's on 2026-11-15). Since 2026-11-25 M7's 42 platform days have no buffer of their own here: the roadmap gives M7 as a whole 41 days of buffer, shared by the three groups, by the lead's choice of that day (§6) |
 | Planning-review shift | The planning review split PBE-007 into PBE-007 and PBE-066 (2 more days) and resized PBE-035 from S to M (½ day more, taken from Week 12's buffer). Every task from PBE-008 in Week 3 to PAD-010 in Week 16 therefore starts two working days later than its week shows. Week 17's buffer drops from five to three days, and the M1 exit week does not move. |
-| Length | **37 platform weeks**: Weeks 1–31, the follow-up Weeks 30a and 30b (added 2026-11-06), the follow-up Weeks 30c and 30d (added 2026-11-11), the follow-up Week 30e (added 2026-11-13) and the follow-up Week 30f (added 2026-11-16, §4), of which seven are split weeks: Weeks 18–20 hold 7 platform days, Week 30c 2, Week 30d 1, Week 30e 2.5 (1½ task days and 1 day of buffer since 2026-11-15; 1 task day and 1½ days of buffer before) and Week 30f 1½ |
+| Length | **37 platform weeks**: Weeks 1–31, the follow-up Weeks 30a and 30b (added 2026-11-06), the follow-up Weeks 30c and 30d (added 2026-11-11), the follow-up Week 30e (added 2026-11-13) and the follow-up Week 30f (added 2026-11-16, §4), of which seven are split weeks: Weeks 18–20 hold 7 platform days, Week 30c 2, Week 30d 1, Week 30e 2.5 (1½ task days and 1 day of buffer since 2026-11-15; 1 task day and 1½ days of buffer before) and Week 30f 1½. Since 2026-11-25 M7 adds 42 platform days (8.4 weeks of five days) after these 37 weeks, and M8 6 days after the launch. They have no week numbers: §6 lists them by phase, and the roadmap places the phases in its calendar weeks (M7 in C87–C133, the platform's phases in C97–C125; M8 in C134–C139) |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged (the foundation's own weekly plan schedules them) |
-| Week numbers | Platform-plan weeks. The roadmap maps them to calendar weeks; between Weeks 17 and 21 it places several OTA-only weeks |
+| Week numbers | Platform-plan weeks. The roadmap maps them to calendar weeks; between Weeks 17 and 21 it places several OTA-only weeks. M7 and M8 have no platform-plan weeks (since 2026-11-25): §6 maps their phases to calendar weeks |
 
 **How a day works.** Morning: pick the next task from this plan, read its **Read first**, write the contract or the failing test first. Afternoon: implement until **Acceptance** and **Verify** pass, open the PR, run the checklist of [`conventions.md` §12](../../../docs/mvp/conventions.md#12-security-checklist-every-pr), merge, append ` ✅` to the task heading. **Friday afternoon** is the weekly demo (recorded in a short note in the PR of the last task) and a re-plan if the week slipped.
 
@@ -59,7 +59,9 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 30d | M6 | The official Amadeus hosts in production | PBE-074 | **Split week** (1 platform day) with OTA Week 39d (added 2026-11-11, second set; roadmap C79) |
 | 30e | M6 | Velexis's production demo OTA with its reserved key; since 2026-11-15 the approved terms of service and privacy notice | PBE-075, PFE-031 | **Split week** (1½ platform days and 1 day of buffer; 1 platform day and 1½ days of buffer until PFE-031 of 2026-11-15) with OTA Week 39e (added 2026-11-13; roadmap C80) |
 | 30f | M0 and M6 | Node.js 24: host names whose punycode labels do not decode refused (before the switch); the platform API and worker measured on Node.js 24 (after it) | PBE-077, PBE-076 | **Split week** (1½ platform days) in the roadmap's Node.js 24 block: PBE-077 in C81, before the switch X-048 (C82), and PBE-076 in C83, with OTA Week 39f (added 2026-11-16) |
-| 31 | M6 exit | E2E suites, launch | PFE-028 (2/2), PAD-016 (PBE-064 runs after the launch) | Shared launch week |
+| 31 | M6 exit | E2E suites, launch (since 2026-11-25 M6's exit only: the launch follows M7, §6) | PFE-028 (2/2), PAD-016 (PBE-064 runs after the launch) | Shared launch week |
+| M7 (§6) | M7 | Since 2026-11-25, by phase: registry, switches, Velexis accounts, wallet and Suppliers page (F); Velexis's rules (J); reconciliation (K); the security review of the supply modules (L); then M7's buffer and the launch | 35 tasks, 42 days (§6) | The phases' weeks hold the foundation's and the OTA's M7 days too (roadmap C87–C133) |
+| M8 (§6) | M8 | Since 2026-11-25, after the launch: an OTA's own supplier accounts | 6 tasks, 6 days (§6) | Beside the OTA's M8 tasks (roadmap C134–C139) |
 
 ```mermaid
 timeline
@@ -76,7 +78,10 @@ timeline
   section Platform-led again
     Weeks 21-29 : M5 billing : domains : Amadeus : payments : settlements : go-live
   section Shared
-    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : secrets:rewrap and the breached list (Week 30c) : the Amadeus hosts (Week 30d) : the demo OTA and the final terms (Week 30e) : Node.js 24 (Week 30f, in the Node.js 24 block) : launch (Week 31)
+    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : secrets#58;rewrap and the breached list (Week 30c) : the Amadeus hosts (Week 30d) : the demo OTA and the final terms (Week 30e) : Node.js 24 (Week 30f, in the Node.js 24 block) : M6 exit (Week 31)
+  section Multi-supplier, by phase (since 2026-11-25)
+    M7 phases F, J, K and L : registry, switches, accounts and the Suppliers page : Velexis rules : reconciliation : security review : buffer and launch
+    M8 after the launch : own supplier accounts
 ```
 
 ## 3. Weeks 1 and 2, day by day
@@ -369,6 +374,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Demo:** launch.
 - **Overlap:** shared launch week with the OTA group.
 
+*Note (2026-11-25, the owner's decision (43a) of 2026-11-25, [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 19; [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 3, note of 2026-11-25).* The launch waits for M7, the multi-supplier engine. Week 31 stays M6's exit week, with its tasks and its 3½ days of buffer, and ends with M6's go/no-go; its demo is that go/no-go, and the launch moves to the end of M7 (§6; in the roadmap's example calendar C133, 13 July 2029). `FEATURE_OWN_AMADEUS` stays off at launch, because the functionality for an OTA's own Amadeus account comes after the launch (ADR-0030 item 21). So PBE-064 waits for that later release, which the lead reads as M8 ([PADR-0015](../adr/0015-milestone-feature-switches.md), note of 2026-11-25).
+
 ## 5. Buffer and re-planning rules
 
 | Rule | Why |
@@ -378,3 +385,28 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 | When a cross-group gate (OF-11, OF-01, OF-09, OF-12) is not met, do the next task without the gate and return to the gated one; never write a fake of the OTA side outside the test doubles of PADR-0017 | Keeps the platform moving without hiding integration risk |
 | If a week slips by more than two days, re-plan on Friday: move the lowest-value task of the milestone (for example a non-critical admin page) after the exit demo, never a test or a security step | The exit criteria stay honest |
 | Any new work found becomes a task in [`agent-tasks.md`](agent-tasks.md) with an id and a size before it is scheduled here | One source of truth for scope |
+
+## 6. M7 and M8 by phase
+
+*Re-baseline (2026-11-25; [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 6; the owner's decisions of 2026-11-25, [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 25).* The owner decided that M7, the multi-supplier engine, is built before the launch (item 19). The lead reads the later release for an OTA's own Amadeus account (item 21) as milestone M8, after the launch, and splits M7 into the phases A to L (the lead's re-scope, [multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md#0-re-scope-of-2026-11-25) §0). The platform has 35 M7 tasks of 42 days, in four of the twelve phases, and 6 M8 tasks of 6 days ([`implementation-plan.md`](implementation-plan.md#m7--multi-supplier-engine)).
+
+These days get no week numbers. Without agents one developer builds M7 phase by phase, from A to L, and the platform's days of a phase share its calendar weeks with the foundation's and the OTA's days of the same phase. The roadmap's calendar without agents places M7 in C87–C133: 47 weeks from 24 July 2028 to 13 July 2029, with 194 task days and 41 days of buffer; its weeks skip the breaks of 7 to 19 August 2028 and of 25 December 2028 to 6 January 2029 ([roadmap](../../../docs/mvp/plans/roadmap.md) §1.3). Three choices behind that calendar are the lead's: M7 gets the buffer rule of the calendar with agents (task days times 1.2, rounded up to whole weeks) and the two breaks; M7 follows M6's weeks and the launch moves to the end of M7, while in fact M7's tasks start now; M8's weeks come after the launch and are not counted in the calendar's length.
+
+| Phase | Tasks | Days | Calendar weeks | Example dates | In the same weeks |
+|---|---|---|---|---|---|
+| F. Platform: registry, switches, Velexis accounts, wallet, Suppliers page | PBE-078, PBE-079, PBE-080, PBE-081, PBE-082, PBE-083, PBE-084, PBE-085, PBE-086, PBE-087, PBE-105, PFE-032, PFE-033, PAD-018, PAD-019, PAD-020, PAD-025 | 19 | C97–C102 | 16 Oct 2028 – 24 Nov 2028 | Foundation X-061, X-062, X-075 (4 days); OTA OBE-146, OBE-147 (3 days) |
+| J. Rules at the hooks and the platform screen | PBE-088, PBE-089, PAD-021 | 5 | C115–C117 | 5 Mar 2029 – 23 Mar 2029 | OTA OBE-189 … OBE-194 (6.5 days) |
+| K. Reconciliation | PBE-090, PBE-091, PBE-092, PBE-093, PBE-094, PBE-095, PBE-096, PBE-097, PBE-098, PBE-099, PBE-100, PAD-022, PAD-023, PAD-024 | 17 | C117–C123 | 19 Mar 2029 – 4 May 2029 | Foundation X-067, X-068 (3 days); OTA OBE-195 … OBE-200, OAD-028 (11 days) |
+| L. Proof and launch readiness | PBE-101 | 1 | C123–C125 | 30 Apr 2029 – 18 May 2029 | Foundation X-069 … X-074 (4.5 days); OTA OBE-201 … OBE-206 (4.5 days) |
+| **M7** | | **42** | C87–C133 | 24 Jul 2028 – 13 Jul 2029 | Phases A to E and G to I hold no platform task; C125–C133 hold M7's 41 days of buffer and the launch |
+| After the launch (M8) | PBE-102, PBE-103, PBE-104, PBE-106, PBE-107, PFE-034 | 6 | C134–C139 | 16 Jul 2029 – 24 Aug 2029 | OTA M8 (15 days) |
+
+Inside a phase the tasks follow their dependencies, in the order of the batch table of the roadmap's M7 section:
+
+- **F (19 days).** PBE-078 first: it starts the remaining critical path. Then PBE-079, PBE-086 and PBE-105; then PBE-080, PBE-081 and PBE-082, which need the foundation's X-061, and PBE-083; then PBE-084, PBE-085 and PAD-019; then PBE-087, PFE-032, PAD-018 and PAD-025; last PFE-033 and PAD-020. The foundation's X-075 and the OTA's OBE-146 and OBE-147 sit between them, and the foundation's X-062 proves the phase last. *Delivered:* the registry with supply sources, supply ids and their history, the switches and stops, the daily limit, Velexis's supplier accounts with the wallet watch, the Suppliers page. *Demo:* switch a supplier off and on with a reason; rotate a supply id and resolve the old one; a wallet reading under the floor stops the source; the Suppliers page of an OTA on Velexis supply names no supplier.
+- **J (5 days).** After the OTA's OBE-189 (the rule model): PBE-089, then PBE-088 and PAD-021. The OTA's OBE-190, OBE-193 and OBE-194 follow PBE-088. *Delivered:* Velexis's rules on the platform, their read by the OTA backend and the rules screen. *Demo:* a rule switched on in the rules screen skips a supplier in the next search.
+- **K (17 days).** PBE-090, PBE-091, PAD-024 and PBE-099 first, and PBE-100 once counsel's text is there. After the foundation's X-067: PBE-092; then PBE-093, PBE-095 and PBE-096; then PBE-094 and PBE-097; then PBE-098, PAD-022 and PAD-023. PBE-098 and PAD-022 also wait for the OTA's OBE-198 and OBE-200, and PAD-022 for OBE-196 and OBE-197. The foundation's X-068 proves the phase last; it needs PBE-100. *Delivered:* the reconciliation role, the ledger, cases, the handoff to one booking, the export, the daily check, statements, alerts and disclosure on request. *Demo:* a role holder takes a case from the OTA side to its outcome; the ledger export; the daily check; a statement matched in three lists.
+- **L (1 day).** PBE-101 after the foundation's X-062 and X-068. *Delivered:* the security review of the platform supply modules. *Demo:* the review's section, with no open high finding.
+- **M8 (6 days, after the launch).** PBE-102, PBE-106 and PBE-107 first; then PBE-103 (after the OTA's OBE-216) and PFE-034; last PBE-104. PBE-106 ships in a release after the one that holds X-075. No M8 task starts before the launch.
+
+Three human steps can hold a task: the limit parts of PBE-082 and PAD-019 wait for the owner's answer to (44a), PBE-100 waits for counsel's approved notice text (43d), and PBE-097 waits for PKFare's statement sample in the fixture set of X-057. When one holds, take the next task of the phase and come back to it, as §5 says for a cross-group gate. Weeks 1–31 and their buffer keep their numbers and days; Week 31 stays M6's exit week (its note of 2026-11-25).

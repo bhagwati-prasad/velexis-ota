@@ -2,7 +2,7 @@
 
 Velexis is a multi-tenant online travel agency (OTA) platform. A person signs up on the Velexis **portal**, subscribes to a plan and gets their own **OTA** (a tenant). The OTA sells flights from **Amadeus Enterprise** to its customers through a hosted **storefront**, or its own frontend built with the Velexis **JS SDK**, and runs its operations in the **OTA admin**. This repository holds the whole system: six components in two groups, the SDK, shared libraries, deployment files, and the planning and reference documents.
 
-**Status:** planning is done. Implementation starts with milestone **M0 Foundations**. The application directories below are created by the M0 tasks.
+**Status:** 325 of the plans' 540 tasks were done on 2026-11-25; milestone M7 is built before the launch and M8 after it, and `node tools/plan-lint/plan-lint.mjs` prints the live count ([`AGENTS.md`](AGENTS.md) §1). The application directories below are created by the M0 tasks.
 
 ## Where to start
 
@@ -10,7 +10,7 @@ Read in this order:
 
 1. [`docs/mvp/decisions.md`](docs/mvp/decisions.md): the product owner's decisions. Everything else follows them.
 2. [`docs/mvp/architecture.md`](docs/mvp/architecture.md): components, hosts and ports, data ownership, request flows, configuration, failure domains.
-3. [`docs/mvp/plans/roadmap.md`](docs/mvp/plans/roadmap.md) and the milestones M0–M6 in [`docs/mvp/README.md`](docs/mvp/README.md).
+3. [`docs/mvp/plans/roadmap.md`](docs/mvp/plans/roadmap.md) and the milestones M0–M8 in [`docs/mvp/README.md`](docs/mvp/README.md).
 4. The plans: [`docs/mvp/plans/`](docs/mvp/plans/) (foundation), [`platform/docs/plans/`](platform/docs/plans/) and [`ota/docs/plans/`](ota/docs/plans/) (component tasks and week-by-week plans).
 
 Then, depending on what you do:

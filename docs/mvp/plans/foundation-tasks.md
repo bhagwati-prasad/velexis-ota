@@ -6,15 +6,16 @@ This plan lists the cross-cutting **foundation** tasks of the Velexis MVP as sma
 - the contract generation pipeline and the database baseline migrations with the migration runner;
 - the reference data loader, CI and local development;
 - VM provisioning, Caddy, systemd, users per trust zone, the release and deploy pipeline, backups, monitoring and the restore drill;
-- the Amadeus stub and its fixture recording, plan progress reporting, and the PCI DSS controls of the VM (SSH MFA, off-VM security logs, a web application firewall, master-key rotation).
+- the Amadeus stub and its fixture recording, plan progress reporting, and the PCI DSS controls of the VM (SSH MFA, off-VM security logs, a web application firewall, master-key rotation);
+- since 2026-11-25, for milestone **M7 Multi-supplier engine**: the PKFare recording tool, fixtures and fake, the test helpers and seeds with supply sources, and the end-to-end proofs, the operations pack and the launch steps of the supplier work.
 
-Most of it is milestone **M0 Foundations**, which ends with a hello-world deploy on the single VM. A few tasks land later, when a milestone first needs them. Each task block follows the format of [ADR-0020](../adr/0020-ai-agent-development-workflow.md) and is validated by `node tools/plan-lint/plan-lint.mjs`, which reads the three task plans (*note of 2026-11-16, lead decision (25n); FIX-W56-PLAN:* since X-048 depends on the platform's PBE-077, plan-lint run on this file alone reports PBE-077 as unknown).
+Most of it is milestone **M0 Foundations**, which ends with a hello-world deploy on the single VM. A few tasks land later, when a milestone first needs them. *Since 2026-11-25* ([ADR-0030](../adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 25): 28 of the 75 tasks are M0 tasks, and 25 are tasks of milestone **M7 Multi-supplier engine** (X-051 to X-075), which the owner decided to build before the launch (item 19); milestone M8 (after the launch) has no foundation task. Each task block follows the format of [ADR-0020](../adr/0020-ai-agent-development-workflow.md) and is validated by `node tools/plan-lint/plan-lint.mjs`, which reads the three task plans (*note of 2026-11-16, lead decision (25n); FIX-W56-PLAN:* since X-048 depends on the platform's PBE-077, plan-lint run on this file alone reports PBE-077 as unknown). *Since 2026-11-25* M7's foundation tasks also depend on M7 tasks of the platform and OTA plans, which a run on this file alone reports as unknown too.
 
 Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](../architecture.md), [`../tech-stack.md`](../tech-stack.md), [`../conventions.md`](../conventions.md), [`../deployment-single-vm.md`](../deployment-single-vm.md), [`../local-development.md`](../local-development.md), [`../../../packages/README.md`](../../../packages/README.md), [`../../../deploy/README.md`](../../../deploy/README.md), [`../../../AGENTS.md`](../../../AGENTS.md). Decisions taken while writing this plan: [ADR-0021](../adr/0021-migration-cli-and-repeatable-grants.md) (migration CLI and repeatable grants), [ADR-0022](../adr/0022-shared-test-support-package.md) (`@velexis/testing`), [ADR-0023](../adr/0023-release-artefact-and-deploy-user.md) (release artefact and deploy user), [ADR-0024](../adr/0024-reference-data-sources-and-loader.md) (reference data), and from the planning review [ADR-0026](../adr/0026-system-users-per-trust-zone.md) (system users per trust zone) and [ADR-0027](../adr/0027-pci-scope-and-vm-controls.md) (PCI scope and VM controls).
 
 ## How to use this plan
 
-- Pick tasks as [`AGENTS.md`](../../../AGENTS.md) §3 says: lowest milestone first, all **Depends on** merged, not claimed, critical path first.
+- Pick tasks as [`AGENTS.md`](../../../AGENTS.md) §3 says: lowest milestone first, all **Depends on** merged, not claimed, critical path first. *Since 2026-11-25* (the owner's decision, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 3): M7's tasks may start while every open task of M0–M6 waits on a human step, a nightly run or the launch, in the order of their phases (A to L); M8's tasks start after the launch.
 - A task's **Status** line moves from `todo` to `in progress (PR #n)` to `done (PR #n)` in the task's own pull request. In the PR's last commit the heading also gets ` ✅` at the end (`### X-012 · Title ✅`), so the task counts as done on `main` from the merge on. This is the one status rule of all three task files ([ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, [`AGENTS.md`](../../../AGENTS.md) §4).
 - **Human step** in a task means a step only the developer can do: an action on a VM (including a throwaway test VM), a GitHub setting, or a secret. Agents have no VM access. The agent prepares everything else, makes as much as possible testable in CI (the `ubuntu-24.04` runner has `sudo` and systemd), and lists the human step in the PR under "Questions and follow-ups". Human steps count against the developer's non-task hours and the milestone buffer.
 - A task that adds a variable to a `deploy/env/*.env.example` template lists a human step: add the variable to `/etc/velexis/<app>.env` before the next deploy (`velexis-deploy` refuses the release otherwise).
@@ -30,6 +31,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 | **M2** Search & price | X-034, X-036 | Fixtures are recorded from the Amadeus test environment with scrubbing, and a scan keeps personal data out of them. The second-agent review procedure is ready for M3. |
 | **M3** Book & pay | X-028 | Signed Stripe webhook fixtures in tests; Stripe CLI forwarding for manual checks. |
 | **M6** Hardening & launch | X-029 to X-032, X-037 to X-045, X-049 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services; after the launch `systemctl mask` stops a unit on the VM (X-043, found by the drill's rehearsal on 2026-11-12; placed after the launch, as X-042 is, by lead decision (20n) of 2026-11-13). The move to managed services is proven to be configuration only; the VM's own checks and scripts follow it after the launch (X-042, since 2026-11-11; placed after the launch, as PBE-064 is, by lead decision (19h) of 2026-11-12). SSH needs a second factor, security logs are kept 12 months off the VM with an hourly review and a daily summary, and an AIDE change alerts again when the same file changes a second time (X-044, since 2026-11-13, lead decision (20p)); AIDE's own baseline is protected: a daily AIDE check that gave no result or an AIDE error alerts at once, audit rules of their own watch AIDE's database and the re-baseline record, and the off-VM configuration backup holds both (X-045, since 2026-11-15, lead decision (24c)), the WAF protects the public hosts, the master key can be rotated, and the VM reaches only the outside hosts it needs, with every refused attempt logged (X-041, since 2026-11-10). No comment, test header or component README names Node 22 as the runtime any more (X-049, since 2026-11-16, lead decision (25n)). |
+| **M7** Multi-supplier engine | X-051 to X-075 | Built before the launch (since 2026-11-25, the owner's decision, [ADR-0030](../adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 19). Parts of this rest on the lead's proposals, which each block names (ADR-0030 item 26). ADR-0030 has its contract annex (X-051), and the privacy pack for the owner's counsel is written (X-052). `plan-lint --remaining` lists the open M7 tasks (X-053), and new OTA operations can carry `x-milestone: M7` or `M8` (X-054). A test OTA with its own Amadeus connection keeps the Amadeus tool suites running while the tools are hidden (X-055). PKFare's sandbox answers are recorded with allow-list scrubbing (X-056, X-057), and a PKFare fake answers search, pricing, fare rules, extras pricing and orders, with scripted failures (X-058, X-064); phase C closes with A6, A8 and A9 checked against the observed PKFare facts (X-059). A lint boundary separates business code from the supplier adapters (X-060). The supplier registry has its invalidation events and Redis keys, and the test helpers and seeds write each supplier connection with its supply source (X-061, X-075). End-to-end runs prove the supplier switches and the neutral Suppliers page (X-062), that an OTA on Velexis supply sees no supplier name anywhere (X-063), PKFare bookings on the fake, with three money runbooks (X-065), and the cases of plan §4.12 through both admins, with three runbooks (X-068). A balance refusal stops sales (X-066), and the supply report messages share one envelope (X-067). Tests prove by value that a PKFare booking leaves no key, signature, document or card number behind (X-069), and that credentials, caches, rate buckets, stops and rules never cross tenants or environments (X-070). The VM allows PKFare's test host for the pilot (X-071), the supplier operations pack has its alert inventory, runbooks and alert drill (X-072), and the launch checklist has the after-sales gate (X-074). X-073 adds PKFare's production host only once preconditions 1 to 6 of the go-live runbook are signed; the lead proposes that it may stay open at the launch as a named exception (ADR-0030 question (44b), not decided). |
+| **M8** Own supplier accounts (after the launch) | none | No foundation task. The platform's and the OTA's M8 tasks start after the launch and build on these M7 tasks: `x-milestone: M8` (X-054), the PKFare recorder, fixtures and fake (X-056, X-057, X-064), the proof of the Suppliers page (X-062) and the helpers and seeds with supply sources (X-075). |
 
 ## What the component plans can depend on
 
@@ -59,6 +62,21 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 | Users per trust zone, per-zone key folders, `velexis-run` | X-033 |
 | Shared re-wrap helper for master-key rotation | X-040 |
 | Node.js 24 in the repository, CI, the release build and on the VM (since 2026-11-16, [ADR-0029](../adr/0029-nodejs-24-runtime.md)) | X-048 |
+| The contract annex of ADR-0030: hiding rules, source values, changed meanings and the version rule (M7, since 2026-11-25) | X-051 |
+| The privacy pack for the owner's counsel on hidden suppliers (M7) | X-052 |
+| `x-milestone` values `M7` and `M8` for new operations of the OTA contract (M7) | X-054 |
+| A test OTA with its own Amadeus connection in the integration helper, the end-to-end stack and the dev seed (M7) | X-055 |
+| PKFare recording: the tool `pkfare:record` with allow-list scrubbing, and the fixture set with its manifest (M7) | X-056, X-057 |
+| The PKFare fake `tools/pkfare-stub`: search, pricing, fare rules and extras pricing, then the order side with scripted failures (M7) | X-058, X-064 |
+| The lint boundary between business code and supplier adapters (M7) | X-060 |
+| Invalidation events and Redis keys of suppliers, supplier accounts and supply sources (M7) | X-061 |
+| Test and seed connections and Velexis Amadeus accounts with their supply source, through shared helpers (M7) | X-075 |
+| The sales stop after a balance refusal: the Redis flag, `supply.balance_refused` and the platform consumer (M7) | X-066 |
+| The supply report messages `supply.booking_fact` and `supply.case_opened` under one envelope (M7) | X-067 |
+| End-to-end proofs that later tasks build on: the supplier switches and the Suppliers page, PKFare bookings on the fake, the cases through both admins (M7) | X-062, X-065, X-068 |
+| The proofs by value and of isolation, PKFare's test host on the VM, the supplier operations pack and the after-sales gate, for the pilot plan and the go-live runbook (M7) | X-069 … X-072, X-074 |
+
+*Note (2026-11-25; [ADR-0030](../adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 25):* the rows marked M7 name the foundation tasks of milestone M7 that tasks of the platform and OTA plans name in their **Depends on**. M8 has no foundation task; its tasks depend on X-054, X-056, X-057, X-062, X-064 and X-075. X-053, X-059, X-063 and X-073 have no row: no task of the component plans depends on them.
 
 ## M0 Foundations
 
@@ -1352,9 +1370,594 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `shellcheck -S style deploy/scripts/test/deploy.test.sh deploy/systemd/test/units-smoke.sh deploy/caddy/test/caddy-smoke.sh && node --test tools/dev/dev-keys.test.mjs tools/plan-lint/test/ && pnpm format:check && pnpm lint`
 - **Note (2026-11-18, lead decision (29e) of 2026-11-18, approved by the owner with "yes to all"; FIX-W60-SHARED):** AC1 is met on the reading of lead decision (27f) of 2026-11-17. Besides the lines that name the SDK's supported floor (`sdk-node22`, "Node.js 22.12"), which (27f) skips, step 4's command may still print two kinds of line, and both stay: the comparisons of Node 22's and Node 24's URL parsers (ada 2.9.2 and 4.0.0) that PBE-077 and X-048 wrote in `platform/backend/src/api-keys/` and `platform/backend/src/domains/` (`api-key-rules.ts`, `api-key-rules.test.ts`, `hostname-rules.ts` and `hostname-rules.test.ts`, the `[X-048 AC3]` case among them, which fails on Node 22 by design), and SDK-019's fixtures of wrong wording in `tools/ci/ci-workflow.test.mjs` ("Node.js 22", "Node 22.13" and the comment that names them). On 2026-11-18 the command printed 31 lines, 13 of them skipped by (27f) and 18 of these two kinds (16 and 2). The two present-tense comments among them (`api-key-rules.test.ts` and `hostname-rules.test.ts`: "These cases run on Node 22 and on Node 24") now say that PBE-077's Verify ran the cases on both majors and that CI runs them on the `.nvmrc` major (24). This Note changes no Status.
 
+## M7 Multi-supplier engine
+
+The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform registry with the supplier switches, the hidden supplier, the rules at the hooks and the reconciliation role. The owner decided on 2026-11-25 that M7 is built before the launch ([ADR-0030](../adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 25; [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 3, revision of 2026-11-25). The design is in the [multi-supplier plan](multi-supplier-plan.md). Each block names the plan task it comes from ("plan key") and the record items it builds. A record item that is still marked **Proposed** is accepted when the owner starts the wave of a task that names it (ADR-0030 item 26). Every task also keeps the guidebook current, as the definition of done in AGENTS.md asks; plan-lint does not accept `guidebook/` paths in Files, so the blocks do not list them, and a block that moves or renames something the guidebook cites names the update in its steps. Tasks that add a migration take the next free number; when two of them run in parallel, the wave integrator renumbers the later one at merge, with the tests that list the migrations. Seven tasks were added in the review of 2026-11-25 (PBE-105, PAD-025 and X-075 in M7; OBE-215, PBE-106, OBE-216 and PBE-107 in M8); they have no plan key. Tests written after X-075 write the platform's supplier rows (connections and supply sources) only through X-075's builders. The blocks cite the lead's rulings for the task blocks by their codes (G1 to G12, T, and S1 to S18); [Annex D of the plan](multi-supplier-plan.md#annex-d-the-leads-rulings-for-the-task-blocks) states each one, and a ruling that makes a design choice is a proposal of the lead (ADR-0030 item 26).
+
+| Phase | Tasks in this file |
+|---|---|
+| A. Notes, packs and tooling | X-051, X-052, X-053, X-054 |
+| B. Amadeus tools hidden | X-055 |
+| C. PKFare facts, sandbox and fixtures | X-056, X-057, X-058, X-059 |
+| D. Engine and interface, Amadeus search and pricing | X-060 |
+| F. Platform: registry, switches, Velexis accounts, wallet, Suppliers page | X-061, X-062, X-075 |
+| G. The supplier hidden | X-063 |
+| I. PKFare booking, extras and low-cost | X-064, X-065, X-066 |
+| K. Reconciliation | X-067, X-068 |
+| L. Proof and launch readiness | X-069, X-070, X-071, X-072, X-073, X-074 |
+
+### X-051 · Write the contract annex of ADR-0030: hiding rules, source values, changed meanings, version rule
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A15, A28), §4.7 and §4.8 (plan key OS-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6, 21 and 24; item 14, proposed; item 17, proposed; item 18, proposed; open question 9); ota/backend/openapi/README.md §4; ota/docs/adr/0016-sdk-packaging-and-type-contract.md points 4 and 8; ota/sdk/README.md §9 (the version rule); ota/backend/openapi/velexis-ota-booking-api.openapi.yaml (`AmadeusFlightOfferSource` and its eight references; the members of step 5); the blocks of OBE-149, OBE-152, OBE-153, OBE-154, OBE-185, OBE-188 and SDK-021
+- **Files:** `docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md`
+- **Steps:**
+  1. Add the section "Annex A: contract rules" at the end of the record, and one line under Follow-ups that points to it. The annex changes no item and no status. Each rule names its item and says whether that item is Decided or Proposed on the day of the pull request.
+  2. Part 1, the hiding rule per surface: the table of plan §4.7. For each surface it says what a Velexis source shows, and that an OTA's own source is shown as today. The Amadeus tools follow item 21 and the 15 operations of item 18. Two console reads beyond the 15 close in phase G (the lead's ruling S14): the PNR lookup (OBE-149, `403 FEATURE_DISABLED`) and the order read of a Velexis-supplied booking (OBE-152, `409 BOOKING_NOT_MODIFIABLE`).
+  3. Part 2, the source values (item 17). The contract has no schema `FlightOfferSource`: `AmadeusFlightOfferSource` holds `GDS`, `LTC`, `PYTON`, `EAC` and `NDC`, and eight places reference it. The annex proposes a new schema `FlightOfferSource`, the content type whatever the supplier, with these five values and the new `LCC` and `OTHER` (A28). `FlightOffer.source`, `PricingRuleScope` and `FeeRuleScope` move to it; the four `Amadeus*` schemas keep Amadeus's own list; for the request body `FlightSearchAdvancedQuery` the annex names one choice and its reason.
+  4. Part 2 also gives the Velexis mapping: which content a Velexis source answers as `LCC` and which as `OTHER`. A Velexis source never answers `LTC`, `PYTON` or `EAC`, and no value is ever removed.
+  5. Part 3, the fields whose meaning changes. For each field it lists the members, gives the new meaning in one sentence that the contract's descriptions quote word for word, and names the task that ships it. `FlightOffer.source`: the content type, whatever the supplier (OBE-153). `netPrice` of `FlightOffer`, `PricedOffer` and `AncillaryOption`, and the console's net amounts of a booking (`ConsoleBookingSummary.net`, `ConsoleBookingPricing`): the OTA's cost price, never the supplier's net (A15; OBE-152). `recordLocator` of `Booking`, `BookingSummary` and `ConsoleBookingSummary`: for a Velexis source, the airline's reference or `null` (OBE-154; for low-cost bookings OBE-181). Today's extras lists, `AncillaryCatalogue.checkedBags`, `cabinBags`, `otherServices` and `seats` (of `AncillaryOption`, with `seatsSupported`) and `BookingAncillaryOptions.options` (of `BookingAncillaryOption`): for a Velexis source the lists are empty and `seatsSupported` is false; the options are in the neutral `extras` (OBE-185; under item 17, the lead's ruling S16). README §4 counts a change of meaning as breaking: item 17 approves it once the owner confirms it. Until then the published meaning stands.
+  6. Part 4, the version rule, in one sentence that SDK-021 and `ota/sdk/README.md` §9 quote: a new response property or a new value of a response enumeration, also one that opens a closed enumeration (`SupplierIssue.provider`, OBE-188), is a minor SDK version, since the contract test (OADR-0016 points 4 and 8) does not reject it; removing or narrowing one stays breaking. A second sentence says that the changed meanings of Part 3 ship in the minor SDK version 1.1.0, which SDK-021 documents, once item 17 approves them (Proposed (lead), the lead's ruling S16; the wave proposal confirms it). It names SDK-020 as the task that writes the integrators' notes (item 24).
+- **Acceptance:**
+  - ADR-0030 has the annex with its four parts, and every rule names its item and that item's state.
+  - Part 2 names `AmadeusFlightOfferSource`, its five values, `LCC` and `OTHER`, the schema each of the eight references uses, and the Velexis mapping.
+  - Part 3 gives each changed field, today's extras lists (OBE-185) included, its members, one sentence that a description can quote as it stands, and its task. Part 4 gives the version rule in one sentence and names the minor version 1.1.0.
+  - No OpenAPI document, generated file or other record changes.
+- **Verify:** `grep -q 'Annex A: contract rules' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'FlightSearchAdvancedQuery' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'ConsoleBookingSummary' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'AncillaryCatalogue' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'BookingAncillaryOptions' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -qF '1.1.0' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && git diff --exit-code -- ota/backend/openapi packages/api-types`
+- **Note (2026-11-25):** The new schema of part 2 and the split of the references are the lead's proposal for OBE-153, whose step 1 follows the annex, so that `AmadeusFlightOfferSource` keeps describing Amadeus's own payloads. Proposed (lead); confirm in the pull request.
+- **Note (2026-11-25):** OBE-152, OBE-154 and SDK-021 quote Part 3 and Part 4 word for word (the lead's ruling S14), and OBE-185 quotes Part 3's sentence on today's extras lists (the lead's ruling S16). Part 4's sentence on the changed meanings and the version 1.1.0 are Proposed (lead), the lead's ruling S16; the wave proposal confirms it.
+- **Note (2026-11-25):** Rests on ADR-0030, question 9: the airline's reference, or none until a ticket number exists, as item 17 drafts it. The wave proposal names it; the owner's go for the wave accepts it.
+
+### X-052 · Write the privacy pack for the owner's counsel on hidden suppliers
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.14, §8 and §9.6 item 6 (plan key RC-02); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 3; item 10, proposed; item 11, proposed; open question 1); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 9; open question 4); the blocks of PFE-031 and PBE-100
+- **Files:** `docs/mvp/privacy/`, `docs/mvp/privacy/README.md`, `docs/mvp/README.md`
+- **Steps:**
+  1. Create the folder with a README that lists the five parts. Every file says under its title: "Draft for counsel. Not legal advice. Nothing here is in force."
+  2. The questions. The main one: is Velexis a processor for each OTA, or a controller of its own? If a processor, is disclosure "on request" enough? Add the facts that counsel needs: the traveller data that reach a supplier, the hidden supplier, Velexis's own contacts on a supplier's order (A35), and the agreement on traveller data that Velexis needs with each supplier.
+  3. The disclosure procedure of PADR-0021 item 10: an OTA owner or admin asks on the Suppliers page; a platform admin answers within three working days from the id history, with the supplier's legal name, country and privacy contact at that date; the answer is stored and audited. Before the launch a platform admin sends the stored answer to the OTA by hand, once counsel's wording allows it (the lead's ruling S15; the runbook "disclosure request" of X-068). It always ends with a name (plan §4.14).
+  4. Three drafts for counsel: the notice text block, the template of the dated recipients list, and the clause for the OTA terms. No text goes into `LEGAL_STRINGS` or any page: PFE-031 and PBE-100 publish approved text only, word for word.
+  5. Add the pack to §2 of `docs/mvp/README.md`. The counsel gate (PADR-0021 item 11) stays open: only the owner records counsel's answer.
+- **Acceptance:**
+  - The folder holds the README and the five parts: questions, procedure, notice text block, recipients list, terms clause.
+  - Every file carries the draft line, and a reading of the law is marked "the plan's reading, for counsel to confirm".
+  - No application file changes, and no record marks the counsel question as answered.
+- **Verify:** `test -f docs/mvp/privacy/README.md && test "$(ls docs/mvp/privacy/*.md | wc -l)" -ge 6 && test -z "$(grep -L 'Draft for counsel. Not legal advice.' docs/mvp/privacy/*.md)" && grep -q 'privacy/' docs/mvp/README.md`
+- **Note (2026-11-25):** The pack prepares question (43d), counsel on Velexis's role (ADR-0030 question 4; PADR-0021 question 1), which the owner asked the lead to explain on 2026-11-25. It decides nothing. Counsel's answer is an outside step, and no supplier is hidden in live use before it (PADR-0021 item 11, proposed).
+
+### X-053 · Make `plan-lint --remaining` list the open M7 tasks beside the lowest open milestone
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §5, the paragraph "Milestone M7" (plan key NX-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 19, decided; the reading under it is the lead's); docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md item 3 (the revision of 2026-11-25); tools/plan-lint/plan-lint.mjs (`printRemaining`); tools/plan-lint/README.md; tools/plan-lint/test/plan-lint.test.mjs (`variant`); AGENTS.md §3
+- **Files:** `tools/plan-lint/plan-lint.mjs`, `tools/plan-lint/README.md`, `tools/plan-lint/test/plan-lint.test.mjs`, `AGENTS.md`
+- **Steps:**
+  1. `printRemaining` keeps its first block, the lowest open milestone, unchanged. When M7 has open tasks and is not that milestone, a second block follows in the same form: a heading line that names M7 with its open, total and ready counts, the ready tasks in the same order, then the waiting tasks with what they wait for. One constant names the milestone. The second block never lists M8.
+  2. A task is ready by the same rule in both blocks: every dependency is done, whatever its milestone.
+  3. The usage comment and the README section describe both blocks and the reason: M7 is built before the launch, while the open tasks of M0 to M6 wait on the owner's steps.
+  4. Add tests tagged `[X-053 AC<n>]` on variants of the fixture (the test file's `variant`, in its temporary folder): open tasks in M0 and in M7; an M7 task that waits for an open task; M7 as the lowest open milestone; a plan without M7. No existing test changes.
+  5. `AGENTS.md` §3 says what `--remaining` now lists. It follows the revised ADR-0025 item 3 and adds no rule.
+- **Acceptance:**
+  - With open tasks in a lower milestone and in M7, `--remaining` prints the lowest milestone's block as today, then M7's ready and waiting tasks.
+  - When M7 is the lowest open milestone, has no open task or is not in the plan, the output is byte-equal to today's, and every existing test passes unchanged.
+  - An M7 task with an open dependency is listed as waiting. The second block lists no M8 task.
+  - On the real plans the command exits 0 with `ERRORS: 0` and names M7.
+- **Verify:** `node --test tools/plan-lint/test/ && out="$(node tools/plan-lint/plan-lint.mjs --remaining)" && printf '%s\n' "$out" | grep -q 'M7' && printf '%s\n' "$out" | grep -qx 'ERRORS: 0'`
+
+### X-054 · Let `x-milestone` take `M7` and `M8` in the contract generator, its tests and the contract documents
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §5, the paragraph "Milestone M7" (plan key NX-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 19 and 21, decided; M8 is the lead's reading under item 21); packages/api-types/scripts/generate.mjs (`MILESTONES`); packages/api-types/src/api-types.test.ts (the case of a bad `x-milestone`, the pinned interface line); ota/backend/test/contract/openapi-extensions.contract.test.ts (`MILESTONE_PATTERN`); ota/backend/test/contract/route-parity.contract.test.ts (`[OBE-075 AC2]`); ota/backend/openapi/README.md §2 and §6
+- **Files:** `packages/api-types/scripts/generate.mjs`, `packages/api-types/src/generated/operations.ts`, `packages/api-types/src/api-types.test.ts`, `packages/api-types/README.md`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`, `ota/backend/test/contract/route-parity.contract.test.ts`, `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml` (one sentence of its description), `ota/backend/openapi/README.md`, `ota/docs/api-changes.md`
+- **Steps:**
+  1. In `generate.mjs`, `MILESTONES` gains `M7` and `M8` before `deferred`. Its comment says: M7 is the multi-supplier launch scope, M8 the release after the launch. Run `pnpm contracts:generate`: `operations.ts` changes in the type of `milestone` only.
+  2. The tests that pin the list follow. In `api-types.test.ts` the pinned interface line gains both values, and the case of a bad value keeps its meaning with a value outside the new list. `MILESTONE_PATTERN` and the filter of served operations in the route-parity test accept `M7` and `M8`.
+  3. The documents that name the list follow: the OTA contract's README (§2), `packages/api-types/README.md` (two places), `api-changes.md` §1, and the `x-milestone` bullet of the OTA document's `info.description`, with a change-log row ("descriptions only"). The plan's row names the README of both contracts: the platform document has no `x-milestone` and its README names no value list, so it does not change.
+  4. No operation changes and none is added. From now on a new operation of the multi-supplier work carries `M7` or `M8`, not `M6` as the plan's A40 proposed.
+- **Acceptance:**
+  - A document with `x-milestone: M7` or `M8` generates. Another unknown value still fails with the error that lists the allowed values.
+  - `ApiOperation.milestone` is typed with `"M7"` and `"M8"`, and `pnpm contracts:generate` leaves no diff.
+  - No test is deleted or weakened. The 19 deferred operations and every operation's milestone are unchanged.
+  - The four documents of step 3 name the same list.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test openapi-extensions route-parity && grep -q 'M8' ota/backend/openapi/README.md && grep -q 'M8' packages/api-types/README.md && grep -q 'M8' ota/docs/api-changes.md`
+- **Note (2026-11-25):** Files of the OTA group (the lead's ruling G4): two contract tests, the document's description, its README and `api-changes.md` pin or name the same list as the generator, so they merge together; the Verify runs those tests.
+
+### X-055 · Give the test stacks an OTA with its own Amadeus connection and move the tool suites to it
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7 and §4.15 (plan key HT-00, split from OS-17); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 21; item 18, proposed); ota/backend/src/amadeus/connection-resolver.ts (the file header); ota/backend/test/integration/amadeus/own-credentials.int.test.ts (`switchToOwn`); tools/e2e/support/seed.ts (`applyOwnLiveCredentials`); tools/e2e/test/stack.test.ts (`FEATURE_OWN_AMADEUS` is off in the stack); ota/backend/src/dev/dev-seed.command.ts (its header); ota/sdk/README.md §8.1
+- **Files:** `ota/backend/test/helpers/amadeus-connection.ts`, `ota/backend/test/integration/console/raw-amadeus.int.test.ts`, `ota/backend/test/integration/console/pnr-import.int.test.ts`, `ota/backend/test/integration/console/queues.int.test.ts`, `ota/backend/test/integration/console/review-closure.int.test.ts`, `ota/backend/test/integration/m4/office-isolation.int.test.ts`, `ota/backend/test/integration/m4/staff-actions.int.test.ts`, `ota/backend/test/integration/m4/permission-matrix.int.test.ts`, `ota/backend/src/dev/dev-seed.command.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/README.md`, `ota/sdk/test/smoke/smoke-env.js`, `ota/sdk/test/smoke/server-mode.smoke.test.js`, `ota/sdk/test/unit/smoke-env.test.js`, `ota/sdk/README.md`, `.github/workflows/e2e.yml`, `tools/e2e/test/workflow.test.ts`, `tools/e2e/support/seed.ts`, `tools/e2e/test/seed.test.ts`, `tools/e2e/support/ota.ts`, `tools/e2e/specs/ota-admin/pnr-import.e2e.ts`, `tools/e2e/specs/ota-admin/a11y-headers.e2e.ts`, `tools/e2e/README.md`
+- **Steps:**
+  1. Integration helper: one function sets a tenant's Amadeus connection of one environment to `velexis` (today's inline row) or `tenant` (the row of `switchToOwn`: no account, an own `base_url`, a sealed client secret, own offices, `active`), as the migrator role, and publishes the `connection` invalidation. 43 integration files seed the row inline; only the files of step 2 change.
+  2. Every integration file that calls one of the 15 tool operations runs it on an OTA with its own connection: raw Amadeus, PNR import, queues, and the m4 files `office-isolation`, `staff-actions` and `permission-matrix`. `review-closure.int.test.ts` calls `consoleImportBooking` only as a fixture: the helper switches the connection to `tenant` for the import call only, and the review closures stay on `velexis` (the lead's ruling S12). Every test keeps its assertions; if one cannot hold on an own connection, stop and tell the lead.
+  3. End-to-end helper in `support/seed.ts`: the twin of `applyOwnLiveCredentials` for the test environment, written as that function writes (the platform API's own role, one transaction, the caller publishes the invalidations), with its unit test. `pnr-import.e2e.ts` and `a11y-headers.e2e.ts` run on an OTA made with it, with their assertions and axe checks.
+  4. The SDK smoke test's stack: `dev:seed`, within its development-only exception, also creates a second test OTA whose test connection is `tenant` and `active` on the Amadeus stub, with a console automation key of the demo key's scopes, printed once under its own label. The nightly smoke step passes it as `SDK_SMOKE_OWN_CONSOLE_KEY`; `server-mode.smoke.test.js` makes its three raw reads with it, assertions unchanged.
+  5. The three READMEs name the helpers, the second OTA and its key, and the reason: OBE-106 follows.
+- **Acceptance:**
+  - Each helper makes an OTA whose test connection is `tenant` and `active`: `ConnectionResolver.resolve()` answers `credentialSource: "tenant"` for it.
+  - The console tool suites, the m4 files, the review closures, the two OTA admin specs and the smoke test pass with the same assertions; a second `dev:seed` run changes nothing.
+  - No test is deleted, skipped or weakened. No file of an app's `src` changes except the development-only `dev-seed.command.ts`. No switch is turned on.
+- **Verify:** `pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/console test/integration/m4 test/integration/dev && pnpm --filter @velexis/e2e test && pnpm --filter @velexis/ota-sdk test && node --test tools/ci/*.test.mjs && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/pnr-import.e2e.ts specs/ota-admin/a11y-headers.e2e.ts && pnpm --filter @velexis/ota-sdk test:smoke`
+- **Note (2026-11-25):** Files of the OTA backend and the OTA SDK (the lead's ruling G4): each suite moves with the helper that serves it; the Verify runs both components' tests. Step 4 follows the lead's ruling on OBE-106.
+- **Note (2026-11-25):** The size stays M (the lead's ruling S12): if the pull request outgrows it, step 4 (the smoke stack) moves into OBE-106, and the lead moves its files there. OBE-149 and X-075 later extend these helpers with the supply source (the lead's ruling S14).
+- **Note:** Workflow file: the owner approves this change with the wave.
+
+### X-056 · Add the recording tool `pkfare:record` with allow-list scrubbing for PKFare sandbox answers
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-107
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.6, §4.15 and §8 (plan key G1-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 10); ota/docs/suppliers/pkfare-facts.md (OBE-107: the sandbox host, the signature rule); the block of X-034; tools/amadeus-stub/src/record.ts and src/scrub.ts (the pattern); packages/logger/src/card-number.ts (`holdsCardNumber`)
+- **Files:** `package.json`, `tools/pkfare-stub/package.json`, `tools/pkfare-stub/tsconfig.json`, `tools/pkfare-stub/vitest.config.ts`, `tools/pkfare-stub/src/cli.ts`, `tools/pkfare-stub/src/record.ts`, `tools/pkfare-stub/src/scrub.ts`, `tools/pkfare-stub/test/tsconfig.json`, `tools/pkfare-stub/test/record.test.ts`, `tools/pkfare-stub/test/scrub.test.ts`, `tools/pkfare-stub/fixtures/README.md`, `tools/pkfare-stub/README.md`, `.env.example`, `docs/mvp/local-development.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. Create the private workspace package `tools/pkfare-stub` (`@velexis/pkfare-stub`), laid out as `tools/amadeus-stub`, with the recorder only; X-058 adds the server. Its `tsconfig.json` references each workspace package it imports (`packages/logger`), as the Amadeus stub's references `packages/config`. The root script `pkfare:record <operation>` runs it. Commit the updated `pnpm-lock.yaml`: the lockfile is always allowed.
+  3. The recorder reads the partner id, the key and the sandbox host from the local environment: `PKFARE_RECORD_PARTNER_ID`, `PKFARE_RECORD_KEY` and `PKFARE_RECORD_BASE_URL`, named as the Amadeus recorder's `AMADEUS_RECORD_*`, never the OTA backend's `PKFARE_BASE_URL_*`. It refuses to start when `CI` is set, a value is missing, or the host is not the sandbox host that the facts file states (a constant of the recorder, with the fact's id in its comment). It sends one request of the named operation with synthetic travellers and stores the answer with its status and response time.
+  4. It scrubs by allow-list, one list per operation: a field off the list gets a fixed synthetic value. Names, contacts, document numbers, dates of birth, card data and the signature are on no list (the lead's ruling G12).
+  5. Before it writes, it searches the scrubbed text for the key, the signature, every document number it sent and a card number (`holdsCardNumber` of `@velexis/logger`, the repository's one card detector); on a hit it writes nothing and exits with an error. It never prints the key or the signature.
+  6. The tests use a loopback server and need no credentials. The plan's row names the sandbox credentials (a human step): only the real runs of X-057 and OBE-108 need them. Document the tool in the READMEs, `.env.example` (commented, as the Amadeus recorder's variables are) and the local development runbook.
+- **Acceptance:**
+  - `pnpm pkfare:record <operation>` exits with an error and sends nothing when `CI` is set or a credential is missing.
+  - A test records an answer that holds the key, the signature, a document number or a card number: no file is written. With a clean answer only allow-listed fields keep their recorded value.
+  - A test finds neither the key nor the signature in anything the tool prints or writes.
+- **Verify:** `pnpm --filter @velexis/pkfare-stub build && pnpm --filter @velexis/pkfare-stub test && ! CI=true pnpm pkfare:record Shopping`
+
+### X-057 · Record the PKFare fixture set with its manifest and test it for unscrubbed values
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** X-056, OBE-107
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.10, §4.15 and §8 (plan key G1-03); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 10 and 12); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context); tools/amadeus-stub/test/fixtures-scan.test.ts (the pattern); .prettierignore (the Amadeus stub's fixtures line)
+- **Files:** `tools/pkfare-stub/fixtures/` (the recorded files, one folder per operation), `tools/pkfare-stub/fixtures/manifest.json`, `tools/pkfare-stub/fixtures/README.md`, `tools/pkfare-stub/test/fixtures-scan.test.ts`, `tools/pkfare-stub/test/manifest.test.ts`, `tools/pkfare-stub/src/scrub.ts`, `ota/docs/suppliers/pkfare-facts.md`
+- **Steps:**
+  1. **Human step first:** the developer runs `pnpm pkfare:record` in PKFare's sandbox for every entry of step 3 and hands over the scrubbed files. No agent holds the credentials; the tool never runs in CI.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  3. The set: Shopping, PrecisePricing, Penalty, AncillaryPricing, PreciseBooking, OrderPricing, Ticketing, OrderDetail in each state, CancelOrder, WalletBalance, notifications, the refusals B022 and B024, and a statement sample. An entry that the sandbox cannot produce stays in the manifest as missing, with the reason.
+  4. The manifest has one entry per fixture: the file, the operation, the state or case, the date, and the ids of the facts that cite it.
+  5. `fixtures-scan.test.ts` fails on an unscrubbed value: a field off the allow-list that differs from its synthetic value, the shape of a key or a signature, a document number, or a card number (`holdsCardNumber` of `@velexis/logger`). `manifest.test.ts` fails on a file without a manifest entry and on a fixture that no fact cites.
+  6. In the facts file, a row that a fixture shows becomes `observed` and names the fixture; the others stay `assumed`.
+  7. `.prettierignore` gains `tools/pkfare-stub/fixtures/` beside the Amadeus stub's line, so that the files stay exactly as recorded.
+- **Acceptance:**
+  - Each entry of step 3 has a fixture, or a manifest entry "missing" with its reason.
+  - A test fails on an unscrubbed value (it plants one in a copy) and on a fixture that no fact cites.
+  - Every `observed` row of the facts file names an existing fixture.
+  - No fixture holds the key, the signature, a card number, or a real traveller's name, contact or document number (the lead's ruling G12).
+- **Verify:** `pnpm --filter @velexis/pkfare-stub test fixtures-scan manifest && pnpm format:check`
+- **Note (2026-11-25):** OBE-107 is added: this task sets rows of its facts file to `observed`. That file is an OTA document (the lead's ruling G4): its rows change with the fixtures that show them, and `manifest.test.ts` reads it. plan-lint cannot list `.prettierignore` in Files, so step 7 names it.
+
+### X-058 · Build the PKFare fake `tools/pkfare-stub` for search, pricing, fare rules and extras pricing
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** X-057, X-056, OBE-107
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.6, §4.15 and §9.1 (plan key G1-05, merged with BM6-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 10; item 26, proposed; the list "Notes that wait for a decision", its ADR-0015 line); ota/docs/suppliers/pkfare-facts.md (the signature rule); tools/amadeus-stub/src/server.ts; packages/testing/src/amadeus.ts; tools/e2e/support/stack.ts (the service `amadeus-stub`)
+- **Files:** `tools/pkfare-stub/src/`, `tools/pkfare-stub/test/`, `tools/pkfare-stub/package.json`, `tools/pkfare-stub/README.md`, `package.json` (the root script of the fake), `tools/e2e/support/stack.ts`, `tools/e2e/test/stack.test.ts`, `tools/e2e/README.md`, `tools/ci/check-no-hardcoded-hosts.mjs`, `tools/ci/check-package-json.mjs`, `tools/ci/check-package-json.test.mjs`, `tools/ci/README.md`, `docs/mvp/adr/0015-testing-strategy.md`, `docs/mvp/adr/0022-shared-test-support-package.md`, `docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md`, `.env.example`, `docs/mvp/local-development.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. The server is a Node HTTP server on the loopback only. Its port comes from `PKFARE_STUB_PORT` through `@velexis/config`, with a default of its own: the Amadeus stub's `STUB_PORT` stays that stub's. The package's index exports it for tests, as the Amadeus stub's is (`packages/testing` wraps that one).
+  3. The fake refuses a request whose signature does not follow the rule of the facts file, checked with its own synthetic partner id and key. Nothing logs a signature.
+  4. A test sets and moves the clock, and can ask, per operation, for a refusal by code, a time-out, a dropped connection or a slow answer.
+  5. The fixture loader reads the manifest of X-057. Shopping, PrecisePricing, Penalty and AncillaryPricing answer from the fixtures. An operation without a fixture answers an error that names it: the fake invents no PKFare answer. The order operations are X-064's.
+  6. Add the fake to the end-to-end stack, with its own entry in `STACK_PORTS`. `DEV_ONLY` in `check-package-json.mjs` gains the package. The comment of `check-no-hardcoded-hosts.mjs` names the fake among the tools that never run on the VM.
+  7. Write dated notes in ADR-0015 and ADR-0022, and take the ADR-0015 line out of ADR-0030's list of waiting notes, as the OADR-0016 line left it. Update the READMEs, `.env.example` (the fake's port only, commented as `STUB_PORT` is; the OTA backend's `PKFARE_BASE_URL_*` come with OBE-159, the lead's ruling S6) and the local development runbook.
+- **Acceptance:**
+  - The fake answers Shopping, PrecisePricing, Penalty and AncillaryPricing from the fixtures and refuses a wrong signature.
+  - Tests move the clock and inject each kind of failure. The server binds to the loopback only.
+  - The end-to-end stack starts the fake. `check-package-json.mjs` fails when the package is listed outside `devDependencies`. No existing test is weakened.
+  - ADR-0015 and ADR-0022 carry dated notes; no app imports the package.
+- **Verify:** `pnpm --filter @velexis/pkfare-stub build && pnpm --filter @velexis/pkfare-stub test && node --test tools/ci/*.test.mjs && pnpm --filter @velexis/e2e test`
+- **Note (2026-11-25):** X-056 and OBE-107 are added: this task extends the package of X-056 and checks the signature rule of OBE-107's facts file. The note in ADR-0015 rests on the PKFare fake of plan §4.15, a proposal that ADR-0030 lists as waiting: the owner's go for the wave accepts it (item 26, proposed).
+
+### X-059 · Close phase P1: check A6, A8 and A9 against the observed PKFare facts and list what is still assumed
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** X-057, OBE-108, OBE-107
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6, A8, A9), §6 (the exit of P1), §9.1 and §9.2 (plan key G1-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5, 12 and 23; open question 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context; items 4, 12 and 13, proposed; open question 1); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed)
+- **Files:** `ota/docs/suppliers/pkfare-facts.md`, `docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md`, `ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107) with the manifest of X-057 and the measurements of OBE-108.
+  2. Add the section "Exit of P1" to the facts file. For A6, A8 and A9 it lists each PKFare fact the assumption rests on, the fixture or reference page that shows it, and one verdict: holds, does not hold, or still assumed. The parts of A6 that are the owner's decisions (the wallet, item 5; the daily limit, item 23) are not checked. The task states what the evidence shows and decides nothing.
+  3. Add the list "Still assumed": every `assumed` row with the tasks that rest on it and its question for PKFare. Mark the rows of the money path: they block going live.
+  4. Write a dated note in ADR-0030 and in OADR-0020 with the outcome and a link to the facts file. The note in OADR-0020 says which facts of its Context are now observed. No item changes its status.
+  5. If the fixtures show no reliable mark for low-cost content, the notes say so and point to OADR-0020, open question 1: the owner decides.
+  6. If a verdict is "does not hold", stop and tell the lead before a task of PKFare search or booking starts.
+- **Acceptance:**
+  - The facts file has the checks of A6, A8 and A9: each fact with its evidence and one of the three verdicts.
+  - The list "Still assumed" names, for each row, the tasks that rest on it and the question for PKFare, and marks the money-path rows.
+  - ADR-0030 and OADR-0020 carry a dated note with the outcome; no item's status changes.
+- **Verify:** `grep -q 'Still assumed' ota/docs/suppliers/pkfare-facts.md && grep -q 'pkfare-facts.md' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'pkfare-facts.md' ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
+- **Note (2026-11-25):** OBE-107 is added: this task writes the exit into its facts file. The facts file and OADR-0020 are OTA documents (the lead's ruling G4): the exit is recorded where the facts are; no test reads them.
+
+### X-060 · Add the lint boundary between business code and supplier adapters
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-111, OBE-106
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §6 (plan key E2-04; the line "Proof" and the exit of P3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 13; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 1; item 7, proposed); ota/docs/adr/0001-amadeus-client-design.md (point 1); eslint.config.mjs (`AMADEUS_ONLY`, the block of the OTA backend's production code); ota/backend/src/lint-rules.test.ts (the tests tagged `[OBE-018]`); the blocks of OBE-106, OBE-127, OBE-128, OBE-138 and OBE-141 (the entries of the list and their removers)
+- **Files:** `eslint.config.mjs`, `ota/backend/src/lint-rules.test.ts`, `ota/backend/README.md`
+- **Steps:**
+  1. No adapter import from business code: a file of `ota/backend/src` outside `src/supply/` may not import from `src/supply/adapters/`. Tests are excepted, as today.
+  2. No business import from an adapter: a file under `src/supply/adapters/` imports its own adapter, `src/supply/interface/`, the common call log and the infrastructure that the Amadeus files import today (`common`, `config`, `tenancy`, `cli`). It imports no business module (`shopping`, `checkout`, `bookings`, `payments`, `console`, `pricing`). The readers and request builders that phase D moves into the adapter keep to this rule.
+  3. HTTP clients only in adapters: today's rules on `fetch` and the HTTP clients allow `src/supply/adapters/**` only, and their message names the adapters.
+  4. Business files import the Amadeus client until phase E ends. Name those that import an adapter at this task's merge base in one list in `eslint.config.mjs`. Each entry names the task that removes its import (the lead's ruling S4). OBE-138 removes the four tool files (`raw-amadeus.service.ts`, `pnr-import.service.ts`, `queues.service.ts`, `queue-poller.processor.ts`), OBE-106's gate `amadeus-tools.guard.ts` and `staff-auth.service.ts`. OBE-141 removes the Nest modules, `cli.ts` and the files that keep a re-export until then: `reconcile.service.ts` (OBE-135), `order-recorder.ts` (OBE-127) and `order-request.builder.ts` (OBE-128 and OBE-132). Every other entry names the phase D or E task whose block takes its import away. If a task that keeps a re-export merged before this task, its file is on the list at the merge base.
+  5. A test holds a copy of the list as this task merges it and accepts exactly two later entries, each with OBE-141 as remover: `order-recorder.ts`, which OBE-127 adds, and `order-request.builder.ts`, which OBE-128 adds, if they merge after this task. The test fails on any other new entry, on a later entry with another remover, on an entry whose file imports no adapter and on an entry that names no task. So the list gains no other file and only shrinks: OBE-141 removes its last entries and the list, and the test stays to prove that no business file imports an adapter.
+  6. Add a case to `lint-rules.test.ts` for each rule, for the list, and for `fetch` in `src/supply/engine/` (refused) and in the adapter (allowed). A later block of the flat config replaces a rule's options, so each new rule keeps the patterns that its rule has today; the case of ADR-0002 proves it. Describe the rules in README §2.
+- **Acceptance:**
+  - `pnpm lint` refuses an adapter import from a business file that is not on the list, a business import from an adapter, and `fetch` or an HTTP client outside `src/supply/adapters/`; a case in `lint-rules.test.ts` proves each.
+  - The list holds exactly the files that import an adapter, each with the task that removes it; its test fails on a file outside its copy other than the two later entries of step 5, on a stale entry and on an entry without a task.
+  - The existing cases of `lint-rules.test.ts` pass; none is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test lint-rules && pnpm lint`
+- **Note (2026-11-25):** The plan's row has no list (step 4); without one the rule cannot merge before phase E ends. The shrinking list with its test is the lead's ruling, and so are the removers of step 4 (S4) and the two later entries of step 5 (S16).
+- **Note (2026-11-25):** OBE-106 is added as a dependency: its gate `amadeus-tools.guard.ts` is an entry of the list (step 4), so it must exist at this task's merge base.
+- **Note (2026-11-25):** `lint-rules.test.ts` and the README belong to the OTA backend: the rules' cases are that package's tests and must merge with the rules, so Verify runs them.
+
+### X-061 · Add the invalidation events and Redis keys of suppliers, supplier accounts and supply sources
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** PBE-078, PBE-079
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.4 and §4.6 (plan key SP-03); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 2; item 14, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 1; item 7, proposed; item 9, proposed); packages/api-types/src/jobs/invalidation.ts (the id patterns of `FIELDS`); ota/backend/src/tenancy/platform-cache.ts (`invalidatedKeys`); ota/backend/src/common/redis/redis.keys.ts (`redisKeys`); platform/docs/architecture.md §6.3 and §6.4; docs/mvp/architecture.md §4; ota/docs/architecture.md §7; the blocks of PBE-078 and PBE-079 (the id prefixes)
+- **Files:** `packages/api-types/src/jobs/invalidation.ts`, `packages/api-types/src/jobs/validate.ts`, `packages/api-types/src/jobs/jobs.test.ts`, `packages/api-types/README.md`, `ota/backend/src/common/redis/redis.keys.ts`, `ota/backend/src/common/redis/redis.keys.test.ts`, `ota/backend/src/tenancy/platform-cache.ts`, `ota/backend/src/tenancy/platform-cache.test.ts`, `platform/backend/test/integration/common/invalidation-coverage.int.test.ts`, `platform/backend/README.md`, `platform/docs/architecture.md`, `ota/docs/architecture.md`, `docs/mvp/architecture.md`
+- **Steps:**
+  1. `invalidation.ts` gains three event types, each with its interface, JSON Schema and entry in `INVALIDATION_TYPES`: `supplier` (a supplier's global state changed), `supplier_account` (a Velexis supplier account changed) and `supply_source` (a source's stop or current id changed). An event is `{ v: 1, type, …ids }` with the ids of the changed row and no row value: the supplier and its environment for `supplier`, `ssr_` + ULID for a source (PBE-078) and `sac_` + ULID for a supplier account (PBE-079). The patterns use the prefixes that those two tasks added to `PLATFORM_ID_PREFIXES`. Update the pinned list of `jobs.test.ts`.
+  2. `redis.keys.ts` gains builders for `conn:supply` (a tenant's supply rows of one environment), `supplier:` (a supplier's global state), `supply:src:` (a source), `supplier:acct:` (a Velexis supplier account) and `supply:id:` (an id, current or old, to its source). Each lives 60 s. List them in `redis.keys.test.ts`.
+  3. `invalidatedKeys`: `connection` also deletes the tenant's `conn:supply` keys; `supplier`, `supplier_account` and `supply_source` delete their `supplier:`, `supplier:acct:` and `supply:src:` key. `supply:id:` is never invalidated: an id belongs to one source for ever.
+  4. Platform side: the guard of `invalidation-coverage.int.test.ts` that every type has a row gets a pending list of the three new types, each with the task that adds its first row: `supply_source` PBE-080, `supplier` PBE-081, `supplier_account` PBE-084. That task removes its entry, so the list ends empty; the guard's assertion stays.
+  5. Update platform architecture §6.3 and §6.4, the shared key table of `docs/mvp/architecture.md` §4 and OTA architecture §7. OBE-146 adds the readers of the keys.
+- **Acceptance:**
+  - `jobs.test.ts` names eleven types. Each new event validates with its ids and fails with an extra property.
+  - `redis.keys.test.ts` lists the five builders with their prefix and their lifetime.
+  - `invalidatedKeys` returns the keys of step 3 and no key of another tenant, supplier or source.
+  - The pending list names each new type with its task, and the guard fails for a listed type that has a row.
+  - The three architecture documents name the same keys and events. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/api-types build && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test redis.keys platform-cache && pnpm --filter @velexis/platform-backend test:int common/invalidation-coverage`
+- **Note (2026-11-25):** PBE-079 is added as a dependency: the schema of the `supplier_account` event pins the id form of its table. The prefixes `ssr_` and `sac_` are Proposed (lead). G4: the OTA backend's key builder and tenant cache and the platform's invalidation coverage test change with the event schemas, so that no event exists without its reader and its test; Verify runs both backends' tests.
+
+### X-062 · Prove the supplier switches and the neutral Suppliers page end to end
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** PFE-032, PFE-033, PAD-018, PAD-019, OBE-146, OBE-115, PBE-086, PBE-085, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.4, §4.5, §4.7 and §6, the exit of P4 (plan key SP-21); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 3, 6 and 21; item 18, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (items 1, 3 and 4; item 9, proposed; item 11, proposed); the block of X-075 (the e2e seed); tools/e2e/README.md; tools/e2e/support/stack.ts, ota.ts, seed.ts and mailpit.ts
+- **Files:** `tools/e2e/specs/admin-supplier-switches.e2e.ts`, `tools/e2e/specs/portal-suppliers.e2e.ts`, `tools/e2e/specs/admin-a11y.e2e.ts`, `tools/e2e/specs/admin-headers.e2e.ts`, `tools/e2e/support/ota.ts`, `tools/e2e/support/seed.ts`, `tools/e2e/test/ota.test.ts`, `tools/e2e/test/seed.test.ts`, `tools/e2e/README.md`
+- **Steps:**
+  1. `admin-supplier-switches.e2e.ts` (project `platform-admin`, with the OTA backend): a platform admin switches the supplier off globally, with a reason. A search through the OTA's API then finds no offer, and a booking made before is still read. Switched on again, the search finds offers.
+  2. The same journey for the per-tenant switch on the tenant page and for the source stop. Each step waits for the event or the 60 s cache, never for a fixed sleep. The audit page shows one row per switch with its reason.
+  3. `portal-suppliers.e2e.ts` (project `portal`), for an OTA on Velexis supply: the Suppliers page; the answers of `getSuppliersPage`, `listAmadeusConnections`, `getOnboarding` and the go-live preconditions, called as the owner through the harness; and the rendered platform e-mails in Mailpit. The spec searches the Velexis section, those answers and the e-mails for the suppliers' names, the office id the stack assigned and the stub's host. The section "Amadeus" stays, since `FEATURE_OWN_AMADEUS` is on in the stack (plan SP-21).
+  4. The same spec, for an OTA with its own Amadeus connection, written with its supply source by the e2e seed of X-075, and `FEATURE_OWN_AMADEUS` on in the stack: the section "Amadeus" shows the connection and its settings. There is no PKFare section: it is milestone M8.
+  5. Add the new admin pages to `admin-a11y.e2e.ts` and `admin-headers.e2e.ts`, and describe the journeys in `tools/e2e/README.md`.
+- **Acceptance:**
+  - With each level off in turn (global, per tenant, stop) a new search returns no offer of the source and an existing booking is still served. Switched on again, the search returns offers.
+  - For the Velexis-only OTA the Velexis section, the API answers and the e-mails of step 3 contain no supplier name, office id or supplier host; only the own-account section names "Amadeus".
+  - The section "Amadeus" renders for the OTA with its own connection. axe finds no serious or critical violation on the new pages.
+  - No existing spec is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/e2e test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=portal --project=platform-admin specs/portal-suppliers.e2e.ts specs/admin-supplier-switches.e2e.ts specs/admin-a11y.e2e.ts specs/admin-headers.e2e.ts`
+- **Note (2026-11-25):** OBE-146 and OBE-115 are added as dependencies: a switch changes a search only through the resolver and the engine's search. PBE-086 is added: step 3 reads its `supply_test` and `supply_live`. PBE-085 (step 3 calls `getSuppliersPage`) and X-075 (the e2e seed writes the own connection of step 4 with its supply source) are added as producers. The section "Amadeus" is checked with `FEATURE_OWN_AMADEUS` on in the stack (since PFE-033). The PKFare section and the OTA's own choice are milestone M8, so "each level" means the global switch, the per-tenant switch and the stop. Rests on ADR-0030, question (44d): the lead recommends that an OTA's own PKFare account moves after the launch (milestone M8), so this task builds no check of a PKFare section. The wave proposal names it; the owner's go for the wave accepts it.
+
+### X-075 · Write test and seed connections and Velexis Amadeus accounts with their supply source, through shared helpers
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** PBE-078, PBE-080, X-055
+- **Size:** L
+- **Read first:** the lead's rulings S10 and S14 of 2026-11-25 (this task); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 11; item 14, proposed; item 15, proposed); docs/mvp/adr/0022-shared-test-support-package.md; the blocks of PBE-078, PBE-080, X-055 and OBE-146; platform/backend/test/builders/platform-rows.ts (`insertAmadeusAccount`, `insertSupplierConnection`, `velexisSource`); ota/backend/test/integration/shopping/search.int.test.ts (`insertAccount`, `insertTenant`: the inline rows); ota/backend/src/dev/dev-seed.command.ts and platform/backend/src/dev/dev-seed.command.ts (their headers); tools/e2e/support/seed.ts (`applyOwnLiveCredentials`, `restoreVelexisLivePool`) and ota.ts (`meetLivePreconditions`)
+- **Files:** `packages/testing/src/supply-rows.ts`, `packages/testing/src/supply-rows.test.ts`, `packages/testing/src/index.ts`, `packages/testing/test/integration/supply-rows.int.test.ts`, `packages/testing/README.md`, `platform/backend/test/builders/platform-rows.ts`, `ota/backend/test/builders/platform-rows.ts`, `ota/backend/test/helpers/amadeus-connection.ts`, `ota/backend/test/integration/` (the 43 files of step 3), `ota/backend/test/load/search-load.mjs`, `ota/backend/src/dev/dev-seed.command.ts`, `platform/backend/src/dev/dev-seed.command.ts`, `platform/backend/test/integration/dev/dev-seed.int.test.ts`, `tools/e2e/support/seed.ts`, `tools/e2e/support/ota.ts`, `tools/e2e/test/seed.test.ts`, `tools/e2e/test/ota.test.ts`, `tools/e2e/README.md`, `ota/backend/README.md`, `platform/backend/README.md`
+- **Steps:**
+  1. Added in the review of 2026-11-25 (the lead's rulings S10 and S14): OBE-146 relies on every connection having its supply source (PBE-078), and the rows that tests and seeds write today have none. `packages/testing/src/supply-rows.ts`, exported from the package root, writes on a pg pool or client of the caller's role, as `insertRow` of `platform-rows.ts` does: a Velexis Amadeus account with its source and first id; a connection that names its supplier in `provider`, is switched on and points at its source (the account's for `velexis`, its own for `tenant`); a connection's switch between the two. A source row gets an `ssr_` id (a prefixed ULID of `PLATFORM_ID_PREFIXES`, PBE-078; the lead's ruling S9), and its first `supply_source_ids` row a `sup_` id (16 base32 characters, PBE-078's pattern CHECK). The module writes no `supplier_accounts` row: Velexis's PKFare account and its source are X-065's, written in `seed.ts` (its step 1).
+  2. Builders: `insertAmadeusAccount` and `insertSupplierConnection` of the platform's `platform-rows.ts` write through it, so their 20 callers keep their calls. A new `ota/backend/test/builders/platform-rows.ts` gives the OTA tests the same as `velexis_migrator`, and X-055's `test/helpers/amadeus-connection.ts` uses it.
+  3. Inline inserts move to the builders, setup lines only. At commit 04127444, 43 OTA integration files insert the Velexis test account and 42 of them a connection (account 1, amadeus 4, bookings 9, checkout 2, console 7, dev 1, m2 3, m3 2, m4 2, notifications 1, payments 5, provisioning 1, settings 1, shopping 3, tenancy 1); `switchToOwn` of `own-credentials.int.test.ts` and `seedTenants` of `search-load.mjs` move too. The platform backend's tests insert none inline. These are this task's own counts; the pull request recounts them at its base commit (the lead's ruling S16).
+  4. Seeds: the platform `dev:seed` writes the test account's source in the transaction that inserts it, as PBE-080 does for a new account. The OTA `dev:seed`, within its development-only exception, points the demo OTA's connection at that source and gives X-055's second OTA one of its own; without the account's source it exits 1 and asks for the platform's seed. So the end-to-end stack's OTAs on Velexis supply get their source from these seeds and from provisioning (PBE-078's repository). End-to-end harness, through the module of step 1: `applyOwnLiveCredentials`, its test twin of X-055 (the own-connection OTA of X-062 step 4) and `meetLivePreconditions` give an own connection its own source, as the verifier's apply does; `restoreVelexisLivePool` deletes a created account's source with it.
+  5. Tests: the module's unit and integration tests, and added cases in both `dev-seed.int.test.ts`. `seed.test.ts` and `ota.test.ts` pin the statements of the harness functions that change: they gain the new statements, and the pull request lists each changed expectation with its reason (the lead's ruling T). Update the READMEs of `packages/testing` (its table of parts), both backends (the seeds) and `tools/e2e`.
+- **Acceptance:**
+  - Every connection and Velexis Amadeus account that a test, the load test or a seed writes has its supply source (an `ssr_` id) and a `sup_` supply id, and every such connection names its `provider`; a `velexis` connection shares its account's source, a `tenant` one has its own.
+  - Outside the two row builders, no test or end-to-end harness file inserts a `platform.supplier_connections` or `platform.amadeus_accounts` row (the grep of Verify).
+  - No assertion of a moved file changes: the 43 files and the load test change setup lines only, and every suite runs the same tests. The seeds' own tests gain cases and the new statements of step 5; no test is deleted, skipped or weakened. Of the apps' `src`, only the two development-only seeds change.
+  - A second run of each `dev:seed` changes nothing.
+- **Verify:** `pnpm --filter @velexis/testing build && pnpm --filter @velexis/testing test && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/platform-backend test:int && pnpm --filter @velexis/ota-backend test:int && pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/platform-backend test:xb && pnpm --filter @velexis/ota-backend test:xb && node --test tools/perf/*.test.mjs && pnpm --filter @velexis/e2e test && ! grep -rlE 'insertInto\("platform\.(supplier_connections|amadeus_accounts)"\)|INSERT INTO platform\.(supplier_connections|amadeus_accounts)' ota/backend/test platform/backend/test tools/e2e/support | grep -v 'ota/backend/test/builders/platform-rows\.ts$' && E2E_WITH_OTA=1 pnpm test:e2e -- --project=platform-admin --project=portal --project=storefront --project=ota-admin specs/admin-live-office.e2e.ts specs/portal-go-live.e2e.ts specs/portal-a11y.e2e.ts specs/portal-headers.e2e.ts specs/portal-mfa-enrolment.e2e.ts specs/storefront/live-and-domains.e2e.ts specs/ota-admin/pnr-import.e2e.ts specs/ota-admin/a11y-headers.e2e.ts`
+- **Note (2026-11-25):** Files of the OTA backend, the platform backend and the end-to-end harness (the lead's ruling G4): each test moves with the builder that serves it and the seeds write what the builders write; Verify runs the tests of each. The task extends X-055's helper and second OTA (phase B). PBE-106 (milestone M8) then makes the source NOT NULL and drops the `DEFAULT 'amadeus'` of `provider` (the lead's rulings S2 and S16).
+- **Note (2026-11-25):** X-055 is listed because this task extends its integration helper, its end-to-end twin and its second dev-seed OTA (the lead's ruling S16).
+- **Note (2026-11-25):** Every test written after X-075 writes the platform's supplier rows (connections and supply sources) only through X-075's builders: the module of step 1 and the row builders of step 2 (the lead's ruling S18). PBE-106's grep checks this for connections.
+
+### X-063 · Prove end to end that an OTA on Velexis supply sees no supplier name anywhere
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OFE-033, OAD-024, OAD-025, OBE-157, OBE-158, X-055, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.8, §4.15 and §9.3 (plan key OS-17); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 6 and 21; item 18, proposed); the blocks of X-055, X-075, OAD-024 and OAD-025; tools/e2e/README.md; tools/e2e/support/mailpit.ts; tools/e2e/support/seed.ts (the helpers of X-055); tools/e2e/specs/storefront/checkout-airline-card.e2e.ts (a full journey and its payment); ota/backend/test/support/pdf-text.ts
+- **Files:** `tools/e2e/support/supplier-words.ts`, `tools/e2e/test/supplier-words.test.ts`, `tools/e2e/support/pdf-text.ts`, `tools/e2e/specs/ota-admin/no-supplier-crawl.e2e.ts`, `tools/e2e/specs/storefront/no-supplier-journey.e2e.ts`, `tools/e2e/README.md`
+- **Steps:**
+  1. One helper holds the supplier words: the supplier names, the stack's office ids and its supplier hosts. It answers the hits in a text, in any letter case; in a JSON body it reads the string values only, not the member names, which the contract keeps (plan §9.3). Its unit test covers each kind of word, a JSON body with an Amadeus-named member and a clean text.
+  2. Crawl, `no-supplier-crawl.e2e.ts`: sign in to the OTA admin of an OTA on Velexis supply, in the test environment. Open every menu entry and follow every link inside the console, each page once, up to a fixed count. Open each dialog of a booking's page. Collect each page's title and rendered text. The spec fails on a hit, and on a page that shows an error.
+  3. Journey, `no-supplier-journey.e2e.ts`, on the same OTA's storefront: search, offer, price, checkout, payment as `checkout-airline-card.e2e.ts` pays, confirmation, booking page, my bookings and a cancellation request. It collects the rendered text of each page and the body of every API answer that the pages receive.
+  4. E-mails and PDFs: the spec reads every e-mail of the journey from Mailpit (subject, text and HTML) and the text of every attached or downloaded PDF, with a reader like the backend's `pdf-text.ts`. None may hold a hit.
+  5. The fixture OTA with its own Amadeus connection exists since X-055. This task adds nothing to it, and the existing tool specs keep running on it. Positive control: the crawl of that OTA finds supplier words, so the check can fail.
+  6. `tools/e2e/README.md` describes both specs and the word list.
+- **Acceptance:**
+  - For an OTA on Velexis supply, the crawl of the OTA admin, the storefront journey with the string values of its API answers, the rendered e-mails and the PDFs hold no supplier word.
+  - The crawl of the fixture OTA with its own connection finds the word, and `pnr-import.e2e.ts` passes on that OTA without a change.
+  - No test is deleted, skipped or weakened, and no file under a `src` folder changes.
+- **Verify:** `pnpm --filter @velexis/e2e test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin --project=storefront specs/ota-admin/no-supplier-crawl.e2e.ts specs/storefront/no-supplier-journey.e2e.ts specs/ota-admin/pnr-import.e2e.ts`
+- **Note (2026-11-25):** X-075 is added as a dependency: the OTA on Velexis supply and the fixture OTA with its own connection come from the end-to-end seed and helpers, which X-075 makes write each connection with its supply source.
+
+### X-064 · Add the stateful order side to the PKFare fake: order store, six operations, scripted failures
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** X-058, OBE-107, X-057
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.10 and §4.15 (plan key BM7-02; the money rules that a test must be able to break); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5 and 10); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 5, proposed; item 8, proposed); the blocks of X-057 (the fixtures) and X-058 (the server, the clock, the failure injection)
+- **Files:** `tools/pkfare-stub/src/`, `tools/pkfare-stub/test/`, `tools/pkfare-stub/README.md`, `tools/e2e/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. Order store, in memory: PreciseBooking creates an order with a number, the amounts of its price reference, a status and a hold end taken from the fake's clock. A test can reset the store.
+  3. Six operations: PreciseBooking, OrderPricing, Ticketing, OrderDetail, CancelOrder and WalletBalance. Each answers the fixture of X-057 for that operation and state, filled with the stored order's values. Without a fixture the answer is an error that names the gap: the fake invents no PKFare answer.
+  4. Wallet: the fake holds a balance that a test sets. An accepted Ticketing debits the order amount plus the fee; a short balance answers the fixture's refusal.
+  5. Scripts, set by a test per order and operation: a refusal by code (B022 and B024 among them); a lost answer, before the fake applies the write or after it; a status change at a clock time or after a number of reads (issued with ticket numbers, issued without them, rejected, cancelled); the end of the hold.
+  6. Counters: the fake counts the requests per order and operation, so that a test can prove that no second write arrived.
+  7. Unit tests cover each operation, each script and the counters. Describe the order side in both READMEs.
+- **Acceptance:**
+  - Each of the six operations answers from a fixture with the stored order's values, and every request still passes the signature check of X-058.
+  - A test can script a refusal, a lost answer before and after the write, each status change and the end of the hold, with the same result on every run.
+  - The counters report the PreciseBooking, Ticketing and CancelOrder requests of an order; WalletBalance falls by the debit of an accepted Ticketing.
+  - The server binds to the loopback only. No test of X-058 is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/pkfare-stub build && pnpm --filter @velexis/pkfare-stub test`
+- **Note (2026-11-25):** Added dependencies: OBE-107 (step 1 reads its facts file) and X-057 (step 3 answers from its fixtures and their manifest).
+
+### X-065 · Prove PKFare bookings end to end on the fake and write the three money runbooks
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-185, OBE-186, OBE-178, OBE-181, OBE-180, OAD-027, X-064, X-058, X-075, PBE-079, OBE-159
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6), §4.10, §4.11, §4.12 and §6 (plan key BM7-23; the exit of P7); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 5 and 12); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 9 to 12, proposed); tools/e2e/README.md (the `storefront-stripe` project); tools/e2e/playwright.config.ts; tools/e2e/support/seed.ts (`withDatabase`, `applyOwnLiveCredentials`); tools/e2e/support/stack.ts (`STACK_PORTS`, `stackOverrides`); tools/e2e/specs/storefront/checkout-stripe.e2e.ts and specs/ota-admin/payments.e2e.ts (Stripe journeys); the blocks of X-055, X-075 and OBE-159 (the seed helpers that write platform rows, and the PKFare account writer of `supply-rows.ts`); ota/docs/runbooks/ticketing-failures.md (the form of a runbook)
+- **Files:** `tools/e2e/specs/storefront/pkfare-booking.e2e.ts`, `tools/e2e/specs/ota-admin/open-cases.e2e.ts`, `tools/e2e/playwright.config.ts`, `tools/e2e/test/playwright-config.test.ts`, `tools/e2e/support/seed.ts`, `tools/e2e/support/ota.ts`, `tools/e2e/test/seed.test.ts`, `tools/e2e/support/stack.ts`, `tools/e2e/test/stack.test.ts`, `tools/e2e/README.md`, `ota/docs/runbooks/paid-and-not-ticketed.md`, `ota/docs/runbooks/lost-order-answer.md`, `ota/docs/runbooks/README.md`, `platform/docs/runbooks/balance-refusal.md`, `platform/docs/runbooks/platform-operations.md`
+- **Steps:**
+  1. Seed: the stack's test OTA gets Velexis's PKFare source, served by the fake that X-058 adds to the stack, switched on beside its Amadeus source. The seed writes the PKFare supplier account (PBE-079) with its supply source through the writer that OBE-159 adds to `supply-rows.ts` of `packages/testing`, and the OTA's PKFare connection on that source through X-075's writer, as the platform API's own role in one transaction, as `applyOwnLiveCredentials` and X-055's end-to-end helper do; `seed.ts` writes only what no helper writes. The seeded account's `host` is the fake's loopback URL (its `STACK_PORTS` entry of X-058), so the OTA client (the host order of OBE-146) and the platform's verify job and wallet watch (PBE-084, PBE-087) reach the fake; `stackOverrides` in `tools/e2e/support/stack.ts` sets `PKFARE_BASE_URL_TEST` of the stack's apps to the same URL, as it sets `AMADEUS_BASE_URL_TEST`, and `stack.test.ts` pins it. The scripts of X-064 are set from the spec.
+  2. A PKFare source takes Stripe only (A6), so both specs need a captured Stripe payment: their tests carry the tag `@stripe` and run in the nightly `storefront-stripe` project. Its `testMatch` gains `specs/ota-admin/open-cases.e2e.ts`, as it lists `payments.e2e.ts`; `playwright-config.test.ts` follows.
+  3. `pkfare-booking.e2e.ts`, three journeys from the search to the booking page, each with its e-mails read from Mailpit. Full-service: "We are finalising your booking", then the confirmation and the tickets after the fake issues them. Low-cost: "cannot be changed or refunded" before payment and the ticketless wording of OBE-186 after it. With extras: a bag chosen in the extras step, in the total and on the booking.
+  4. `open-cases.e2e.ts`: the fake rejects the ticketing. The traveller sees the problem state and gets `booking.ticketing_problem`; the OTA admin lists the case with its deadline.
+  5. Three runbooks, in the form of `ticketing-failures.md`: paid and not ticketed, and lost order answer, for OTA staff and Velexis support; balance refusal, for platform staff. Each names the alert, what it means, who acts, the steps, what is never done (a second Ticketing request, a refund before the outcome) and how the case ends.
+  6. Link the runbooks from both indexes and describe the specs in `tools/e2e/README.md`.
+- **Acceptance:**
+  - The four runs pass on the fake in `storefront-stripe`: full-service, low-cost, with extras and an open case.
+  - No page or e-mail of a run says "confirmed" before ticketing is accepted, and none says "not charged" after a capture.
+  - The three runbooks exist, are linked from their index, and name no step that sends a second write to the supplier. The existing specs pass unchanged.
+- **Verify:** `pnpm --filter @velexis/e2e test && E2E_WITH_OTA=1 E2E_STRIPE=1 pnpm test:e2e -- --project=storefront-stripe specs/storefront/pkfare-booking.e2e.ts specs/ota-admin/open-cases.e2e.ts specs/storefront/checkout-stripe.e2e.ts`, with the Stripe test keys that tools/e2e/README.md lists for the `storefront-stripe` project
+- **Note (2026-11-25):** Added dependencies: OBE-180 (the run "with extras" needs PKFare extras in the order), OAD-027 (the open-case run reads the list in the OTA admin), X-064 (the specs set the scripts of its fake), X-058 (the fake in the end-to-end stack), X-075 (the seed helpers of step 1), PBE-079 (the supplier account that step 1 writes) and OBE-159 (the PKFare account writer of `supply-rows.ts` and the `PKFARE_BASE_URL_*` variables that step 1 uses; the lead's ruling S5). Step 2 follows the projects of `playwright.config.ts`: the `storefront` and `ota-admin` projects run no `@stripe` test. The OTA and platform runbooks are written here because the end-to-end runs prove the steps they describe; no code of those components changes.
+
+### X-066 · Stop sales after a balance refusal: Redis flag, `supply.balance_refused`, the platform consumer
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** PBE-087, OBE-172, PBE-081, X-061
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.4, §4.6 and §4.10 (plan key SP-18; the wallet table; money rule 8); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2 and 5); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 6; item 9, proposed; item 13, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 10, proposed); the blocks of X-061, PBE-081 (step 4: the one stop function) and PBE-087; platform/backend/src/provisioning/tenant-events.processor.ts (its header)
+- **Files:** `packages/api-types/src/jobs/`, `ota/backend/src/common/redis/redis.keys.ts`, `ota/backend/src/common/redis/redis.keys.test.ts`, `ota/backend/src/tenancy/platform-cache.ts`, `ota/backend/src/tenancy/platform-cache.test.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/supply-events.producer.ts`, `ota/backend/test/integration/supply/balance-refusal-flag.int.test.ts`, `platform/backend/src/provisioning/tenant-events.processor.ts`, `platform/backend/src/provisioning/tenant-events.processor.test.ts`, `platform/backend/src/supplier-connections/`, `platform/backend/test/integration/supplier-connections/balance-refused.int.test.ts`, `platform/docs/architecture.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. Message `supply.balance_refused` in `supply-events.ts` of `packages/api-types/src/jobs/`, which this task creates if OBE-176 is not merged yet, registered in `validate.ts` and exported from `index.ts`, as OBE-176 does: tenant, environment, supply id, booking id and time, on the report envelope of `tenant-events.ts` with `jobId` null and with `additionalProperties: false`. It holds no amount, no balance and no traveller field. Update the pinned list of `jobs.test.ts`.
+  2. OTA backend: when Request ticketing answers `balance_refused` (OBE-172), the stop flag of that source is set in Redis at once, under a key of `redis.keys.ts`. The message is published on `platform-tenant-events` after the commit, with a fixed job id per booking.
+  3. The plan names the flag and not its lifetime. Proposed (lead); confirm in the pull request: the flag has none, and `invalidatedKeys` (X-061) deletes it on the next `supply_source` event of that source; from then on the stop in the registry decides.
+  4. Platform consumer: the processor dispatches the message. It sets the stop on the supply source through the one stop function of PBE-081 (its step 4), recorded as set by a balance refusal: that function writes the audit row and publishes the `supply_source` event after the commit, so this task adds no audit action. The consumer also sends an `ops.alert` through the outbox. A second message for a stopped source changes nothing.
+  5. Only staff lift this stop, with the operation of PBE-081; the wallet watch never lifts it (PBE-087). The OTA backend writes no platform table. The refusal of the next completion is OBE-177's.
+  6. Tests: the schema; the key; `balance-refusal-flag.int.test.ts` (the flag at once, one message); `balance-refused.int.test.ts` on the platform (stop, audit row, event, alert, a repeated message, a wallet reading above the floor).
+- **Acceptance:**
+  - After a `balance_refused` answer the flag is in Redis before the request returns, and one `supply.balance_refused` message is published.
+  - The platform stops the source for every OTA with one audit row, one event and one alert; a reading above the floor does not lift the stop.
+  - The message fails validation with an extra property and holds no amount, balance or traveller field. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/api-types build && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test redis.keys platform-cache booking-orchestrator && pnpm --filter @velexis/ota-backend test:int balance-refusal-flag && pnpm --filter @velexis/platform-backend test tenant-events && pnpm --filter @velexis/platform-backend test:int supplier-connections`
+- **Note (2026-11-25):** Added dependencies: PBE-081 records who set a stop and lets staff lift it, and X-061 gives the `supply_source` event and `invalidatedKeys`. The message, its producer in the OTA backend and its consumer in the platform backend merge together; Verify runs the tests of both backends. Step 4 reuses PBE-081's stop function, the first option of the lead's ruling S15, so no audit action is added and no file of the platform admin changes.
+- **Note (2026-11-25):** OBE-176 and X-066 both create or extend `supply-events.ts`, `supply-events.producer.ts` and the dispatch of `tenant-events.processor.ts`; whichever merges later keeps both messages in one `supply-events.ts`, one producer module and both dispatch branches (the lead's ruling S17).
+
+### X-067 · Define the supply report messages `supply.booking_fact` and `supply.case_opened` under one envelope
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-176, X-066
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.13, the table of the three channels (plan key RC-06; the rows BM7-10 and SP-18 of Annex B); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 7, 8 and 22); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 5, proposed; item 6, proposed; "Notes that wait for a decision"); docs/mvp/adr/0009-background-jobs-bullmq.md (items 3, 6 and 10); docs/mvp/adr/0003-six-components-two-nestjs-backends.md (integration rules 2 and 5); packages/api-types/src/jobs/envelope.ts (`JobEnvelope`); packages/api-types/src/jobs/tenant-events.ts (`TenantReportEnvelope`); packages/api-types/src/jobs/validate.ts; the blocks of OBE-176 and X-066 (`supply-events.ts`)
+- **Files:** `packages/api-types/src/jobs/`, `packages/api-types/src/jobs/supply-fact-schema.test.ts`, `packages/api-types/src/jobs/validate.ts`, `packages/api-types/src/jobs/index.ts`, `packages/api-types/src/jobs/jobs.test.ts`, `packages/api-types/README.md`, `platform/docs/architecture.md`, `ota/docs/architecture.md`, `docs/mvp/adr/0009-background-jobs-bullmq.md`
+- **Steps:**
+  1. Define one envelope for the supply reports on `platform-tenant-events`: a `JobEnvelope` whose `jobId` is always `null`, because no provisioning job asks for a report. Its schema refuses any other `jobId`.
+  2. `supply.case_opened` (OBE-176) and `supply.balance_refused` (X-066) sit in `supply-events.ts` on `TenantReportEnvelope` with `jobId` null. Move both under the new envelope. No field on the wire changes, so their producers and consumers stay as they are.
+  3. Add `supply.booking_fact`. Its payload holds the environment, the booking's id and reference, the supply id, the supplier's order number, the kind of fact (created, paid, ticketed, cancelled, reimbursed), the status, the OTA's cost price, the expected and the reported debit, the reimbursements, each amount with its currency, the date of the fact, and a `sequence` that rises per supplier order.
+  4. `supply.case_opened` covers every kind of case of plan §4.12: add the kinds that its schema lacks, additively (OBE-198 adds them instead if it merges first). Like OBE-176's message it holds no supplier order number; the platform finds the order through the booking's ledger row (Proposed (lead)).
+  5. Every schema and every nested object has `additionalProperties: false`. Register the messages in `validate.ts`, export them from `index.ts` and pin them in `jobs.test.ts`.
+  6. `supply-fact-schema.test.ts` walks the payload of every supply schema and fails on a property that names a traveller field: a person's name, an e-mail address, a phone number, a date of birth, a document or an address. It also sends a valid message with such a field added and expects a refusal.
+  7. Update platform architecture §6.1, OTA architecture §6 and the package README. Write the dated note under ADR-0009 item 3, which PADR-0021 lists as waiting.
+- **Acceptance:**
+  - `validateJob` accepts each of the three messages with `jobId: null`. It refuses a job id, and an unknown property at any depth.
+  - `supply-fact-schema.test.ts` passes, and it fails when a traveller field is planted in a copy of a schema.
+  - The messages of OBE-176 and X-066 validate as before, and their tests are unchanged. No test is deleted or weakened.
+  - ADR-0009 item 3 names the supply messages and their `jobId`.
+- **Verify:** `pnpm --filter @velexis/api-types build && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test job-validation && pnpm --filter @velexis/platform-backend test tenant-events`
+- **Note (2026-11-25):** The field list of step 3 is this block's reading of plan §4.13: "ids, status, amounts, dates". No message holds a secret, a key, a signature, a card number or a document number (ADR-0009 item 10).
+
+### X-068 · Prove the cases of plan §4.12 end to end through both admins and write the three runbooks
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** PAD-022, PAD-023, PAD-024, OAD-028, PBE-099, PBE-100, X-063, X-065, PBE-098
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 to §4.14 and §6, the exit of P9 (plan key RC-26); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 8, 9 and 22; item 18, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (items 1 to 3; item 8, proposed; item 9, proposed; item 10, proposed); tools/e2e/README.md; tools/e2e/support/stack.ts, seed.ts and mailpit.ts; the blocks of X-063, X-065, PAD-022, PAD-023, OAD-028, PBE-098 and PBE-100
+- **Files:** `tools/e2e/specs/admin-reconciliation-cases.e2e.ts`, `tools/e2e/specs/admin-reconciliation-ledger.e2e.ts`, `tools/e2e/specs/portal-disclosure.e2e.ts`, `tools/e2e/specs/admin-a11y.e2e.ts`, `tools/e2e/specs/admin-headers.e2e.ts`, `tools/e2e/support/stack.ts`, `tools/e2e/support/seed.ts`, `tools/e2e/test/stack.test.ts`, `tools/e2e/README.md`, `platform/docs/runbooks/work-a-case.md`, `platform/docs/runbooks/daily-check.md`, `platform/docs/runbooks/disclosure-request.md`, `platform/docs/runbooks/platform-operations.md`, `ota/docs/runbooks/README.md`
+- **Steps:**
+  1. Stack: the platform admin starts with the support key and the loopback address of the OTA API. The seed adds a role holder with MFA.
+  2. `admin-reconciliation-cases.e2e.ts` (project `platform-admin`, with the OTA backend and the fakes): one journey per row of the table of plan §4.12, and "order unknown" both with an order number and with "no order". Each journey moves between the role holder in the platform admin and OTA staff in the OTA admin.
+  3. The journeys also prove the rules: no refund while a case is open; no "submitted" before the OTA's confirmation; "Open booking" needs a reason, and the booking's tab "Staff actions" then shows "Velexis support".
+  4. No supplier word: at every step the spec checks the text of the OTA admin's pages and the alerts and e-mails in Mailpit with the helper of X-063. Control: the platform admin's case page names the supplier.
+  5. `admin-reconciliation-ledger.e2e.ts`: the ledger rows of the journeys, an export, a top-up and the daily check. `portal-disclosure.e2e.ts`: an owner asks, a platform admin discloses, and the audit page shows `supply.disclosed`.
+  6. Documents: the runbooks "work a case", "daily check" and "disclosure request", linked from platform-operations and from the alerts of PBE-098. The runbook "disclosure request" has the step "send the stored answer to the OTA once counsel's wording (43d) allows it": before the launch the answer reaches the OTA by hand (the lead's ruling S15). Update the support-level table (§3 of the OTA runbooks README), where level 2 for a Velexis-supplied booking becomes the reconciliation role with its tools.
+  7. Add the new pages to `admin-a11y.e2e.ts` and `admin-headers.e2e.ts`, and describe the journeys in the e2e README.
+- **Acceptance:**
+  - The cases of plan §4.12 run through both admins on the fakes, each to its final state.
+  - No page of the OTA admin, no staff alert and no e-mail of the journeys holds a supplier word; the control finds one in the platform admin.
+  - A platform admin without the role is refused in the area, and a role holder who is no platform admin sees only it.
+  - The three runbooks exist, each alert links one, the runbook "disclosure request" holds the step that sends the stored answer, and the support-level table names the role.
+  - axe finds no serious or critical violation on the new pages. No existing spec is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/e2e test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=platform-admin --project=portal specs/admin-reconciliation-cases.e2e.ts specs/admin-reconciliation-ledger.e2e.ts specs/portal-disclosure.e2e.ts specs/admin-a11y.e2e.ts specs/admin-headers.e2e.ts`
+- **Note (2026-11-25):** X-063, X-065 and PBE-098 are added as dependencies: the word check uses the helper of X-063, the journeys need the PKFare source that X-065 seeds in the end-to-end stack, and step 6 links the runbooks from the alerts of PBE-098.
+
+### X-069 · Prove by value that a PKFare booking leaves no key, signature, document or card number behind
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-184, PBE-092, OBE-195, X-064, OBE-129, PBE-098, OBE-159
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15 and §9.4 (plan key G10-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5 and 19); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 5, proposed); docs/mvp/adr/0002-monorepo-pnpm-turborepo.md (item 5); ota/backend/test/support/pan-scanner.ts (`PanScanner`, `cardNeedles`); ota/backend/test/integration/payments/pan-absence.int.test.ts (its user today); platform/backend/test/integration/security/secrets-at-rest.int.test.ts (the model); the blocks of X-064, X-067, OBE-159 (its step 8: the test rows), OBE-184, OBE-195 and PBE-098
+- **Files:** `ota/backend/test/integration/supply/supply-secrets-by-value.int.test.ts`, `platform/backend/test/integration/reconciliation/supply-secrets-by-value.int.test.ts`, `ota/backend/test/support/pan-scanner.ts`
+- **Steps:**
+  1. OTA file: one full PKFare booking on the fake of X-064, from the search to `ticketed`, then one run of the fact publisher of OBE-195. Velexis's PKFare account, with a known key, and its supply source are written with the writer that OBE-159 adds to `supply-rows.ts` of `@velexis/testing` (through X-075's row builders), never by an inline insert. Known values: the account's key and signature, a traveller's passport number and phone number, and a test card number, sent in an airline-card completion that this source refuses (OBE-129).
+  2. `PanScanner` also takes plain values, each with a label, and searches them as text wherever it reads today: every tenant table (ciphertexts decrypted), every Redis key and value, every BullMQ job (so the `platform-tenant-events` messages) and every captured log line. Its card needles stay as they are.
+  3. Search the known values there and in every error answer of the booking. The test lists the only allowed places: the `documents_ciphertext` columns of `checkout_travelers` and `booking_travelers` for the passport number, and the contact and phone columns of the checkout and the booking for the phone number. Any other find fails.
+  4. Platform file: feed `supply.booking_fact` and `supply.case_opened` messages of such a booking through `TenantEventsProcessor`, beside a Velexis PKFare account whose key is known, written with the same writer. Search `supply_ledger`, the case tables, every other platform column (the key's ciphertext column allowed), Redis, the outbox e-mails (the role alert of the new case, PBE-098, among them) and the log lines. A message with a known value in an extra member is refused and stores nothing.
+  5. Control: each scan finds a value planted in a table, in Redis and in a log line. No file under a `src` folder changes: a leak goes to the lead and to the task that owns the store.
+- **Acceptance:**
+  - `supply-secrets-by-value.int.test.ts` passes in both backends: no known value is in a searched place outside the listed columns.
+  - The control finds each planted value, and a supply message with an unknown member stores nothing.
+  - `pan-absence.int.test.ts` passes unchanged. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int supply-secrets-by-value pan-absence && pnpm --filter @velexis/platform-backend test:int supply-secrets-by-value`
+- **Note (2026-11-25):** The plan names one file for two backends. The OTA backend's tests cannot import platform code (ADR-0002 item 5), so each backend gets one. A PKFare booking takes Stripe only, so the card number enters through the refused airline-card completion. Added dependencies: OBE-195, whose publisher puts the booking's facts on `platform-tenant-events`; X-064 and OBE-129, whose fake and refusal the test uses directly; PBE-098, whose role alert of a new case is an e-mail that the platform file searches; OBE-159, whose writer in `supply-rows.ts` writes the PKFare account of steps 1 and 4 (the lead's ruling S5).
+
+### X-070 · Prove that credentials, caches, rate buckets, stops and rules never cross tenants or environments
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-146, OBE-194, OBE-197, X-055, OBE-195, PBE-093, X-075, X-061
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15, §4.4 and §4.13 (plan key G10-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 8; item 14, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 4, proposed; item 5, proposed); docs/mvp/adr/0012-amadeus-account-model.md (the buckets per credential set and per tenant); ota/backend/test/integration/amadeus/own-credentials.int.test.ts; the blocks of X-055, X-061, X-075, OBE-146, OBE-195 and PBE-093
+- **Files:** `ota/backend/test/integration/supply/supply-isolation.int.test.ts`, `platform/backend/test/integration/reconciliation/supply-isolation.int.test.ts`
+- **Steps:**
+  1. OTA file: tenants A and B, each with `test` and `live`, on Velexis sources whose stubs accept only their own credentials. The helpers of X-075 write their connections and Velexis accounts with their supply sources. A also has its own Amadeus connection in `test` (the helper of X-055).
+  2. Credentials: each call reaches the stub of the credential set of its tenant and environment. No `test` call reaches a `live` stub.
+  3. Cache keys and rate buckets: every Redis key of the registry (the keys of X-061), the tokens and the buckets names its own tenant or credential set and its environment. A drained per-tenant bucket of A slows no call of B or of `live`. A shared Velexis account shares its credential-set bucket by design (ADR-0012).
+  4. Stops, switches and rules: A's switch leaves B selling; a stop on a `test` source leaves `live` selling; a Velexis rule for A or for `test` changes no search of B or of `live`.
+  5. Own account: a booking on A's own connection queues no supply fact (OBE-195), and the four support reads answer `404` without a supplier call (OBE-197).
+  6. Platform file: `createSupportHandoff` answers `404 NOT_FOUND` for that booking, and for a Velexis-supplied booking asked with another tenant or environment.
+- **Acceptance:**
+  - `supply-isolation.int.test.ts` passes in both backends: each stub receives only the calls of its own tenant, environment and credential set.
+  - No stop, switch or rule of one tenant or environment changes what another sells.
+  - A booking on an own account sends no fact, every support read answers `404`, and a handoff for it is refused. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int supply-isolation && pnpm --filter @velexis/platform-backend test:int supply-isolation`
+- **Note (2026-11-25):** "A booking on an own account" uses the test OTA with its own Amadeus connection (X-055). Added dependencies: X-055 for that helper, OBE-195 for the fact outbox, PBE-093 for the handoff of the platform file, X-075 for the helpers that write the connections (the lead's ruling S14), and X-061 for the registry's keys that step 3 reads. One file per backend, as for X-069 (ADR-0002 item 5).
+
+### X-071 · Allow PKFare's test host on the VM for the pilot: an egress line, the VM check and a list test
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-107, OBE-146, PBE-084, OBE-159, OBE-111
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15, the bullet "Hosts" (plan key G10-04); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 10 and 19); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 12, proposed; item 13, proposed); docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md (item 7); docs/mvp/runbooks/outbound-allow-list.md §2 (a Velexis Amadeus account's base URL needs no line) and §5; deploy/scripts/check-vm.sh (the group firewall: the Amadeus base URLs of both backends); deploy/scripts/test/check-vm.test.sh (the list test of X-041); the blocks of OBE-111, OBE-146, OBE-159 and PBE-084
+- **Files:** `deploy/egress/allowed-hosts.conf`, `deploy/scripts/check-vm.sh`, `deploy/scripts/test/check-vm.test.sh`, `docs/mvp/runbooks/outbound-allow-list.md`, `docs/mvp/deployment-single-vm.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. The test host comes from that file; if it is marked `assumed`, stop.
+  2. Add one line to `allowed-hosts.conf`: the test host, port 443, tcp, used by `velexis-ota-api,velexis-ota-worker,velexis-platform-worker`, and the reason. PKFare's production host is X-073's.
+  3. The hosts follow today's Amadeus configuration (the lead's ruling S6). The OTA backend takes the optional overrides `PKFARE_BASE_URL_TEST` and `_LIVE` (OBE-159; empty in the deploy template), then the `host` of Velexis's supplier account (PBE-079), then the constant `PKFARE_OFFICIAL_BASE_URLS` in `ota/backend/src/supply/registry/supply-host-guard.ts` (OBE-146; OBE-159 adds the test host). The platform takes the account's `host` and, with `APP_ENV=production`, accepts only the hosts of its `PKFARE_OFFICIAL_BASE_URLS` in `platform/backend/src/config.ts` (PBE-084). This task adds no variable and changes no env template.
+  4. `check-vm.sh`, group firewall: the check of both backends' Amadeus base URLs also reads `PKFARE_BASE_URL_TEST` and `_LIVE`. A value that is set needs a line for its host and port; the loopback passes. `check-vm.test.sh` gets a broken case for it, as for the Amadeus one.
+  5. The list test of X-041 in `check-vm.test.sh` also reads PKFare's official hosts from both constants, in `platform/backend/src/config.ts` and `ota/backend/src/supply/registry/supply-host-guard.ts`. It finds a line for each and no line for another PKFare host. A code file that it reads and that is missing fails the test, as the moved Amadeus resolver does since OBE-111 (the lead's ruling S7).
+  6. Runbook §2: the PKFare account needs no line beyond its official host; a `PKFARE_BASE_URL_TEST` or `_LIVE` other than the official hosts needs a pull request, as an Amadeus base URL does; after a deploy, `SELECT DISTINCT environment, host FROM platform.supplier_accounts` shows only official hosts. Deployment §2, the row "Outbound", names PKFare's test host.
+  7. **Human step:** after the merge the developer runs steps 2 to 5 of the runbook's §2 on the VM, then verifies Velexis's PKFare test account in the platform admin (PBE-084).
+- **Acceptance:**
+  - The list holds exactly one PKFare line, the test host of the facts file, and `egress.sh validate` accepts the list.
+  - `check-vm.test.sh` passes. Its list test fails when that line is missing or another PKFare host has one, and the firewall group fails on a `PKFARE_BASE_URL_TEST` whose host has no line.
+  - No production host of PKFare is in the list or the code, and no env template changes. `shellcheck -S style` is clean.
+- **Verify:** `shellcheck -S style deploy/scripts/check-vm.sh deploy/scripts/test/check-vm.test.sh && bash deploy/scripts/egress.sh validate deploy/egress/allowed-hosts.conf && sudo env PATH="$PATH" bash deploy/scripts/test/check-vm.test.sh`
+- **Note (2026-11-25):** The hosts follow the lead's ruling S6: this task proves both constants and adds no variable of its own. The plan's "env template entries" are the overrides of OBE-159, which stay empty in the deploy template. Its "`check-vm.sh` test" is the firewall check of step 4 and the list test of `check-vm.test.sh`; `check-vm.sh` reads no database (runbook §2). Added dependencies: PBE-084, whose constant the list test reads; OBE-159, which puts the test host into the constant of OBE-146 and adds the overrides of step 4; OBE-111, which points the list test at the moved Amadeus resolver and makes it fail on a missing file (S7).
+
+### X-072 · Write the supplier operations pack: alert inventory, three runbooks and an alert drill
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** PBE-087, X-065, PBE-098, X-068, OBE-107, OBE-114, OBE-175, OBE-198
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15 (the last bullet), §4.3, §4.4, §4.6, §4.7 (the last row) and §9.6 item 4 (plan key G10-05; A35 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 5, 19 and 22); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 9, proposed; item 13, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (question 2); docs/mvp/runbooks/master-key-rotation.md (the form); deploy/scripts/log-review.sh (the daily summary); the blocks of PBE-087, PBE-098, OBE-114, OBE-175, OBE-198, X-065 and X-068
+- **Files:** `docs/mvp/runbooks/supplier-alerts.md`, `docs/mvp/runbooks/supplier-key-rotation.md`, `docs/mvp/runbooks/supplier-switch-off.md`, `docs/mvp/runbooks/supplier-outage.md`, `docs/mvp/README.md`, `ota/docs/runbooks/README.md`, `platform/docs/runbooks/platform-operations.md`, `platform/docs/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. While the way PKFare rotates a key is `assumed` (plan §9.2), the runbook says so.
+  2. `supplier-alerts.md`, the inventory: one row per alert that the M7 tasks added, with what raises it, its receiver, its runbook (among them those of PBE-087, X-065 and X-068) and its drill. The groups: wallet alerts, role alerts, staff alerts of open cases and ticketing problems, a failing hook, the on-VM health check (OBE-175). Under the staff alerts of open cases, each alert that OBE-198 rewords for a Velexis-supplied booking has a row of its own: reconcile's lost-answer and booking-queue alerts, cancellation's order-not-found and time-out alerts, and the sync's airline-cancelled alert.
+  3. A failing hook (the lead's ruling S12): its row names the error event `supply.hook_failed` of OBE-114 (the hook, the action and the source, no payload). It reaches Velexis staff through the daily summary of the log review (the errors of the velexis-* units), never through `StaffAlerts`, which reach OTA staff. Its runbook is a section of `supplier-outage.md`. The summary counts a unit's errors without naming them, so that section gives the `journalctl` query that lists the event.
+  4. PKFare's own e-mails (the lead's ruling S11; plan §4.7, A35, §9.6 item 4): a section of `supplier-alerts.md` holds the manual routine before the launch. It says who reads the Velexis mailbox that receives them, how a schedule change or another notice of PKFare becomes a case of OBE-198, and that staff pass it on to the OTA in neutral words.
+  5. `supplier-key-rotation.md`: the key of a Velexis supplier account, changed in the platform admin with the step-up and then verified. The key never enters a shell history, a ticket or a log.
+  6. `supplier-switch-off.md`: each level (global switch, per-tenant switch, source stop, the emergency status `disabled`), who sets it, what it stops and what stays served.
+  7. `supplier-outage.md`: the signals of a slow or failing supplier, what the engine does by itself, what staff do, what OTAs are told in neutral words, and the escalation.
+  8. Drill on the local stack, with the fakes and Mailpit: trigger each alert once, check its receiver and its runbook link, and record date and result in the inventory. The engine test `hook-failure-never-blocks-servicing` (OBE-114) raises `supply.hook_failed`; before the launch it is seen through the log review's daily count and the `journalctl` query of step 3 (the lead's ruling S16). If the drill shows that this is not enough, the record says so and the pull request tells the lead, who proposes a small foundation task for a summary row or an immediate alert in `deploy/scripts/log-review.sh`; this task does not change that script. An alert that the local stack cannot raise is marked so. Link the four documents from `docs/mvp/README.md`, the OTA runbooks' index and `platform-operations.md`, and name them in the platform index's line on the cross-cutting runbooks.
+- **Acceptance:**
+  - Every alert added in M7 has a row with a receiver, a runbook and a dated drill result; the row of `supply.hook_failed` names a receiver at Velexis.
+  - The three runbooks have the form of the existing ones: signals, commands, what to do, escalation. The inventory holds the routine for PKFare's e-mails.
+  - No document holds a key, a signature or personal data, and none tells OTA staff a supplier's name.
+- **Verify:** `test -f docs/mvp/runbooks/supplier-alerts.md && test -f docs/mvp/runbooks/supplier-key-rotation.md && test -f docs/mvp/runbooks/supplier-switch-off.md && test -f docs/mvp/runbooks/supplier-outage.md && grep -q supply.hook_failed docs/mvp/runbooks/supplier-alerts.md && grep -q supplier-alerts.md docs/mvp/README.md && grep -q supplier-alerts.md ota/docs/runbooks/README.md && grep -q supplier-alerts.md platform/docs/runbooks/platform-operations.md`
+- **Note (2026-11-25):** The plan names no file for the inventory; `supplier-alerts.md` follows the folder's names. Added dependencies: X-068, whose runbooks the role alerts of PBE-098 link; OBE-107 (step 1); OBE-114 and OBE-175, whose event and health check the inventory lists and the drill raises; OBE-198, whose cases the routine of step 4 opens. Rests on PADR-0021, question 2 ((43e), staffing): the lead's recommendation is a named holder and stand-in before the live co-test of P10; since ADR-0030 item 22 the role is needed at the launch (PADR-0021 question 2, note of 2026-11-25); the routine of step 4 names who reads the mailbox. The wave proposal names it; the owner's go for the wave accepts it.
+
+### X-073 · Add PKFare's production host as a constant and an egress line once preconditions 1 to 6 are signed
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** OBE-206, OBE-146, PBE-084, OBE-107, OBE-159, X-071
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15, the bullet "Hosts", and §6, preconditions 6 to 8 (plan key G10-12); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 10 and 19; open question (44b)); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 12, proposed); docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md (items 4 and 5); platform/backend/src/config.ts (`AMADEUS_OFFICIAL_BASE_URLS` and `PKFARE_OFFICIAL_BASE_URLS` beside it, PBE-084); the blocks of X-071, OBE-146, OBE-159 and PBE-084
+- **Files:** `deploy/egress/allowed-hosts.conf`, `deploy/scripts/test/check-vm.test.sh`, `docs/mvp/runbooks/outbound-allow-list.md`, `platform/backend/src/config.ts`, `platform/backend/src/config.test.ts`, `platform/backend/test/integration/supplier-connections/supplier-accounts.int.test.ts`, `ota/backend/src/supply/registry/supply-host-guard.ts`, `ota/backend/src/supply/registry/supply-host-guard.test.ts`, `ota/docs/runbooks/supplier-go-live.md`
+- **Steps:**
+  1. **Gate:** the pull request opens only when preconditions 1 to 6 of `supplier-go-live.md` are signed in its sign-off section, and it links that sign-off.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. The production host must be `stated` by PKFare there.
+  3. Constants (the lead's ruling S6): PKFare's official production host joins `PKFARE_OFFICIAL_BASE_URLS` in both backends: the platform's in `config.ts`, beside `AMADEUS_OFFICIAL_BASE_URLS` (the rule of PBE-084), with cases in `config.test.ts`, and the OTA backend's in `supply-host-guard.ts` of the registry folder (OBE-146), with cases in `supply-host-guard.test.ts`. A `test` source never resolves to it. No variable is added.
+  4. Egress: one line for the host in `allowed-hosts.conf`, used by the units of the test host's line (X-071). The list test of `check-vm.test.sh` (X-071) expects PKFare's test host and production host, and no other. The runbook's §2 names both.
+  5. **Human step:** after the merge the developer runs steps 2 to 5 of §2 of docs/mvp/runbooks/outbound-allow-list.md and signs precondition 7. This task turns no switch.
+  6. **Human step:** after the co-test ticket, the role holder runs the first daily check against PKFare's statement and records it with precondition 8.
+- **Acceptance:**
+  - With `APP_ENV=production` a `live` PKFare account is accepted with the official production host only (`supplier-accounts.int.test.ts`), and a `test` source never resolves to it (`supply-host-guard.test.ts`).
+  - The allow-list holds the production line, and `check-vm.test.sh` passes.
+  - The pull request links the signed preconditions 1 to 6, and no switch state changes.
+- **Verify:** `shellcheck -S style deploy/scripts/test/check-vm.test.sh && bash deploy/scripts/egress.sh validate deploy/egress/allowed-hosts.conf && sudo env PATH="$PATH" bash deploy/scripts/test/check-vm.test.sh && pnpm --filter @velexis/platform-backend test config && pnpm --filter @velexis/platform-backend test:int supplier-accounts && pnpm --filter @velexis/ota-backend test supply/registry supply/adapters/pkfare`
+- **Note (2026-11-25):** Named exception (the lead's reading of ADR-0025 item 5): this task waits for PKFare's certification and may stay open after the launch; PKFare stays switched off in production until then. Rests on ADR-0030, question (44b): the lead recommends that PKFare stays off in production until it is certified, and that the launch does not wait for it. The wave proposal names it; the owner's go for the wave accepts it. Step 6 moved here from the after-sales gate (X-074), because it needs live PKFare. The platform and OTA backend files merge with the egress line: plan §4.15 lets PKFare's production host into the code and the allow-list in this pull request only. Added dependencies: OBE-146 and PBE-084, whose host rules change here; OBE-107 (step 2); OBE-159, which puts the test host into the OTA constant; X-071, whose egress line and list test this task extends. Both constants are named `PKFARE_OFFICIAL_BASE_URLS`: the platform's in `config.ts` (PBE-084), the OTA backend's in `supply-host-guard.ts` of the registry folder (OBE-146).
+
+### X-074 · Add the after-sales gate to the launch checklist: role holders, deadlines, counsel and a case drill
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M7
+- **Depends on:** X-068, X-052, PBE-091, PBE-094
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 to §4.14 and §8 (plan key RC-27); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 8, 9 and 22; open questions (43d) and (43e)); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 2; item 8, proposed; item 11, proposed; questions 1 and 2); platform/docs/runbooks/launch-checklist.md §1 and §5; ota/docs/runbooks/launch-checklist.md (row D2); the blocks of X-052, X-068, PBE-091 and PBE-094
+- **Files:** `platform/docs/runbooks/launch-checklist.md`, `ota/docs/runbooks/launch-checklist.md`
+- **Steps:**
+  1. Add the section "After-sales for Velexis-supplied bookings" at the end of the platform launch checklist, so that no existing anchor changes. Its items have the checklist's form (Do, Owner, Check, Evidence), and an agent never ticks one.
+  2. Item "Role holders": the product owner names a holder and a stand-in, and a platform admin grants both the reconciliation role (PBE-091). Check: the Admins page shows two holders with MFA on. Their names stay out of the repository.
+  3. Item "Deadlines": the owner's hours for each kind of case are set. They are the deadlines of A39, which PBE-094 keeps as named constants until the owner sets them (the lead's ruling S15). A new case shows the matching due time. The cover hours of the role stay with (43e).
+  4. Item "Counsel": the answer to the question of plan §4.14, asked with the pack of X-052, is recorded with its date. No supplier is hidden in live use before it.
+  5. Item "Case drill": the holder and the stand-in each work the cases of plan §4.12 in the sandbox, through both admins, with the runbook "work a case" of X-068.
+  6. The section names X-073 for the first daily check against the supplier's statement. Row D2 of the OTA checklist names the new section. Row A1 does not change here: the lead's re-baseline changes it (the lead's ruling S11).
+- **Acceptance:**
+  - The platform launch checklist has four unticked items for after-sales, each with Do, Owner, Check and Evidence.
+  - The item on counsel says that no supplier is hidden in live use before the answer is recorded.
+  - No existing anchor of either checklist changes, and neither holds a person's name.
+- **Verify:** `pnpm plan:lint && grep -c "\[ \]" platform/docs/runbooks/launch-checklist.md && grep -q X-073 platform/docs/runbooks/launch-checklist.md && grep -q 'After-sales for Velexis-supplied bookings' ota/docs/runbooks/launch-checklist.md`
+- **Note (2026-11-25):** Part of launch readiness (ADR-0030 item 22). The plan's line on the first daily check against the supplier's statement moved to X-073: it needs live PKFare. Rests on PADR-0021, question 2 ((43e), staffing): the lead's recommendation is a named holder and stand-in before the live co-test of P10; since ADR-0030 item 22 the role is needed at the launch. The wave proposal names it; the owner's go for the wave accepts it. Counsel's answer ((43d), PADR-0021 question 1) is a gate of its own: no supplier is hidden in live use before it is recorded (PADR-0021 item 11, proposed). Added dependencies: X-052, the pack the counsel item names; PBE-091 and PBE-094, where the role is granted and the hours are read.
+
 ## Dependency graph
 
-Generated with `node tools/plan-lint/plan-lint.mjs --graph docs/mvp/plans/foundation-tasks.md` (since 2026-11-16 it also prints the edge from the platform plan's PBE-077 to X-048, and on this file alone the error that PBE-077 is unknown).
+Generated with `node tools/plan-lint/plan-lint.mjs --graph docs/mvp/plans/foundation-tasks.md` (since 2026-11-16 it also prints the edge from the platform plan's PBE-077 to X-048, and on this file alone the error that PBE-077 is unknown). *Since 2026-11-25* it also prints the edges from the M7 tasks of the platform and OTA plans that M7's foundation tasks depend on. The box M7 shows those tasks with the name of their plan, as the box M0 shows PBE-077, and on this file alone plan-lint reports each of these dependencies as unknown.
 
 ```mermaid
 flowchart LR
@@ -1418,6 +2021,85 @@ flowchart LR
     X_044["X-044"]
     X_045["X-045"]
     X_049["X-049"]
+  end
+  subgraph M7["M7"]
+    X_051["X-051"]
+    X_052["X-052"]
+    X_053["X-053"]
+    X_054["X-054"]
+    X_055["X-055"]
+    X_056["X-056"]
+    X_057["X-057"]
+    X_058["X-058"]
+    X_059["X-059"]
+    X_060["X-060"]
+    X_061["X-061"]
+    X_062["X-062"]
+    X_075["X-075"]
+    X_063["X-063"]
+    X_064["X-064"]
+    X_065["X-065"]
+    X_066["X-066"]
+    X_067["X-067"]
+    X_068["X-068"]
+    X_069["X-069"]
+    X_070["X-070"]
+    X_071["X-071"]
+    X_072["X-072"]
+    X_073["X-073"]
+    X_074["X-074"]
+    PBE_078["PBE-078 (platform plan)"]
+    PBE_079["PBE-079 (platform plan)"]
+    PBE_080["PBE-080 (platform plan)"]
+    PBE_081["PBE-081 (platform plan)"]
+    PBE_084["PBE-084 (platform plan)"]
+    PBE_085["PBE-085 (platform plan)"]
+    PBE_086["PBE-086 (platform plan)"]
+    PBE_087["PBE-087 (platform plan)"]
+    PBE_091["PBE-091 (platform plan)"]
+    PBE_092["PBE-092 (platform plan)"]
+    PBE_093["PBE-093 (platform plan)"]
+    PBE_094["PBE-094 (platform plan)"]
+    PBE_098["PBE-098 (platform plan)"]
+    PBE_099["PBE-099 (platform plan)"]
+    PBE_100["PBE-100 (platform plan)"]
+    PFE_032["PFE-032 (platform plan)"]
+    PFE_033["PFE-033 (platform plan)"]
+    PAD_018["PAD-018 (platform plan)"]
+    PAD_019["PAD-019 (platform plan)"]
+    PAD_022["PAD-022 (platform plan)"]
+    PAD_023["PAD-023 (platform plan)"]
+    PAD_024["PAD-024 (platform plan)"]
+    OBE_106["OBE-106 (OTA plan)"]
+    OBE_107["OBE-107 (OTA plan)"]
+    OBE_108["OBE-108 (OTA plan)"]
+    OBE_111["OBE-111 (OTA plan)"]
+    OBE_114["OBE-114 (OTA plan)"]
+    OBE_115["OBE-115 (OTA plan)"]
+    OBE_129["OBE-129 (OTA plan)"]
+    OBE_146["OBE-146 (OTA plan)"]
+    OBE_157["OBE-157 (OTA plan)"]
+    OBE_158["OBE-158 (OTA plan)"]
+    OBE_159["OBE-159 (OTA plan)"]
+    OBE_172["OBE-172 (OTA plan)"]
+    OBE_175["OBE-175 (OTA plan)"]
+    OBE_176["OBE-176 (OTA plan)"]
+    OBE_178["OBE-178 (OTA plan)"]
+    OBE_180["OBE-180 (OTA plan)"]
+    OBE_181["OBE-181 (OTA plan)"]
+    OBE_184["OBE-184 (OTA plan)"]
+    OBE_185["OBE-185 (OTA plan)"]
+    OBE_186["OBE-186 (OTA plan)"]
+    OBE_194["OBE-194 (OTA plan)"]
+    OBE_195["OBE-195 (OTA plan)"]
+    OBE_197["OBE-197 (OTA plan)"]
+    OBE_198["OBE-198 (OTA plan)"]
+    OBE_206["OBE-206 (OTA plan)"]
+    OFE_033["OFE-033 (OTA plan)"]
+    OAD_024["OAD-024 (OTA plan)"]
+    OAD_025["OAD-025 (OTA plan)"]
+    OAD_027["OAD-027 (OTA plan)"]
+    OAD_028["OAD-028 (OTA plan)"]
   end
   X_001 --> X_002
   X_001 --> X_003
@@ -1490,6 +2172,107 @@ flowchart LR
   X_038 --> X_045
   X_044 --> X_045
   X_048 --> X_049
+  OBE_107 --> X_056
+  X_056 --> X_057
+  OBE_107 --> X_057
+  X_057 --> X_058
+  X_056 --> X_058
+  OBE_107 --> X_058
+  X_057 --> X_059
+  OBE_108 --> X_059
+  OBE_107 --> X_059
+  OBE_111 --> X_060
+  OBE_106 --> X_060
+  PBE_078 --> X_061
+  PBE_079 --> X_061
+  PFE_032 --> X_062
+  PFE_033 --> X_062
+  PAD_018 --> X_062
+  PAD_019 --> X_062
+  OBE_146 --> X_062
+  OBE_115 --> X_062
+  PBE_086 --> X_062
+  PBE_085 --> X_062
+  X_075 --> X_062
+  PBE_078 --> X_075
+  PBE_080 --> X_075
+  X_055 --> X_075
+  OFE_033 --> X_063
+  OAD_024 --> X_063
+  OAD_025 --> X_063
+  OBE_157 --> X_063
+  OBE_158 --> X_063
+  X_055 --> X_063
+  X_075 --> X_063
+  X_058 --> X_064
+  OBE_107 --> X_064
+  X_057 --> X_064
+  OBE_185 --> X_065
+  OBE_186 --> X_065
+  OBE_178 --> X_065
+  OBE_181 --> X_065
+  OBE_180 --> X_065
+  OAD_027 --> X_065
+  X_064 --> X_065
+  X_058 --> X_065
+  X_075 --> X_065
+  PBE_079 --> X_065
+  OBE_159 --> X_065
+  PBE_087 --> X_066
+  OBE_172 --> X_066
+  PBE_081 --> X_066
+  X_061 --> X_066
+  OBE_176 --> X_067
+  X_066 --> X_067
+  PAD_022 --> X_068
+  PAD_023 --> X_068
+  PAD_024 --> X_068
+  OAD_028 --> X_068
+  PBE_099 --> X_068
+  PBE_100 --> X_068
+  X_063 --> X_068
+  X_065 --> X_068
+  PBE_098 --> X_068
+  OBE_184 --> X_069
+  PBE_092 --> X_069
+  OBE_195 --> X_069
+  X_064 --> X_069
+  OBE_129 --> X_069
+  PBE_098 --> X_069
+  OBE_159 --> X_069
+  OBE_146 --> X_070
+  OBE_194 --> X_070
+  OBE_197 --> X_070
+  X_055 --> X_070
+  OBE_195 --> X_070
+  PBE_093 --> X_070
+  X_075 --> X_070
+  X_061 --> X_070
+  OBE_107 --> X_071
+  OBE_146 --> X_071
+  PBE_084 --> X_071
+  OBE_159 --> X_071
+  OBE_111 --> X_071
+  PBE_087 --> X_072
+  X_065 --> X_072
+  PBE_098 --> X_072
+  X_068 --> X_072
+  OBE_107 --> X_072
+  OBE_114 --> X_072
+  OBE_175 --> X_072
+  OBE_198 --> X_072
+  OBE_206 --> X_073
+  OBE_146 --> X_073
+  PBE_084 --> X_073
+  OBE_107 --> X_073
+  OBE_159 --> X_073
+  X_071 --> X_073
+  X_068 --> X_074
+  X_052 --> X_074
+  PBE_091 --> X_074
+  PBE_094 --> X_074
 ```
 
 The critical path printed by plan-lint runs through the database work (X-002 → X-010 → X-011 → X-012 → X-013 → X-015). Start X-016, X-003, X-004, X-006, X-017, X-019 and X-021 in parallel on day one; they do not share files. The VM chain (X-021 → X-033 → X-020 → X-023, 24 agent-hours) also carries the human steps on the VM: start X-033 as soon as X-021 is merged. *Note (2026-11-16, lead decision (25n), approved by the owner; FIX-W56-PLAN):* the Node.js 24 tasks join M0 so that agents take them first ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 3): PBE-077, X-046, X-047 and X-050 in one wave, then X-048 alone. The human VM steps of X-020, X-021, X-023, X-024, X-030, X-037, X-038, X-039 and X-041 run after X-048, on Node.js 24 (a dated note in each). That gate is not a dependency, so plan-lint's remaining critical path stays X-021 → X-020 → X-023 → X-024 → X-030 → X-038 (32 h), while the effective path to the first VM rehearsal is about 48 h: X-046, X-047 or X-050 (8 h), then X-048 (8 h), then that chain.
+
+*Note (2026-11-25; [ADR-0030](../adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 25):* X-051 to X-055 depend on nothing, so phase A (X-051 … X-054) and phase B's X-055 can start as soon as M7 starts. Over the three task files, plan-lint's remaining critical path is now the multi-supplier work's and runs on into M8: 166 h over 28 tasks, from PBE-078 to OBE-212, with X-061, X-075, X-068 and X-072 on it. Inside M7 the longest chain is 152 h over 26 tasks and ends with X-073 ([roadmap](roadmap.md) §3.1 and §3.2).

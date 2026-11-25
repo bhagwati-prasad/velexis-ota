@@ -397,7 +397,7 @@ and a cached-row mutation needs a row in the invalidation coverage test.
   `repo:platform/docs/flows/platform-admin-operations.md`
 - Operations: `repo:platform/docs/runbooks/platform-operations.md`, `repo:platform/docs/runbooks/launch-checklist.md`,
   `repo:platform/docs/security-review.md`, `repo:platform/docs/scope.md`
-- ADRs: `repo:platform/docs/adr/README.md` (PADR-0001 to 0019), and `repo:docs/mvp/adr/0003-six-components-two-nestjs-backends.md`,
+- ADRs: `repo:platform/docs/adr/README.md` (PADR-0001 to 0021), and `repo:docs/mvp/adr/0003-six-components-two-nestjs-backends.md`,
   `repo:docs/mvp/adr/0004-postgresql-schema-per-tenant.md`, `repo:docs/mvp/adr/0009-background-jobs-bullmq.md`,
   `repo:docs/mvp/adr/0010-secrets-envelope-encryption.md`, `repo:docs/mvp/adr/0018-hosted-storefront-custom-domains.md`
 - Related apps: [[app:portal]], [[app:platform-admin]], [[app:ota-api]]

@@ -2,9 +2,9 @@
 
 **Status:** Proposed
 **Date:** 2026-11-25
-**Deciders:** Product owner (items 1 to 3: decisions of 2026-11-24), lead architect (items 4 to 11: proposals, not confirmed)
+**Deciders:** Product owner (items 1 to 3: decisions of 2026-11-24; item 12: decision of 2026-11-25), lead architect (items 4 to 11: proposals, not confirmed)
 
-**What is in force.** The status is `Proposed`: [ADR-0001](../../../docs/mvp/adr/0001-record-architecture-decisions.md) (items 6 and 7) and this folder's [README](README.md) allow no other before the developer merges a record. The **Decided** items are the owner's decisions of 2026-11-24, in force through [`decisions.md`](../../../docs/mvp/decisions.md). The **Proposed** items are the lead's proposals, not in force until the owner confirms them.
+**What is in force.** The status is `Proposed`: [ADR-0001](../../../docs/mvp/adr/0001-record-architecture-decisions.md) (items 6 and 7) and this folder's [README](README.md) allow no other before the developer merges a record. The **Decided** items are the owner's decisions of 2026-11-24 (items 1 to 3) and of 2026-11-25 (item 12), in force through [`decisions.md`](../../../docs/mvp/decisions.md). The **Proposed** items are the lead's proposals, not in force until the owner confirms them.
 
 ## Context
 
@@ -25,6 +25,7 @@ Velexis staff cannot see tenant bookings today ([PADR-0006](0006-platform-admin-
 9. **Proposed (lead).** **Alerts** (plan 4.13). Alerts to OTA staff use neutral words; the role gets the supplier detail. A debit difference raises an alert at once, and in the first live weeks staff stop the source until it is explained.
 10. **Proposed (lead).** **Disclosure on request** (plan 4.14). An OTA owner or admin asks on the Suppliers page. A platform admin answers within three working days (A39), from the id history, with the supplier's legal name, country and privacy contact at that date. The answer is stored and audited.
 11. **Proposed (lead).** **The counsel gate** (plan 4.14). No supplier is hidden in live use before counsel answers question 1 below.
+12. **Decided (owner, 2026-11-25).** **The reconciliation process ready at launch** ([ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 22). "I want to launch with the reconciliation process ready from the platform." The lead reads this as: the reconciliation work of the plan's phase P9 (the role, the ledger, the facts, the support interface, the cases, the export, the daily check, the statement, the alerts, both admin areas and disclosure) is in milestone M7 and part of launch readiness, with task X-074, the live gate for after-sales.
 
 ## Revisions to other records
 
@@ -68,6 +69,6 @@ They would rest on proposals; nobody writes them yet.
 
 Each recommendation is the lead's proposal, not a decision.
 
-1. **Counsel on Velexis's role** (plan 4.14; 9.6 item 6). Is Velexis a processor for each OTA, or a controller of its own? If a processor, "on request" (item 3) may not be enough, and the owner then decides again. The lead's recommendation: no supplier hidden in live use before the answer.
-2. **Who staffs the role** (plan §8). To name: a holder, a stand-in and cover hours. The lead's recommendation: named before the live co-test of P10 (plan §6).
-3. **Who works an OTA's queues between hiding the supplier (P5) and the role's tools (P9)** (plan 9.3). Options: hide the Amadeus tools in production only once the role's booking view is merged; or move the role's first tools before P5. The lead's recommendation: none in the plan.
+1. **Counsel on Velexis's role** (plan 4.14; 9.6 item 6). Is Velexis a processor for each OTA, or a controller of its own? If a processor, "on request" (item 3) may not be enough, and the owner then decides again. The lead's recommendation: no supplier hidden in live use before the answer. 2026-11-25: the owner asked the lead to explain this question; it is still open. As the lead reads [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 19, the supplier is hidden in live use from the launch on, so by item 11, the lead's proposal, the answer is now needed before the launch.
+2. **Who staffs the role** (plan §8). To name: a holder, a stand-in and cover hours. The lead's recommendation: named before the live co-test of P10 (plan §6). 2026-11-25: the owner asked the lead to explain this question; it is still open. As the lead reads item 12, the role needs its holder, stand-in and cover hours before the launch: task X-074, the live gate for after-sales, asks for a named holder and a stand-in.
+3. **Who works an OTA's queues between hiding the supplier (P5) and the role's tools (P9)** (plan 9.3). Options: hide the Amadeus tools in production only once the role's booking view is merged; or move the role's first tools before P5. The lead's recommendation: none in the plan. Answered on 2026-11-25 (ADR-0030 items 21 and 22).

@@ -89,7 +89,7 @@ The index with status and one-line summaries is in [`adr/README.md`](adr/README.
 
 | Plan | Style | One line |
 |---|---|---|
-| `plans/agent-tasks.md` | Agent tasks (`OBE-`, `OFE-`, `OAD-`, `SDK-`) | Small verifiable tasks for the OTA backend, storefront, OTA admin and SDK, M0–M6. |
+| `plans/agent-tasks.md` | Agent tasks (`OBE-`, `OFE-`, `OAD-`, `SDK-`) | Small verifiable tasks for the OTA backend, storefront, OTA admin and SDK, M0–M8. |
 | `plans/` | Solo developer, week by week | The order in which the developer drives and reviews the OTA tasks. |
 
 ## Reference material used here (reuse, do not redo)

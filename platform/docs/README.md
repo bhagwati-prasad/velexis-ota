@@ -75,7 +75,7 @@ The index with status and one-line summaries is in [`adr/README.md`](adr/README.
 
 | Plan | Style | One line |
 |---|---|---|
-| [`plans/agent-tasks.md`](plans/agent-tasks.md) | Agent tasks (`PBE-`, `PFE-`, `PAD-`) | Small verifiable tasks for the platform backend, portal and admin, M0–M6. |
+| [`plans/agent-tasks.md`](plans/agent-tasks.md) | Agent tasks (`PBE-`, `PFE-`, `PAD-`) | Small verifiable tasks for the platform backend, portal and admin, M0–M8. |
 | [`plans/`](plans/) | Solo developer, week by week | The order in which the developer drives and reviews the platform tasks. |
 
 ## Reference material used here (reuse, do not redo)

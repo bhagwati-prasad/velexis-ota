@@ -394,6 +394,6 @@ a behaviour you suspect.
 - Runbooks: `repo:ota/docs/runbooks/README.md`, `repo:ota/docs/runbooks/supplier-timeout-and-reconciliation.md`,
   `repo:ota/docs/runbooks/ticketing-failures.md`, `repo:ota/docs/runbooks/stripe-incidents.md`,
   `repo:ota/docs/runbooks/tenant-migration-failures.md`, `repo:ota/docs/runbooks/jwt-key-rotation.md`
-- ADRs: `repo:ota/docs/adr/README.md` (OADR-0001 Amadeus client … OADR-0018), platform-wide
+- ADRs: `repo:ota/docs/adr/README.md` (OADR-0001 Amadeus client … OADR-0020), platform-wide
   `repo:docs/mvp/adr/0004-postgresql-schema-per-tenant.md`, `repo:docs/mvp/adr/0009-background-jobs-bullmq.md`,
   `repo:docs/mvp/adr/0011-payments-stripe-and-airline-card.md`; database conventions `repo:docs/velexis-sdk/db/README.md`

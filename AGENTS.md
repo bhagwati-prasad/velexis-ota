@@ -15,9 +15,9 @@ Humans should read it too. It is the short version of [`docs/mvp/conventions.md`
 
 Velexis is a multi-tenant OTA platform. A person signs up on the **portal**, subscribes, and gets their own **OTA** (a tenant with its own PostgreSQL schema `tenant_<key>`). The OTA sells **Amadeus Enterprise** flights through a hosted **storefront** and runs operations in the **OTA admin**. There are six components in two groups (`platform/`, `ota/`), a vanilla JS **SDK** (`ota/sdk`), shared packages (`packages/`), and everything runs on **one VM without Docker**.
 
-**Suppliers (the owner's decisions of 2026-11-24, not built yet).** [`docs/mvp/decisions.md`](docs/mvp/decisions.md) now says that the OTA sells flights from one or more suppliers (Amadeus Enterprise first, PKFare second), through one ingestion engine with supplier adapters. The code still knows only Amadeus, and this file describes the code. [ADR-0030](docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) says what is decided and what is only proposed. No task block exists yet, so no supplier work starts from `decisions.md` or from the [multi-supplier plan](docs/mvp/plans/multi-supplier-plan.md).
+**Suppliers (the owner's decisions of 2026-11-24 and 2026-11-25, not built yet).** [`docs/mvp/decisions.md`](docs/mvp/decisions.md) now says that the OTA sells flights from one or more suppliers (Amadeus Enterprise first, PKFare second), through one ingestion engine with supplier adapters. The code still knows only Amadeus, and this file describes the code. [ADR-0030](docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) says what is decided and what is only proposed. The work is planned in the three task files as milestone **M7** (169 tasks, before the launch: the engine with its adapters, PKFare, the hidden supplier, the Amadeus tools hidden, the rules at the hooks, the daily limit and reconciliation) and milestone **M8** (17 tasks, after the launch: an OTA's own supplier accounts and the contract steps of M7's new columns), from the [multi-supplier plan](docs/mvp/plans/multi-supplier-plan.md) as re-scoped in its section 0. Each block's **Read first** names the record items it builds and which of them are still proposed.
 
-Status: **325 of the plans' 354 tasks were done on 2026-11-20, and every open task waits on a human step, a nightly run with the Stripe test secrets or the launch**; `node tools/plan-lint/plan-lint.mjs` prints the live count (updated 2026-11-20, lead decision (32g), approved by the owner; FIX-W63-DOCS).
+Status: **325 of the plans' 540 tasks were done on 2026-11-25**. Every open task of M0–M6 waits on a human step, a nightly run with the Stripe test secrets or the launch; the 169 tasks of M7 run before the launch and the 17 of M8 after it; `node tools/plan-lint/plan-lint.mjs` prints the live count (updated 2026-11-25, the owner's decisions of 2026-11-25).
 
 ## 2. Read order
 
@@ -25,7 +25,7 @@ Read these before your first change in a session:
 
 1. **This file.**
 2. [`docs/mvp/decisions.md`](docs/mvp/decisions.md): the product owner's decisions. **They win over everything.**
-3. [`docs/mvp/README.md`](docs/mvp/README.md): the document index and the shared milestones M0–M6.
+3. [`docs/mvp/README.md`](docs/mvp/README.md): the document index and the shared milestones M0–M8.
 4. [`docs/mvp/architecture.md`](docs/mvp/architecture.md): components, ports, data ownership, request flows.
 5. [`docs/mvp/conventions.md`](docs/mvp/conventions.md): how code is organised and written.
 6. Your task's **Read first** list, and the ADRs it names ([`docs/mvp/adr/`](docs/mvp/adr/README.md)).
@@ -53,7 +53,7 @@ The plans are Markdown files of task blocks (`### OBE-014 · Title` with Compone
 
 If you were given a task id, do that task. Otherwise pick one like this:
 
-1. Take the **lowest milestone** that still has open tasks (M0 → M6). Finish foundation (`X-`) tasks of a milestone before component tasks that depend on them.
+1. Take the **lowest milestone** that still has open tasks (M0 → M6). Finish foundation (`X-`) tasks of a milestone before component tasks that depend on them. **M7** (since 2026-11-25, the owner's decision, [ADR-0025](docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 3): its tasks may start while every open task of M0–M6 waits on a human step, a nightly run or the launch; take them in the order of their phases (A to L). Until X-053 is merged, `node tools/plan-lint/plan-lint.mjs --remaining` does not list them. **M8** starts after the launch.
 2. Keep only tasks whose **Depends on** tasks are all **merged** into `main`. A task is merged when, on `main`, its heading ends with ` ✅` and its status says `done (PR #n)` ([ADR-0025](docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 6).
 3. Drop tasks that are **claimed**: a status `in progress`, an open PR, or an existing branch `task/<ID>-*`.
 4. Prefer tasks on the **critical path**. `node tools/plan-lint/plan-lint.mjs` prints it.

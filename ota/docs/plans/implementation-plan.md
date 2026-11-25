@@ -1,17 +1,17 @@
 # OTA implementation plan
 
-This plan explains how the OTA group (OTA backend, hosted storefront, OTA admin and JS SDK) delivers its MVP scope across the shared milestones M0–M6. For each milestone it gives the goal, the epics in scope, the demo at the end, the exit criteria, what is needed from and given to the platform group, and the risks with their mitigations. It ends with a traceability table from every scope item to its epic and tasks, an operation-coverage table showing that every MVP operation has a backend task, an SDK task and (where people use it) a storefront or OTA admin task, and the alignments made while planning. The tasks themselves, small enough for an AI coding agent, are in [`agent-tasks.md`](agent-tasks.md); the week-by-week order for one developer is in [`solo-developer-plan.md`](solo-developer-plan.md). Everything here follows [`decisions.md`](../../../docs/mvp/decisions.md), the [cross-cutting ADRs](../../../docs/mvp/adr/README.md) and the [OTA ADRs](../adr/README.md).
+This plan explains how the OTA group (OTA backend, hosted storefront, OTA admin and JS SDK) delivers its MVP scope across the shared milestones M0–M8 (since 2026-11-25: M7 before the launch, and M8, a release after it). For each milestone it gives the goal, the epics in scope, the demo at the end, the exit criteria, what is needed from and given to the platform group, and the risks with their mitigations. It ends with a traceability table from every scope item to its epic and tasks, an operation-coverage table showing that every MVP operation has a backend task, an SDK task and (where people use it) a storefront or OTA admin task, and the alignments made while planning. The tasks themselves, small enough for an AI coding agent, are in [`agent-tasks.md`](agent-tasks.md); the week-by-week order for one developer is in [`solo-developer-plan.md`](solo-developer-plan.md). Everything here follows [`decisions.md`](../../../docs/mvp/decisions.md), the [cross-cutting ADRs](../../../docs/mvp/adr/README.md) and the [OTA ADRs](../adr/README.md).
 
-Related: [`../scope.md`](../scope.md) (features OF-01 … OF-12, the 96 operations), [`../architecture.md`](../architecture.md), [`../architecture-booking.md`](../architecture-booking.md), [`../api-changes.md`](../api-changes.md) and [part 2](../api-changes-console-and-internal.md), [`../data-model.md`](../data-model.md), [flows](../README.md#flows), [`../../../docs/mvp/README.md`](../../../docs/mvp/README.md#1-shared-milestones) (milestone definitions), [`../../../docs/mvp/plans/foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md) (`X-` tasks), [`../../../platform/docs/plans/implementation-plan.md`](../../../platform/docs/plans/implementation-plan.md) (the platform group's plan).
+Related: [`../scope.md`](../scope.md) (features OF-01 … OF-12, the 96 operations), [`../architecture.md`](../architecture.md), [`../architecture-booking.md`](../architecture-booking.md), [`../api-changes.md`](../api-changes.md) and [part 2](../api-changes-console-and-internal.md), [`../data-model.md`](../data-model.md), [flows](../README.md#flows), [`../../../docs/mvp/README.md`](../../../docs/mvp/README.md#1-shared-milestones) (milestone definitions), [`../../../docs/mvp/plans/foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md) (`X-` tasks), [`../../../platform/docs/plans/implementation-plan.md`](../../../platform/docs/plans/implementation-plan.md) (the platform group's plan); since 2026-11-25 also the [multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md) (the design of M7 and M8) and [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) (the owner's supplier decisions).
 
 ## 1. How the plan is built
 
 | Item | Value |
 |---|---|
-| Agent tasks | 179: 105 backend (`OBE-`), 32 storefront (`OFE-`), 23 OTA admin (`OAD-`), 19 SDK (`SDK-`); 151 until the M6 follow-ups (§4 M6, notes of 2026-11-06, 2026-11-10, 2026-11-11, 2026-11-13, 2026-11-15, 2026-11-16, 2026-11-18 and 2026-11-19) |
-| Estimate | 784 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); 196 developer-days without agents (S ½ day, M 1 day, L 2 days); 684 and 171 until the M6 follow-ups |
-| Foundation dependencies | `X-001` … `X-030` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the OTA plan never re-does them and adds the 11 Amadeus stub operations X-026 leaves to it |
-| Platform dependencies | PBE-002, PBE-004, PBE-034, PFE-014, PFE-017, PBE-053, PBE-055, PBE-057, PBE-061 (named in **Depends on**); the platform gates PBE-035, PBE-036, PAD-011 and PFE-019 on OTA features |
+| Agent tasks | 299: 216 backend (`OBE-`), 33 storefront (`OFE-`), 29 OTA admin (`OAD-`), 21 SDK (`SDK-`), of which 109 in M7 and 11 in M8 since 2026-11-25 (§4 M7 and M8); 179 until 2026-11-25, and 151 until the M6 follow-ups (§4 M6, notes of 2026-11-06, 2026-11-10, 2026-11-11, 2026-11-13, 2026-11-15, 2026-11-16, 2026-11-18 and 2026-11-19) |
+| Estimate | 1,358 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); 339.5 developer-days without agents (S ½ day, M 1 day, L 2 days); of them M7 514 agent-hours and 128.5 days, and M8 60 and 15 (since 2026-11-25); 784 and 196 until 2026-11-25, and 684 and 171 until the M6 follow-ups |
+| Foundation dependencies | `X-001` … `X-030` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the OTA plan never re-does them and adds the 11 Amadeus stub operations X-026 leaves to it. Since 2026-11-25 M7 and M8 also depend on M7's foundation tasks, named in **Depends on**: among them X-054 (`x-milestone` takes `M7` and `M8`), X-055 (a test OTA with its own Amadeus connection), X-057, X-058 and X-064 (PKFare's recorded fixtures and fake) and X-075 (test and seed connections with their supply source) |
+| Platform dependencies | PBE-002, PBE-004, PBE-034, PFE-014, PFE-017, PBE-053, PBE-055, PBE-057, PBE-061 (named in **Depends on**); the platform gates PBE-035, PBE-036, PAD-011 and PFE-019 on OTA features. Since 2026-11-25 M7 needs PBE-078, PBE-079, PBE-080, PBE-082, PBE-088, PBE-089, PBE-101, PFE-032, PAD-018 and PAD-019, and M8 PBE-089, PBE-092, PBE-102 and PBE-103 (§4 M7 and M8) |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md ota/docs/plans/agent-tasks.md` (0 errors) |
 | Reference material reused | Tenant baseline [`tenant.sql`](../../../docs/velexis-sdk/db/tenant.sql) as `0001` (X-012) and the exact `0002` SQL of [`../data-model-migration-0002.md`](../data-model-migration-0002.md); the [OpenAPI contract](../../../docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml) (96 operations with `x-sdk-method`, `x-amadeus`, `x-tenant-tables`, `x-scope`); the [SDK contract](../../../docs/velexis-sdk/sdk/src/) and guides B1–B4; the [Next.js example](../../../docs/velexis-sdk/examples/next-storefront/) as reference flows; the [Amadeus specifications](../../../docs/amadeus-api/) for the client, its generated types and the stub |
 
@@ -22,6 +22,7 @@ Rules that shape the order of the tasks:
 - **Backend, then SDK, then pages.** Every storefront or OTA admin task depends on the backend task of its operations and on the SDK namespace that exposes them. The SDK is the only way to the API for both UIs ([`decisions.md`](../../../docs/mvp/decisions.md) §1).
 - **Proof tasks close each milestone.** OBE-026 (M2), OBE-057 (M3), OBE-075 (M4) and OBE-083 (M5) prove the OTA features of [`../scope.md`](../scope.md) §4 with integration tests; OFE-008, OFE-017 … OFE-019, OFE-022, OAD-016, OAD-017 prove them in a browser.
 - **Cross-group work is a dependency or a gate, never a fake.** OTA tasks name the platform tasks they need. Tests may stand in for the platform only with real rows written by the test as migrator, never with a fake platform service.
+- **M7 in phases, M8 after the launch** (since 2026-11-25). M7's tasks run in the order of the lead's phases A to L ([multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md) §0.2): the SDK 1.0.0 notes first (SDK-020), then the Amadeus tools hidden (OBE-106, OAD-024), the PKFare facts, the engine with the Amadeus adapter, the platform's supplier registry and the hidden supplier, before PKFare's search and booking, the rules, reconciliation and the proof. They may start while every open task of M0–M6 waits on a human step, a nightly run or the launch ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 3, note of 2026-11-25; [`AGENTS.md`](../../../AGENTS.md) §3). A task that adds an operation with `x-milestone: M7` or `M8` depends on X-054. Each block names in **Read first** the record items it builds and which of them are still Proposed; the lead proposes that the owner's go for a wave accepts the Proposed items its tasks name ([ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 26). No M8 task starts before the launch.
 
 ## 2. Epics
 
@@ -43,8 +44,21 @@ Rules that shape the order of the tasks:
 | OE14 | OTA admin | Server-side SDK client and sessions, SSO, shell, dashboard, bookings, PNR, queues, shopping, payments, customers, settings, live and billing banner; the booking page's last action message after a re-render (OAD-023, lead decision (20l) of 2026-11-13, after the launch) | OAD-002 … OAD-015, OAD-018, OAD-023 |
 | OE15 | Self-service and live | Account modes, Connect webhooks, own Amadeus, custom domains, live environment, cross-backend proof | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 |
 | OE16 | Quality, security and launch | Journeys, security review and its follow-ups, PCI evidence and the airline-card live gate, performance and its follow-up, runbooks, accessibility and its follow-ups, guide, stable nightly suites | OFE-008, OFE-017 … OFE-019, OFE-022, OFE-024 … OFE-026, OAD-016, OAD-017, OAD-019, OBE-084 … OBE-086, OBE-088, OBE-089, SDK-015; the M6 follow-ups (2026-11-06, FIX-W46-SHARED): OBE-092 … OBE-096, OAD-020, OFE-027, OFE-028; OFE-029 (2026-11-10, OFE-027); OFE-030 (2026-11-10, lead decision (13a)); since 2026-11-11 (FIX-W48-SHARED): OBE-097 (CORS, lead decision (15h)), OBE-098 and OAD-021 (a storefront's offers per search, (15j)), OBE-099 and OAD-022 (closing a Reconciliation review, (15l)), OBE-100 (`secrets:rewrap`, (15m)); OBE-101 (the completed jobs Redis keeps, 2026-11-11, OBE-088); from the lead's second set of decisions of 2026-11-11 (FIX-W49-SHARED): OBE-102 (the Amadeus buckets kept for shopping during the sync, (17g)) and OFE-031 (a signed-in customer's phone page, the search form's fallback, the OTA's full name in the footer, (17l)); OFE-032 (the compact signed-in account menu up to the large breakpoint, lead decision (20h) of 2026-11-13, FIX-W51-SHARED); OBE-103 (the OTA API and worker measured on Node.js 24, lead decision (25n) of 2026-11-16, FIX-W56-PLAN); OBE-104 (the OTA API and worker for three hours on Node.js 24, whether their memory settles, lead decision (29c) of 2026-11-18); OBE-105 (the offer purge deletes what no checkout or booking needs of the searches they hold, after the launch, lead decision (30d) of 2026-11-19) |
+| OE17 | M7 A. Notes, packs and tooling | The SDK 1.0.0 documentation notes: open enumerations, `amadeus` members that may be missing, Amadeus console operations that may be refused (ADR-0030 item 24) | SDK-020 |
+| OE18 | M7 B. Amadeus tools hidden | The 15 Amadeus tool operations answer `403 FEATURE_DISABLED` without an own active Amadeus connection, `ConsoleTenant.supplierTools`, and the OTA admin without the tool screens | OBE-106, OAD-024 |
+| OE19 | M7 C. PKFare facts, sandbox and fixtures | The PKFare facts file, the question list and the index of the saved reference; PKFare's sandbox times and limits | OBE-107, OBE-108 |
+| OE20 | M7 D. Engine and interface, Amadeus search and pricing | The golden baseline, the supplier adapter interface and its neutral types, the Amadeus client as an adapter, the supply registry, the source columns of offers, the engine core with the three hooks, search with a deadline per source, the merge and its de-duplication, stored offers, pricing and upsell through the engine, conformance part 1, the golden comparison | OBE-109 … OBE-123 |
+| OE21 | M7 E. Amadeus adapter for booking | The source columns of bookings, the booking jobs by supplier, the order created, completed, ticketed, read, found, cancelled and changed through the engine, extras and the card-fee quote as capabilities, the tools class with the own-account guard, notifications, conformance part 2, Check payable, the confirmation held back until ticketing is accepted, the ticketing policy by capability, the fence of the Amadeus jobs, the golden comparison | OBE-124 … OBE-145 |
+| OE22 | M7 F. Platform: registry, switches, Velexis accounts, wallet, Suppliers page | The OTA's side: the supply registry read from the platform, the source that sells and the one that serves, `supply_id` written on offers, priced offers and bookings, with old rows filled | OBE-146, OBE-147 |
+| OE23 | M7 G. The supplier hidden | `supplyId` and `supplyLabel`, the tools guard keyed to supply sources, no `amadeus` member, verbatim supplier detail or supplier code for a Velexis source, the offer source as a content type, airline record locators, payment methods by source, true allowed actions, neutral texts on the storefront and in the OTA admin, the leak walks, the SDK's notes for 1.1.0, staff sent to Velexis support | OBE-148 … OBE-158, OFE-033, OAD-025, OAD-026, SDK-021 |
+| OE24 | M7 H. PKFare search and pricing | The PKFare client, search, stored offers, pricing with a single-use price reference, traveller requirements, fare rules, the expected debit and the cost price, conformance part 1, the merged search's load test and deadline | OBE-159 … OBE-167 |
+| OE25 | M7 I. PKFare booking, extras and low-cost | Supplier orders, the order, Check payable, the capture deadline, one ticketing request, the follow-up job, tickets, the watchdog, open cases in the console and the OTA admin, the completion stops (sales stop, open-case cap, daily limit), ticketing problems, the console guards, bags and seats, low-cost bookings, the notification endpoint, the failure matrix, conformance part 2, the neutral extras, ticketless bookings, `SupplierIssue.provider` | OBE-168 … OBE-188, OAD-027 |
+| OE26 | M7 J. Rules at the hooks and the platform screen | The rule model and its matcher, supplier selection at pre-action, carrier rules at post-action, Velexis's price rules per supply source, shares, deadlines and preferences set by stored rules, the proof of the rules | OBE-189 … OBE-194 |
+| OE27 | M7 K. Reconciliation | The supply fact outbox, the support caller and the handoff redeem, the support reads and actions, cases for cancel requests, schedule changes and lost order answers, the console side of a case, cases in the OTA admin | OBE-195 … OBE-200, OAD-028 |
+| OE28 | M7 L. Proof and launch readiness | The final load and soak test with two sources, the PCI pack for supplier sources, the security review of the supply modules, the export for PKFare's certification, the supplier pilot plan and the supplier go-live runbook | OBE-201 … OBE-206 |
+| OE29 | M8 Own supplier accounts (after the launch) | An OTA's own rules (table, console operations, OTA admin screen), PKFare's void and refund requests, cases driven by the adapter, the one clear case closed automatically, paid bags after ticketing, `supply_id` NOT NULL, an OTA's own Amadeus connection beside Velexis's | OBE-207 … OBE-216, OAD-029 |
 
-Some tasks belong to two epics (for example OBE-079 in OE4 and OE15); the table lists them where they matter most.
+Some tasks belong to two epics (for example OBE-079 in OE4 and OE15); the table lists them where they matter most. Since 2026-11-25 the epics OE17 to OE28 are M7's phases A to L, the lead's re-scope of the multi-supplier plan (its §0), and OE29 is M8.
 
 ## 3. Milestones at a glance
 
@@ -57,7 +71,9 @@ Some tasks belong to two epics (for example OBE-079 in OE4 and OE15); the table 
 | M4 OTA admin | Console API, `console` SDK, OTA admin, settings, content pages (OF-09, OF-10) | 41 | 180 | 45 | Console token and Open console (PBE-039, PFE-017 … PFE-019), gated on OF-09 |
 | M5 Monetisation & self-service | Gateways and resolver that follow the platform's data, custom domains, live (OF-12) | 11 | 38 | 9.5 | Billing, own Stripe, settlements, own Amadeus, domains, go-live |
 | M6 Hardening & launch | Security review and its follow-ups, PCI evidence, airline-card live gate, erasure, performance, runbooks, SDK 1.0.0; CORS, offers per search and review closure in the console, `secrets:rewrap`, Redis's completed jobs; the SDK's shared refresh, the Amadeus buckets kept for shopping, a signed-in customer's phone page; one refresh per refresh token in the SDK, the compact account menu up to the large breakpoint; the booking page's last action message (OAD-023, after the launch); the family's newest tokens of the session in what the SDK's session hooks get whenever the result's refresh token has been rotated, and an empty refresh token counted as none (SDK-018); since 2026-11-16, after the switch to Node.js 24, the OTA backend measured on it (OBE-103) and the SDK's supported Node.js versions (SDK-019); since 2026-11-18 three hours of the OTA API and worker on Node.js 24 (OBE-104); since 2026-11-19 the offer purge's bound on what a checkout keeps of its search (OBE-105, after the launch) | 40 | 146 | 36.5 | Platform security review and its follow-ups, performance, suites, switch removal; foundation monitoring and restore drill |
-| **Total** | | **179** | **784** | **196** | |
+| M7 Multi-supplier engine | Since 2026-11-25, before the launch: the supply engine with the Amadeus and PKFare adapters, the Amadeus tools hidden, the supplier hidden from an OTA on Velexis supply, PKFare bookings with extras and low-cost content, the rules at the three hooks, the OTA side of reconciliation, proof and launch readiness (phases A to L); the launch follows M7 | 109 | 514 | 128.5 | The supplier registry, supply ids, switches, Velexis's supplier accounts, the daily limit per OTA, the wallet watch and the Suppliers page (phase F); Velexis's rules and their screen (J); the reconciliation role, ledger, cases, export and statements (K); the platform's supply review (L); foundation: the plan and contract tooling, PKFare's recordings and fake, the proofs and the live step X-073 |
+| M8 Own supplier accounts (after the launch) | Since 2026-11-25, a release after the launch: an OTA's own rules, PKFare's void and refund requests driving the cases, paid bags after ticketing, `supply_id` NOT NULL, an OTA's own Amadeus connection beside Velexis's | 11 | 60 | 15 | An OTA's own PKFare account and own Amadeus account beside Velexis supply, the OTA's supplier selection and the PKFare section of the Suppliers page, the supply source NOT NULL on connections, the cap of open cases per supply source (PBE-102 … PBE-104, PBE-106, PBE-107, PFE-034) |
+| **Total** | | **299** | **1,358** | **339.5** | |
 
 ```mermaid
 flowchart LR
@@ -76,9 +92,13 @@ flowchart LR
   PM5(["PBE-053, PBE-055,<br/>PBE-057, PBE-061"]) -.-> M5
   M5 --> M6["M6 hardening<br/>40 tasks"]
   X48(["X-048 Node.js 24 switch"]) -.-> M6
+  M6 --> M7["M7 multi-supplier engine<br/>109 tasks"]
+  PM7(["platform M7: registry, switches,<br/>accounts, rules, reconciliation"]) -.-> M7
+  M7 --> L(["launch"])
+  L --> M8["M8 own supplier accounts<br/>11 tasks"]
 ```
 
-The critical path printed by plan-lint runs through the foundation database tasks, PBE-002, the tenancy and Amadeus tasks (OBE-011 → OBE-018), shopping and checkout (OBE-021 → OBE-038), the orchestrator and after-sales (OBE-042 → OBE-049), console issue and cancel (OBE-063) and the OTA admin journeys (OAD-008 → OAD-019, OFE-026). *Since the second re-baseline of 2026-11-11* it ends with the storefront instead: after OBE-049, my bookings and the storefront journeys (OFE-015 → OFE-019) and the M6 storefront chain (OFE-024 → OFE-028 → OFE-030 → OFE-031), 166 h over 30 tasks, because OFE-031 is an L task; since the re-baseline of 2026-11-13 OFE-032 follows OFE-031 at its end, 168 h over 31 tasks ([roadmap](../../../docs/mvp/plans/roadmap.md) §3.1).
+The critical path printed by plan-lint runs through the foundation database tasks, PBE-002, the tenancy and Amadeus tasks (OBE-011 → OBE-018), shopping and checkout (OBE-021 → OBE-038), the orchestrator and after-sales (OBE-042 → OBE-049), console issue and cancel (OBE-063) and the OTA admin journeys (OAD-008 → OAD-019, OFE-026). *Since the second re-baseline of 2026-11-11* it ends with the storefront instead: after OBE-049, my bookings and the storefront journeys (OFE-015 → OFE-019) and the M6 storefront chain (OFE-024 → OFE-028 → OFE-030 → OFE-031), 166 h over 30 tasks, because OFE-031 is an L task; since the re-baseline of 2026-11-13 OFE-032 follows OFE-031 at its end, 168 h over 31 tasks ([roadmap](../../../docs/mvp/plans/roadmap.md) §3.1). *Since the re-baseline of 2026-11-25* the critical path over all tasks is the same 168 h over 31 tasks. The longest chain inside M7 is 152 h over 26 tasks, 17 of them OTA backend tasks: from the platform's supplier registry (PBE-078 → PBE-079 → X-061 → PBE-080 → X-075) through the OTA's source resolution (OBE-146), the supply ids on stored rows and in the answers (OBE-147 → OBE-148), the offer source as a content type (OBE-153), PKFare's stored offers, pricing and traveller requirements (OBE-161 → OBE-163), its booking and ticketing (OBE-169 → OBE-174), the supply facts and the support actions (OBE-195 → OBE-200), the platform's Reconciliation area and the proof of the cases (PAD-022 → X-068), the operations pack (X-072) and the pilot plan and go-live runbook (OBE-205 → OBE-206) to PKFare's live step (X-073). The remaining critical path, 166 h over 28 tasks, is the same chain up to OBE-206, followed by M8's OBE-209 → OBE-211 → OBE-212 ([roadmap](../../../docs/mvp/plans/roadmap.md) §3.1).
 
 ## 4. Milestones in detail
 
@@ -360,6 +380,8 @@ The critical path printed by plan-lint runs through the foundation database task
 
 *Note (2026-11-19, lead decision (30d), approved by the owner; FIX-W61-PLAN).* OBE-105 (L, OE16; after OBE-024 and OBE-104) joins M6, so it holds 40 tasks, 146 agent-hours and 36.5 solo days: the offer purge trims an expired search that a checkout or a booking holds, once every checkout that holds it is final, deleting its offers, upsells and priced offers that no checkout or booking needs and keeping the search row and every row that a reader of a checkout or a booking needs, by the dated revision of [OADR-0002](../adr/0002-offer-and-priced-offer-caching.md) point 6 (decided 2026-11-19), because OBE-104 found that every checkout keeps its search's whole answer for good ([`../performance.md`](../performance.md) §11: 0.34 to 0.48 MiB of `flight_offers` per checkout). It runs after the launch, a named launch exception ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4); until then [deployment §14](../../../docs/mvp/deployment-single-vm.md#14-capacity-limits-of-one-vm) watches the size of `flight_offers`. The [solo plan](solo-developer-plan.md) places it after the launch; the plan-lint critical path does not change, and neither calendar changes length (the roadmap's re-baseline of 2026-11-19, [roadmap](../../../docs/mvp/plans/roadmap.md) §4.5).
 
+*Note (2026-11-25, the owner's decision (43a) of 2026-11-25, [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 19; the roadmap's re-baseline of the same day).* M6 keeps its 40 tasks, 146 agent-hours and 36.5 solo days, its demo and its exit criteria, but the launch no longer follows it: M7 is built before the launch, and the launch go/no-go waits for M7 too ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 3, note of 2026-11-25; §4 M7). M6's go/no-go closes M6. The walk-through of the OTA launch checklist, OBE-089's human step, comes with the launch at the end of M7, and the checklist's item A1 counts the M7 tasks among "every task".
+
 **Demo.** Walk through `ota/docs/security-review.md`, the PCI pack and `ota/docs/performance.md`; show three consecutive green nightly runs of `storefront`, `storefront-stripe` and `ota-admin`; install `@velexis/ota-sdk@1.0.0` in an empty project and run the guide's sample; walk through the OTA launch checklist.
 
 **Exit criteria.**
@@ -376,6 +398,129 @@ The critical path printed by plan-lint runs through the foundation database task
 | The penetration test or ASV scan finds issues late | The airline card stays off in production until OBE-086 is fully checked; Stripe remains available |
 | The 8 GB VM is too small under load | OBE-088 measures RSS and queue latency; a worker split is a prepared follow-up ([OADR-0014](../adr/0014-per-tenant-workers-and-schedulers.md)) |
 | Flaky journeys block the launch | Stripe journeys in their own nightly project; three consecutive green runs required; flaky tests are fixed, never skipped |
+
+### M7 — Multi-supplier engine
+
+*Added 2026-11-25, with the task blocks of M7 and the roadmap's re-baseline of the same day.*
+
+**Goal.** The booking flow runs through one ingestion engine with supplier adapters and is the same for every supplier: Amadeus first, then PKFare, whose tickets Velexis pays from its PKFare wallet. An OTA on Velexis supply sees an opaque supply id, never the supplier, and the Amadeus tools are hidden for an OTA without its own Amadeus connection. Velexis's rules act at the three hooks, extras and low-cost content are in, and Velexis's reconciliation role works Velexis-supplied bookings, with the reconciliation process ready from the platform at the launch. The owner decided these on 2026-11-24 and 2026-11-25 ([ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 1 to 13 and 19 to 23), and that M7 is built before the launch, so the launch waits for it. That a booking that needs a person opens a case is the lead's proposal ([PADR-0021](../../../platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md) item 8). The phases A to L are the lead's re-scope ([multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md) §0), and each task block names, in **Read first**, the record items it builds and which of them are still Proposed.
+
+**Scope.** Twelve phases in this order, the epics OE17 to OE28 (§2). The foundation's X-051 … X-075 and the platform's PBE-078 … PBE-101, PBE-105, PFE-032, PFE-033 and PAD-018 … PAD-025 belong to the same phases ([platform plan](../../../platform/docs/plans/implementation-plan.md), M7).
+
+| Phase (epic) | OTA tasks | Tasks | Agent-hours | Solo days |
+|---|---|---|---|---|
+| A. Notes, packs and tooling (OE17) | SDK-020 | 1 | 2 | 0.5 |
+| B. Amadeus tools hidden (OE18) | OBE-106, OAD-024 | 2 | 8 | 2 |
+| C. PKFare facts, sandbox and fixtures (OE19) | OBE-107, OBE-108 | 2 | 6 | 1.5 |
+| D. Engine and interface, Amadeus search and pricing (OE20) | OBE-109 … OBE-123 | 15 | 66 | 16.5 |
+| E. Amadeus adapter for booking (OE21) | OBE-124 … OBE-145 | 22 | 106 | 26.5 |
+| F. Platform: registry, switches, Velexis accounts, wallet, Suppliers page (OE22) | OBE-146, OBE-147 | 2 | 12 | 3 |
+| G. The supplier hidden (OE23) | OBE-148 … OBE-158, OFE-033, OAD-025, OAD-026, SDK-021 | 15 | 64 | 16 |
+| H. PKFare search and pricing (OE24) | OBE-159 … OBE-167 | 9 | 44 | 11 |
+| I. PKFare booking, extras and low-cost (OE25) | OBE-168 … OBE-188, OAD-027 | 22 | 118 | 29.5 |
+| J. Rules at the hooks and the platform screen (OE26) | OBE-189 … OBE-194 | 6 | 26 | 6.5 |
+| K. Reconciliation (OE27) | OBE-195 … OBE-200, OAD-028 | 7 | 44 | 11 |
+| L. Proof and launch readiness (OE28) | OBE-201 … OBE-206 | 6 | 18 | 4.5 |
+| **M7** | | **109** | **514** | **128.5** |
+
+Phase A runs first and never holds the SDK 1.0.0 publish (SDK-020; ADR-0030 item 24). Phase B hides the Amadeus tools on today's connection model, as the lead reads item 21: an OTA whose Amadeus connection is Velexis's gets no tool, an OTA with its own active connection keeps them, and no test is deleted, because the tool suites move to the test OTA of X-055. Phase G keys that guard to supply sources (OBE-149). Two parts wait for the owner: the daily-limit part of OBE-177 and the caps of OBE-206 wait for the meaning of a limit of 0 (question (44a)), and as proposed in PADR-0021 item 11, no supplier is hidden in live use before counsel's answer (43d) is recorded (the after-sales gate of X-074).
+
+**Demo.**
+- *On the VM* (the test environment, with Amadeus test credentials): the demo OTA's storefront searches through the engine, and every offer carries its supply id and no supplier name; in the OTA admin of an OTA on Velexis supply the Amadeus screens are not shown, and a tool operation answers `403 FEATURE_DISABLED`; in the platform admin a supplier switched off for that OTA stops selling to it, while its bookings are still served; a reconciliation role holder opens a booking with a reason and sees its redacted view.
+- *Local stack* (the Amadeus stub, the PKFare fake `tools/pkfare-stub`, Stripe test mode): a merged search with both sources; a PKFare booking from checkout to tickets, with a bag and a seat; a low-cost booking without ticket numbers; a refused ticketing request that opens a case, shown in the OTA admin's open cases and in the platform's Reconciliation area, worked to its outcome and the refund proposal; a rule set on the platform's rules screen that changes the next search; the leak walks green.
+
+**Exit criteria.**
+- Every M7 task of this plan is done. The launch go/no-go needs every M7 task of the three task files: X-073, PKFare's live step, may stay open at the launch only if the owner accepts the lead's proposal (question (44b) of ADR-0030), and PKFare stays switched off in production until PKFare certifies.
+- The golden comparisons are equal: today's Amadeus search, pricing and booking calls answer the same through the engine (OBE-123, OBE-141), and the search and booking load tests run through it.
+- The adapter conformance suites pass for the Amadeus adapter, the PKFare adapter and the fake (OBE-122, OBE-140, OBE-166, OBE-184).
+- For an OTA on Velexis supply no customer or console answer names a supplier (OBE-157, OBE-158), and the Amadeus tool operations answer `403 FEATURE_DISABLED` without an own active Amadeus connection (OBE-106, OBE-149; ADR-0030 item 18, proposed).
+- The PKFare failure matrix passes with its fourteen assertions, and the fake counts no second PreciseBooking, Ticketing or CancelOrder (OBE-183); captured money without a ticket gives an open case and a daily alert (OBE-175).
+- Every operation with `x-milestone: M7` has a handler and every console one its SDK method; route parity and SDK parity pass.
+- The load and soak test with two sources records a measured value and a verdict for each budget (OBE-201); the review of the supply modules has no open high finding and `pnpm audit --prod` shows no high or critical issue (OBE-203); the PCI pack names the PKFare source and says that it receives no card data (OBE-202).
+- The certification record, the pilot plan and the supplier go-live runbook exist (OBE-204, OBE-205, OBE-206).
+
+**Dependencies on the platform group.**
+
+| Needs from the platform group | For | Task |
+|---|---|---|
+| The supplier registry and supply sources, and Velexis's supplier accounts with column grants for the OTA role | OBE-146, OBE-159, OBE-165, OBE-177 | PBE-078, PBE-079 |
+| Supply ids and their rotation | OBE-147, OBE-148 | PBE-080 |
+| The per-tenant supply switch and the daily limit per OTA, default 0 | OBE-177 | PBE-082 |
+| Velexis's supply rules, kept on the platform and read by the OTA backend through a grant, a cache key and an invalidation | OBE-190, OBE-193, OBE-194 | PBE-088, PBE-089 |
+| The portal's Suppliers page, which the OTA admin's portal link opens | OAD-025 | PFE-032 |
+| The platform's supply review, the Suppliers area and the tenant page's switch and daily limit, for the go-live runbook | OBE-206 | PBE-101, PAD-018, PAD-019 |
+
+| Gives to the platform group | Task |
+|---|---|
+| The PKFare facts file, which the platform's balance gateway, Velexis accounts, wallet watch, ledger check and statement match read (PBE-083, PBE-084, PBE-087, PBE-096, PBE-097) | OBE-107 |
+| The rule model, which the platform's rules table and validation follow (PBE-089), and the supply-id look-up that the OTA's reader of Velexis's rules uses (PBE-088) | OBE-189, OBE-146 |
+| `supply.case_opened` and the supply facts on `platform-tenant-events`, in the envelope of X-067, for the platform's ledger and cases (PBE-092) | OBE-176, OBE-195 |
+| The support interface (the tag `Support`): the support caller and the handoff redeem, the redacted reads and the actions on a case, which the platform admin's Reconciliation area calls (PAD-022) | OBE-196, OBE-197, OBE-200 |
+| The staff alerts and case texts that the platform's test of OTA-facing texts reads for supplier words (PBE-098) | OBE-178, OBE-198, OBE-200 |
+
+**Risks and mitigations.**
+
+| Risk | Mitigation |
+|---|---|
+| The engine changes what today's Amadeus flow does | Golden baselines recorded before the move and compared byte for byte at the end of phases D and E (OBE-109, OBE-123, OBE-124, OBE-141); the existing tests keep every assertion |
+| PKFare behaves otherwise than the plan assumes | The facts file and the question list come first (OBE-107, OBE-108); every PKFare block reads it and stops when a fact differs; recorded fixtures and a fake that invents no answer (X-057, X-058, X-064) |
+| A supplier shows through to an OTA on Velexis supply | Neutral shapes and texts (OBE-150 … OBE-156, OFE-033, OAD-025), leak walks over every customer and console answer (OBE-157, OBE-158) and the end-to-end proof X-063 |
+| Money is captured without a ticket, or an order is requested twice | Write-ahead rows and one request per step, the capture deadline, the follow-up job and the watchdog (OBE-169 … OBE-175), the failure matrix (OBE-183), the sales stop, the open-case cap and the daily limit (OBE-177), and cases worked by the reconciliation role (OBE-198 … OBE-200) |
+| Two sources slow the search or fill the VM | A deadline per source and a share of the limit (OBE-115, OBE-116), the merged search's load test and deadline (OBE-167), the final load and soak test with go or no-go numbers (OBE-201) |
+| An open question or a Proposed record item holds a task | Each block names its Proposed items, and the lead proposes that the owner's go for a wave accepts those its tasks name (ADR-0030 item 26); the daily-limit parts wait for (44a), and the hooks keep their names until (44c) |
+| PKFare's certification comes late | PKFare stays switched off in production until PKFare certifies; the launch needs M7 proven on the fake and in PKFare's sandbox; that X-073 may then stay open at the launch is the lead's proposal (44b) |
+
+### M8 — Own supplier accounts (after the launch)
+
+*Added 2026-11-25. No M8 task starts before the launch.*
+
+**Goal.** In a release after the launch, an OTA can use its own supplier accounts beside Velexis supply, and the Amadeus tools come back with an OTA's own Amadeus account, as the owner decided on 2026-11-25 ([ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 21). An OTA keeps its own rules for its own sources, and the work that the multi-supplier plan called "Later" follows: PKFare's void and refund requests drive the cases, the one clear case closes by itself, and paid bags can be added after ticketing. That this release is milestone M8, and that it holds an OTA's own PKFare account too, is the lead's reading (plan §0.2; question (44d)).
+
+**Scope.** OE29 (§2).
+
+| Part | Tasks |
+|---|---|
+| An OTA's own rules: table, console operations, OTA admin screen | OBE-207, OBE-208, OAD-029 |
+| PKFare's void and refund requests, cases driven by the adapter, the one clear case closed automatically | OBE-209 … OBE-212 |
+| Paid bags after ticketing, for the OTA and in PKFare's adapter | OBE-213, OBE-214 |
+| `supply_id` NOT NULL on offers and bookings; an OTA's own Amadeus connection beside Velexis's | OBE-215, OBE-216 |
+| **M8** | **11** tasks, **60** agent-hours, **15** solo days |
+
+The platform's M8 tasks are PBE-102 … PBE-104, PBE-106, PBE-107 and PFE-034.
+
+**Demo.**
+- *On the VM*: an OTA with its own Amadeus test account beside Velexis supply sees the Amadeus tools for its own source only, and its own rule changes its next search.
+- *Local stack*: on the PKFare fake, an order voided and a refund quoted and requested through the adapter; a case closed by itself when the supplier shows the order cancelled and never paid; bags added to a ticketed booking with a second payment.
+
+**Exit criteria.**
+- Every M8 task is done, in a release after the launch.
+- With two active Amadeus connections in one environment, each offer and booking is served by the connection of its supply source, and the tools reach the own connection alone (OBE-216).
+- An OTA's own rules apply to its own sources only; a rule that names a Velexis source is refused (OBE-207, OBE-208).
+- OBE-215's human step is recorded for every deployed environment before its migration: OBE-147's batched job left no unmapped row.
+
+**Dependencies on the platform group.**
+
+| Needs from the platform group | For | Task |
+|---|---|---|
+| An OTA's own PKFare account, and an own Amadeus account beside Velexis supply | OBE-207 | PBE-102, PBE-103 |
+| Velexis's rules on the platform, the model an OTA's own rules follow | OBE-207 | PBE-089 |
+| The ledger that the adapter's reimbursements reach | OBE-211 | PBE-092 |
+
+| Gives to the platform group | Task |
+|---|---|
+| Two Amadeus connections served in one environment, which PBE-103 needs before it creates the second (with the engine tasks OBE-126 … OBE-138) | OBE-216 |
+| The source resolution that the OTA's own choice of supply builds on (PBE-104) | OBE-146 (M7) |
+| The count of open cases per tenant, which PBE-107 counts per supply source on the platform | OBE-177 (M7) |
+
+The switch `FEATURE_OWN_AMADEUS` stays off until this release, so the platform's PBE-064, which removes the six milestone switches, waits for it ([PADR-0015](../../../platform/docs/adr/0015-milestone-feature-switches.md), note of 2026-11-25).
+
+**Risks and mitigations.**
+
+| Risk | Mitigation |
+|---|---|
+| With two Amadeus connections a call is served by the wrong one | Each call is served by its supply source's connection, a call without a source is refused with `424` when the tenant has two, and `m5.xb.test.ts` gains a side-by-side case (OBE-216) |
+| The contract step of the new columns meets an unmapped row | OBE-215's human step comes first, and its migration stops, naming the table, the column and the count |
+| An OTA's own rule acts on Velexis supply | A rule that names a Velexis source is refused (OBE-208); the rule-ownership test of OBE-194 |
 
 ## 5. Interface with the platform group
 
@@ -394,6 +539,14 @@ The critical path printed by plan-lint runs through the foundation database task
 | Verified custom domains, `storefront_environment`, `billing_notice` | platform → OTA | M5 | OBE-080 … OBE-082, OAD-018 | PBE-045, PBE-050, PBE-061 |
 | `tools/e2e` harness | shared | M1 → M6 | OFE-008, OFE-017, OAD-016, OFE-026 add the OTA projects | PFE-014 |
 | `OTA_QUEUES` in `@velexis/api-types/jobs` (platform admin queue view) | OTA → platform | M1 | OBE-002 | PBE-004, PBE-031 |
+| The supplier registry, supply sources, supply ids and Velexis's supplier accounts, read with the invalidation events and keys of X-061 (since 2026-11-25) | platform → OTA | M7 | OBE-146, OBE-147, OBE-148, OBE-159, OBE-165 | PBE-078, PBE-079, PBE-080 |
+| The per-tenant supply switch and the daily limit per OTA | platform → OTA | M7 | OBE-177 | PBE-082 |
+| The PKFare facts file | OTA → platform | M7 | OBE-107 | PBE-083, PBE-084, PBE-087, PBE-096, PBE-097 |
+| Velexis's supply rules: the OTA's rule model, the platform's rules table and its read grant, cache key and invalidation | both | M7 | OBE-189, OBE-190, OBE-193, OBE-194 | PBE-088, PBE-089, PAD-021 |
+| `supply.case_opened` and the supply facts on `platform-tenant-events` (envelope of X-067) | OTA → platform | M7 | OBE-176, OBE-195 | PBE-092 |
+| The support interface (tag `Support`): handoff, redacted reads, case actions | platform → OTA (calls) | M7 | OBE-196, OBE-197, OBE-200 | PBE-093, PBE-094, PAD-022 |
+| Neutral staff alerts and case texts | OTA → platform | M7 | OBE-178, OBE-198, OBE-200 | PBE-098 |
+| An OTA's own PKFare and Amadeus accounts, a second Amadeus connection, the OTA's own choice of supply, the open-case count per source | both | M8 | OBE-207, OBE-216, OBE-146, OBE-177 | PBE-102, PBE-103, PBE-104, PBE-107 |
 
 ## 6. Traceability
 
@@ -436,10 +589,24 @@ Every feature of [`../scope.md`](../scope.md) §4, every part of §2, the contra
 | OADR-0018 follow-up (refuse `creditCard` in console form of payment) | M4 | OE10 | OBE-058, OBE-062, OBE-063 |
 | ADR-0011 §C PCI controls and documentation | M3, M6 | OE7, OE16 | OBE-050 … OBE-052, OBE-084, OBE-085, OBE-086 |
 | Security checklist, performance, operations | M6 | OE16 | OBE-084, OBE-088, OBE-089, OFE-024, OAD-019, OFE-026; the M6 follow-ups (2026-11-06, FIX-W46-SHARED): OBE-092 and OBE-096 (search CPU), OBE-093 … OBE-095 and OAD-020 (security review), OFE-027, OFE-028, OFE-029 and OFE-030 (accessibility and Lighthouse; OFE-029 and OFE-030 since 2026-11-10); since 2026-11-11: OBE-097 (CORS), OBE-098 and OAD-021 (offers per search), OBE-099 and OAD-022 (OADR-0003's follow-up: closing a Reconciliation review), OBE-100 (`secrets:rewrap`); OBE-101 (Redis's completed jobs, from OBE-088); SDK-016 (the shared refresh of cookie mode), OBE-102 (the Amadeus buckets kept for shopping) and OFE-031 (a signed-in customer's phone page; lead decisions (17d), (17g) and (17l)); since 2026-11-13: SDK-017 (one refresh per refresh token), OFE-032 (the compact account menu up to the large breakpoint) and OAD-023 (the booking page's last action message, after the launch; lead decisions (20f), (20h) and (20l)); since 2026-11-15: SDK-018 (the family's newest tokens of the session in what the session hooks get whenever the result's refresh token has been rotated; lead decisions (24l) and (24m), and (25k) and (26j) of 2026-11-16); since 2026-11-16: OBE-103 (the OTA backend measured on Node.js 24) and SDK-019 (the SDK's supported Node.js versions; lead decision (25n)); since 2026-11-18: OBE-104 (three hours on Node.js 24, whether the memory settles; lead decision (29c)); since 2026-11-19: OBE-105 (the offer purge's bound on what a checkout keeps, after the launch; lead decision (30d)) |
+| ADR-0030 items 1, 4 and 13 (the owner, 2026-11-24): one ingestion engine with supplier adapters; the same booking flow for every supplier | M7 | OE20, OE21 | OBE-109 … OBE-145; proved by OBE-122, OBE-123, OBE-140 and OBE-141 |
+| Item 2: several suppliers, PKFare first, switched on and off globally and per tenant | M7 | OE19, OE22, OE24, OE25 | PKFare: OBE-107, OBE-108, OBE-159 … OBE-188; the switches read and applied: OBE-146 |
+| Items 3, 9 and 11: an opaque id identifies the supplier on the OTA's side, the search carries it, and a changed id stays known | M7 | OE22, OE23 | OBE-146, OBE-147, OBE-148 … OBE-158, OFE-033, OAD-025, OAD-026, SDK-021 |
+| Item 5: OTAs pay through Velexis's PKFare wallet | M7 | OE24, OE25 | OBE-165, OBE-170, OBE-172, OBE-177 |
+| Items 6 and 21 (2026-11-24 and 2026-11-25): the Amadeus tools hidden now; back after the launch with an OTA's own Amadeus account | M7, M8 | OE18, OE21, OE23, OE29 | OBE-106, OAD-024, OBE-138, OBE-149; after the launch: OBE-216 |
+| Items 7, 8 and 22: offline reconciliation, a reconciliation role with a reference to OTA bookings, the process ready from the platform at the launch | M7 | OE25, OE27 | OBE-175, OBE-176, OAD-027, OBE-195 … OBE-200, OAD-028 |
+| Item 12: extras and low-cost content in the first release; a booking without extras skips the step | M7 | OE21, OE25 | OBE-130, OBE-180, OBE-181, OBE-185, OBE-186 |
+| Items 13 and 20: the three hooks and the base rule engine before the launch | M7, M8 | OE20, OE26, OE29 | OBE-114, OBE-189 … OBE-194; an OTA's own rules after the launch: OBE-207, OBE-208, OAD-029 |
+| Item 19: M7 before the launch | M7 | OE17 … OE28 | every M7 task; the OTA launch checklist's item A1 counts them |
+| Item 23: the daily limit per OTA, 0 by default, set in the platform admin's OTA management | M7 | OE25, OE28 | OBE-177 (its daily-limit part waits for the owner's answer to (44a)); the caps of the go-live runbook: OBE-206 |
+| Item 24: the SDK 1.0.0 documentation notes | M7 | OE17 | SDK-020 |
+| §3 Parts switched off answer `403 FEATURE_DISABLED`, since 2026-11-25 | M7, M8 | OE18, OE21, OE23, OE29 | the 15 Amadeus tool operations without an own active Amadeus connection: OBE-106, keyed to supply sources by OBE-149, which also refuses the PNR lookup; the airline-card completion for a source without that method: OBE-129; an OTA's own rules without an own supplier account (M8): OBE-208 |
+
+Each block of M7 and M8 names, in **Read first**, the record items it builds and which of them are still Proposed (for example ADR-0030 item 18, the hiding rules); a block that rests on an open question, such as (44a) or (44c), says so in a note.
 
 ## 7. Operation coverage
 
-Every MVP operation of [`../scope.md`](../scope.md) §3 (77 contract operations plus the 32 MVP additions with an SDK method; since 2026-11-11 also OBE-099's `console.bookings.closeReview`, FIX-W48-SHARED) with the task that implements it, the SDK task that exposes it and the page task that uses it. "API only" marks operations that no Velexis page calls (they serve third-party frontends and custom consoles) and that are proven by integration and SDK tests.
+Every MVP operation of [`../scope.md`](../scope.md) §3 (77 contract operations plus the 32 MVP additions with an SDK method; since 2026-11-11 also OBE-099's `console.bookings.closeReview`, FIX-W48-SHARED; since 2026-11-25 also the operations that the M7 blocks add, and those of M8 after the launch) with the task that implements it, the SDK task that exposes it and the page task that uses it. "API only" marks operations that no Velexis page calls (they serve third-party frontends and custom consoles) and that are proven by integration and SDK tests.
 
 | Operations (`x-sdk-method`) | Backend | SDK | Storefront / OTA admin |
 |---|---|---|---|
@@ -497,6 +664,14 @@ Every MVP operation of [`../scope.md`](../scope.md) §3 (77 contract operations 
 | Internal: `receiveStripeConnectWebhook`, `receiveStripeConnectionWebhook` | OBE-078 (documented OBE-090) | — | — |
 | `downloadFile`, `getPublicAsset` (`x-sdk-exclude`) | OBE-054, OBE-071 | — | OFE-015 (downloads), OFE-003 and OFE-020 (images) |
 | The 19 deferred operations | `501` through OBE-010 | SDK-005, SDK-008, SDK-010, SDK-011 | — |
+| `console.bookings.listOpenCases` (name proposed; since 2026-11-25, M7) | OBE-176 (the cases of OBE-198; the quote, outcome and refund proposal of OBE-199) | OBE-176 | OAD-027, OAD-028 |
+| The console's two case operations: confirm a case's quote, record the traveller's choice after a schedule change (names proposed; since 2026-11-25, M7) | OBE-199 | OBE-199 | OAD-028 |
+| Internal: the supplier notification receiver under `/webhooks/`, whose path and name hold no supplier's name (since 2026-11-25, M7) | OBE-182 | — | — |
+| Internal, tag `Support`, no SDK method, called by the platform admin's Reconciliation area (PAD-022) (since 2026-11-25, M7): the handoff redeem; the booking view, the fresh supplier read, the booking's call log and the queue snapshots; record a quote, mark submitted, record the outcome, record the order number or "no order", add a note | OBE-196; OBE-197; OBE-200 | — | — |
+| The console's four operations for an OTA's own supply rules: list, create, change, switch off (names proposed; M8, after the launch) | OBE-208 | OBE-208 | OAD-029 |
+| Paid bags after ticketing (M8, after the launch): the deferred `getBookingAncillaries`, `addBookingAncillaries` and `createBookingPayment` if their schemas take the neutral extras without a breaking change, else new additive operations (the lead's ruling S9) | OBE-213 | OBE-213 | OBE-213 (the storefront's booking page) |
+
+*Since 2026-11-25 (M7).* The rows above keep their tasks, and the M7 blocks change, contract first, what some of their operations answer. The 15 Amadeus tool operations (the 12 `console.amadeus.*`, `console.queues.list`, `.listSnapshots` and `console.bookings.import`) answer `403 FEATURE_DISABLED` without an own active Amadeus connection (OBE-106), and the OTA admin hides their screens (OAD-024); OBE-149 keys that guard to supply sources, refuses `console.bookings.findByRecordLocator` in the same way and limits `console.supplierRequests.list` to the OTA's own sources; OBE-152 answers `console.bookings.retrieve` with `409 BOOKING_NOT_MODIFIABLE` for a Velexis-supplied booking. Offers, priced offers and bookings carry `supplyId` (OBE-148), `flights.getAncillaries` answers the neutral `extras` (OBE-185), and `checkout.complete` refuses before the capture on a sales stop, the open-case cap or the daily limit (OBE-177). The list of 15 operations and the answer `403 FEATURE_DISABLED` are ADR-0030 item 18, still proposed.
 
 The check is mechanical: the runtime route-parity test (OBE-010, final state asserted by OBE-075) fails for any MVP operation without a handler, and the SDK parity test (SDK-006, strict from SDK-013) fails for any `x-sdk-method` without an SDK method.
 

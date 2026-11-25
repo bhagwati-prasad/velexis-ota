@@ -1,12 +1,12 @@
 # OTA agent tasks (`OBE-`, `OFE-`, `OAD-`, `SDK-`)
 
-This plan breaks the OTA group's MVP work (OTA backend, hosted storefront, OTA admin and JS SDK) into small, self-contained tasks for AI coding agents, ordered by the shared milestones M0–M6. Each task names the documents to read, the files to touch, the steps, the acceptance criteria and the command that proves it. Every MVP operation of [`../scope.md`](../scope.md) §3 is implemented by a backend task, exposed by an SDK task and, where people use it, built into a storefront or OTA admin page with a test. Contract changes come before the code that uses them, and every user-facing feature ends in an integration test or a Playwright journey. The plan follows [`decisions.md`](../../../docs/mvp/decisions.md), [ADR-0020](../../../docs/mvp/adr/0020-ai-agent-development-workflow.md) and the [OTA ADRs](../adr/README.md), and is validated by `node tools/plan-lint/plan-lint.mjs`.
+This plan breaks the OTA group's MVP work (OTA backend, hosted storefront, OTA admin and JS SDK) into small, self-contained tasks for AI coding agents, ordered by the shared milestones M0–M8. Each task names the documents to read, the files to touch, the steps, the acceptance criteria and the command that proves it. Every MVP operation of [`../scope.md`](../scope.md) §3 is implemented by a backend task, exposed by an SDK task and, where people use it, built into a storefront or OTA admin page with a test. Contract changes come before the code that uses them, and every user-facing feature ends in an integration test or a Playwright journey. The plan follows [`decisions.md`](../../../docs/mvp/decisions.md), [ADR-0020](../../../docs/mvp/adr/0020-ai-agent-development-workflow.md) and the [OTA ADRs](../adr/README.md), and is validated by `node tools/plan-lint/plan-lint.mjs`.
 
 Related: [`implementation-plan.md`](implementation-plan.md) (milestones, epics, risks, traceability), [`solo-developer-plan.md`](solo-developer-plan.md) (week by week), [`../scope.md`](../scope.md), [`../architecture.md`](../architecture.md), [`../architecture-booking.md`](../architecture-booking.md), [`../api-changes.md`](../api-changes.md), [`../api-changes-console-and-internal.md`](../api-changes-console-and-internal.md), [`../data-model.md`](../data-model.md), [flows](../README.md#flows), [`../../../docs/mvp/plans/foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md) (`X-` tasks), [`../../../platform/docs/plans/agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) (`PBE-`, `PFE-`, `PAD-` tasks), [`../../../AGENTS.md`](../../../AGENTS.md).
 
 ## How to use this file
 
-1. **Pick** the lowest-milestone task whose **Depends on** tasks are all done (their headings end with ` ✅`) and that nobody has claimed (no open PR, no branch `task/<ID>-*`). Prefer the critical path that `node tools/plan-lint/plan-lint.mjs` prints. Dependencies may be `X-` (foundation) or `PBE-`/`PFE-` (platform) tasks; never fake the other group's side ([AGENTS.md](../../../AGENTS.md) §3).
+1. **Pick** the lowest-milestone task whose **Depends on** tasks are all done (their headings end with ` ✅`) and that nobody has claimed (no open PR, no branch `task/<ID>-*`). Prefer the critical path that `node tools/plan-lint/plan-lint.mjs` prints. Dependencies may be `X-` (foundation) or `PBE-`/`PFE-` (platform) tasks; never fake the other group's side ([AGENTS.md](../../../AGENTS.md) §3). *Since 2026-11-25* (the owner's decision, [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 3): M7's tasks may start while every open task of M0–M6 waits on a human step, a nightly run or the launch, in the order of their phases (A to L); M8's tasks start after the launch. A dependency of an M7 task may also be a `PAD-` task (OBE-206).
 2. **Claim** it by adding `- **Status:** in progress (PR #n)` under its heading in your PR. plan-lint ignores the extra field.
 3. **Finish** it in one branch and one PR (`task/<ID>-<slug>`, [conventions §11](../../../docs/mvp/conventions.md#11-git-workflow)). When the PR is merged, append ` ✅` to the heading (for example `### OBE-012 · Resolve the tenant … ✅`) and set the status line to `done (PR #n)`.
 4. **Contract first.** An operation is added to `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml` by a spec task before any handler uses it. Until its handler exists it is listed in `ota/backend/src/common/http/pending-operations.ts` (answers `501 NOT_IMPLEMENTED`); the implementing task removes its entries. At the M4 exit only operations with `x-milestone: deferred` remain, plus the two M5 webhooks that OBE-090 documents ahead of their handler (OBE-078); at the M5 exit only `deferred` ones. A spec task that adds an operation with an `x-sdk-method` also regenerates the SDK route table `ota/sdk/src/internal/operations.js` (the CI check of SDK-002 fails on a stale file) and, until the M4 exit, when the method's namespace was no longer pending, listed the method in `ota/sdk/test/contract/pending-namespaces.js` with the SDK task that adds it. Since SDK-013 that list is closed: the parity test fails on any entry, so the change that adds an `x-sdk-method` also writes its SDK method ([ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md), [`../scope.md`](../scope.md) §3).
@@ -27,6 +27,8 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
 | M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-105, OFE-023 … OFE-032, OAD-019 … OAD-023, SDK-015 … SDK-019 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published; since 2026-11-11 also CORS for third-party browsers (OBE-097), a storefront's offers per search in the console (OBE-098, OAD-021), a Reconciliation review closed in the console (OBE-099, OAD-022), the OTA's `secrets:rewrap` (OBE-100) and, from OBE-088's measurements, a bound of the completed jobs Redis keeps (OBE-101); and from the lead's decisions (17d), (17g) and (17l) of the same day: one refresh shared by the SDK clients derived from one cookie-mode client (SDK-016), a share of the Amadeus buckets kept free for shopping during the booking sync (OBE-102), and a still phone page for a signed-in customer with the search form's fallback and the OTA's full name in the footer (OFE-031); and from the lead's decisions (20f), (20h) and (20l) of 2026-11-13: one refresh per refresh token in the SDK's token and server modes and the shared cookie-mode refresh with the root client's settings, before 1.0.0 (SDK-017), and the compact signed-in account menu up to the large breakpoint (OFE-032); from the lead's decisions (24l) and (24m) of 2026-11-15, before 1.0.0: `onSessionRefreshed` and `onStaffSessionRefreshed` get the family's newest tokens of the session whenever the result's refresh token has been rotated (since 2026-11-16), and an empty refresh token counts as none (SDK-018); from the lead's decision (25n) of 2026-11-16, after the switch to Node.js 24 (X-048, [ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md)): the OTA API and worker measured on Node.js 24 against Node 22 and the VM budget, with their share of time in garbage collection (OBE-103), and the Node.js versions the SDK supports stated, declared in `engines` and tested on the oldest, the range that SDK-015's 1.0.0 carries (SDK-019); from the lead's decision (29c) of 2026-11-18: the OTA API and worker run for three hours on Node.js 24 to show whether their memory settles (OBE-104); from the lead's decision (30d) of 2026-11-19: the offer purge deletes the offers, upsells and priced offers that no checkout or booking needs of the searches they hold, so a checkout no longer keeps its search's whole answer for good ([OADR-0002](../adr/0002-offer-and-priced-offer-caching.md) point 6, revision of 2026-11-19; OBE-105, after the launch); after the launch the booking page keeps the last action's message after it re-renders (OAD-023). OAD-023 and OBE-105 are named exceptions to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
+| M7 Multi-supplier engine | OBE-106 … OBE-206, OFE-033, OAD-024 … OAD-028, SDK-020, SDK-021 | Built before the launch (since 2026-11-25, the owner's decisions, [ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 24). Parts of this rest on the lead's proposals, which each block names (ADR-0030 item 26). SDK 1.0.0 carries the documentation notes (SDK-020). An OTA without its own active Amadeus connection gets no Amadeus tools: the tool operations answer `403 FEATURE_DISABLED` and the OTA admin hides the tool pages (the list of 15 operations and the answer are proposals, ADR-0030 item 18), while a test OTA with its own connection keeps them (phase B). Search, pricing and booking run through the ingestion engine and one supplier interface: the Amadeus adapter gives the same golden files as today, and the search and booking load tests run through the engine (phases D and E), and the PKFare adapter searches, prices, books, tickets and sells extras and low-cost content, paid from Velexis's PKFare wallet, on the PKFare fake and in PKFare's sandbox (phases H and I). A merged search answers offers of both sources. An OTA on Velexis supply sees an opaque id instead of the supplier, and the leak walks find no supplier name in any answer to it (phase G). Before the capture, a completion is refused on a sales stop, the open-case cap or the daily limit (what a limit of 0 means waits for question (44a)). Velexis's rules act at the pre-action, post-action and post-merge hooks (phase J). Cases open for cancel requests, schedule changes and lost order answers, show in the OTA admin and are worked by Velexis's reconciliation role through the support interface (phase K). The final load and soak test, the security review, the update of the PCI pack, the export for PKFare's certification, the pilot plan and the go-live runbook close the milestone (phase L); PKFare stays switched off in production until it is certified (the lead's reading, question (44b)). |
+| M8 Own supplier accounts (after the launch) | OBE-207 … OBE-216, OAD-029 | The release after the launch of ADR-0030 item 21, as the lead reads it; no M8 task starts before the launch. The OTA backend serves an OTA's own Amadeus connection beside Velexis's, with the Amadeus tools for its own account (OBE-216, with the platform's PBE-103). An OTA keeps its own supply rules for its own sources, with console operations, SDK methods and a rules screen in the OTA admin (OBE-207, OBE-208, OAD-029). The PKFare adapter requests voids, refund quotes and refunds (OBE-209, OBE-210); the cases run through the adapter, with reimbursements reaching the ledger (OBE-211), and the one clear case closes by itself (OBE-212); a traveller can buy paid bags after ticketing (OBE-213, OBE-214). OBE-209 … OBE-214 are the tasks that the plan called "Later". `supply_id` is required on offers and bookings (OBE-215). |
 
 ## M0 — Foundations
 
@@ -3295,6 +3297,2789 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Note (2026-11-19, lead decision (30d), approved by the owner, FIX-W61-PLAN):** OBE-105 runs after the launch and keeps its M6 tag: a named exception to the M6 go criterion "every task done", the sixth beside PBE-064, OBE-086, X-042, X-043 and OAD-023 ([roadmap](../../../docs/mvp/plans/roadmap.md) §2.0 and the M6 go/no-go, [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). Size L: 8 agent-hours, 3.75 developer-hours, 2 solo days, all after the launch, so neither calendar changes length (the roadmap's re-baseline of 2026-11-19). Until it is merged, OADR-0002 point 6 applies as first written, every checkout keeps its search's offers, and the operator watches the size of `flight_offers` monthly ([deployment §14](../../../docs/mvp/deployment-single-vm.md#14-capacity-limits-of-one-vm)); at 100 checkouts a day the 160 GB disk holds years of it. This Note changes no Status.
 - **Note (2026-11-19, lead decisions (31c), (31d) and (31e), approved by the owner, FIX-W62-DOCS):** (31c) The tenant migration `0006` of step 2 (the nullable `flight_searches.offers_trimmed_at` marker, no backfill) is accepted as a schema delta over the frozen reference SQL, which this task documents in data-model §3 as the deltas of `0002` to `0005` are documented. (31d) After a trim, the deleted offers and priced offers of a held search answer `404` instead of `410 OFFER_EXPIRED` on flights.getOffer, flights.price, flights.upsell, flights.getPricedOffer and checkout.create, as for the searches the purge deletes whole, and a trimmed search's highlights and one-way combinations may name deleted offers: accepted as is, so this task does not keep the offers the highlights name. (31e) No retention period is set now for checkouts that never became bookings: this task's trim bounds the growth, and that option stays in OADR-0002's Follow-ups, to revisit after the launch with real volumes. This Note changes no Status and no estimate.
 
+## M7 — Multi-supplier engine
+
+The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform registry with the supplier switches, the hidden supplier, the rules at the hooks and the reconciliation role. The owner decided on 2026-11-25 that M7 is built before the launch ([ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 19 to 25; [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 3, revision of 2026-11-25). The design is in the [multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md). Each block names the plan task it comes from ("plan key") and the record items it builds. A record item that is still marked **Proposed** is accepted when the owner starts the wave of a task that names it (ADR-0030 item 26). Every task also keeps the guidebook current, as the definition of done in AGENTS.md asks; plan-lint does not accept `guidebook/` paths in Files, so the blocks do not list them, and a block that moves or renames something the guidebook cites names the update in its steps. Tasks that add a migration take the next free number; when two of them run in parallel, the wave integrator renumbers the later one at merge, with the tests that list the migrations. Seven tasks were added in the review of 2026-11-25 (PBE-105, PAD-025 and X-075 in M7; OBE-215, PBE-106, OBE-216 and PBE-107 in M8); they have no plan key. Tests written after X-075 write the platform's supplier rows (connections and supply sources) only through X-075's builders. The blocks cite the lead's rulings for the task blocks by their codes (G1 to G12, T, and S1 to S18); [Annex D of the plan](../../../docs/mvp/plans/multi-supplier-plan.md#annex-d-the-leads-rulings-for-the-task-blocks) states each one, and a ruling that makes a design choice is a proposal of the lead (ADR-0030 item 26).
+
+| Phase | Tasks in this file |
+|---|---|
+| A. Notes, packs and tooling | SDK-020 |
+| B. Amadeus tools hidden | OAD-024, OBE-106 |
+| C. PKFare facts, sandbox and fixtures | OBE-107, OBE-108 |
+| D. Engine and interface, Amadeus search and pricing | OBE-109, OBE-110, OBE-111, OBE-112, OBE-113, OBE-114, OBE-115, OBE-116, OBE-117, OBE-118, OBE-119, OBE-120, OBE-121, OBE-122, OBE-123 |
+| E. Amadeus adapter for booking | OBE-124, OBE-125, OBE-126, OBE-127, OBE-128, OBE-129, OBE-130, OBE-131, OBE-132, OBE-133, OBE-134, OBE-135, OBE-136, OBE-137, OBE-138, OBE-139, OBE-140, OBE-141, OBE-142, OBE-143, OBE-144, OBE-145 |
+| F. Platform: registry, switches, Velexis accounts, wallet, Suppliers page | OBE-146, OBE-147 |
+| G. The supplier hidden | OBE-148, OBE-149, OBE-150, OBE-151, OBE-152, OBE-153, OBE-154, OBE-155, OBE-156, OFE-033, OAD-025, OBE-157, OBE-158, SDK-021, OAD-026 |
+| H. PKFare search and pricing | OBE-159, OBE-160, OBE-161, OBE-162, OBE-163, OBE-164, OBE-165, OBE-166, OBE-167 |
+| I. PKFare booking, extras and low-cost | OBE-168, OBE-169, OBE-170, OBE-171, OBE-172, OBE-173, OBE-174, OBE-175, OBE-176, OAD-027, OBE-177, OBE-178, OBE-179, OBE-180, OBE-181, OBE-182, OBE-183, OBE-184, OBE-185, OBE-186, OBE-187, OBE-188 |
+| J. Rules at the hooks and the platform screen | OBE-189, OBE-190, OBE-191, OBE-192, OBE-193, OBE-194 |
+| K. Reconciliation | OBE-195, OBE-196, OBE-197, OBE-198, OBE-199, OBE-200, OAD-028 |
+| L. Proof and launch readiness | OBE-201, OBE-202, OBE-203, OBE-204, OBE-205, OBE-206 |
+
+### SDK-020 · Add the SDK 1.0.0 documentation notes: open enumerations, optional `amadeus` members, refused tools
+- **Status:** todo
+- **Component:** ota-sdk
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.8 (plan key OS-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 21 and 24; item 18, proposed; the list "Notes that wait for a decision", its ADR-0006 line); ota/backend/openapi/README.md §3, §4 and §6; ota/sdk/README.md §9; ota/docs/adr/0016-sdk-packaging-and-type-contract.md point 8; the block of SDK-015
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/sdk/README.md`, `ota/sdk/CHANGELOG.md`, `ota/frontend/docs/build-your-own-frontend.md`, `ota/docs/adr/0016-sdk-packaging-and-type-contract.md`, `docs/mvp/adr/0006-contract-first-openapi.md`
+- **Steps:**
+  1. Runs first (ADR-0030 item 24). Change descriptions only. In `info.description`: (A) a new paragraph **Enumerations** after **Conventions**: a response enumeration may gain values, a client treats an unknown value as opaque, request enumerations stay closed; (B) at the end of **Supplier fidelity**: an `amadeus` member can be missing where the schema does not require it, and null where the schema allows null.
+  2. (C) `Booking.recordLocator` can stay null after pending. (D) `FlightOffer.amadeus`, `PricedOffer.amadeus` and `Booking.amadeus`: do not rely on the member. (E) The tag `Console Amadeus` and (F) the paragraph "Behaviour common to console.amadeus.*": an OTA without an Amadeus connection of its own can be refused with `403 FEATURE_DISABLED`, which the 12 operations already list. Do not name the queue operations or PNR import: they list the code only from OBE-106. Leave the catalogue text and the `424` texts.
+  3. (L) Add the change-log row ("descriptions only"; Breaking: no), run `pnpm contracts:generate` and commit `ota.ts` (JSDoc only).
+  4. (G) `ota/sdk/README.md` §9, after the version rule. (H) The guide, at the end of §6. (I) The CHANGELOG, under "Changed" of 1.0.0.
+  5. (J) OADR-0016, under point 8, and (K) ADR-0006, under Follow-ups: a dated note and a clause in Revisions each. Keep (K) apart from the waiting note on the new meanings of ADR-0030 item 17, which OBE-153 writes (the lead's ruling S12).
+  6. If SDK 1.0.0 is already published when this task starts (SDK-015 done), the notes go under a new section `1.1.0 (unreleased)` of the CHANGELOG, and README and guide say "from 1.1.0" (plan row OS-01). This task never holds the publish.
+- **Acceptance:**
+  - The OTA document's diff holds description lines only, and `ota.ts` changes in JSDoc only.
+  - The sentence on response enumerations is in `info.description`, `ota/sdk/README.md`, the guide and the CHANGELOG's section of the release.
+  - The note on `amadeus` members says "where the schema does not require it".
+  - OADR-0016 and ADR-0006 carry notes dated 2026-11-25.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && tr -s '\n ' ' ' < ota/backend/openapi/velexis-ota-booking-api.openapi.yaml | grep -q 'where the schema does not require it' && test "$(grep -l 'may gain values' ota/sdk/README.md ota/sdk/CHANGELOG.md ota/frontend/docs/build-your-own-frontend.md | wc -l)" -eq 3 && pnpm --filter @velexis/ota-backend test openapi-extensions && pnpm --filter @velexis/ota-sdk test && node --test tools/ci/ci-workflow.test.mjs`
+- **Note (2026-11-25):** Files of other components (the lead's ruling G4): the OTA contract and its README, the generated `ota.ts`, the storefront's guide and two records carry the same notes and merge together. The Verify runs the OTA backend's contract test, the SDK's tests and `ci-workflow.test.mjs`, which reads the SDK README, the guide and OADR-0016.
+
+### OAD-024 · Hide the Amadeus tools in the OTA admin for an OTA without `supplierTools`
+- **Status:** todo
+- **Component:** ota-admin
+- **Milestone:** M7
+- **Depends on:** OBE-106, X-055
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7 and §9.3 (plan key OS-13); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6 and 21; item 18, proposed; open question 8); the blocks of OBE-106 and X-055; ota/admin/docs/routes.md §2 to §6 and §10
+- **Files:** `ota/admin/src/lib/supplier-tools.ts`, `ota/admin/src/lib/supplier-tools.test.ts`, `ota/admin/src/components/console-nav.tsx`, `ota/admin/src/components/components.test.tsx`, `ota/admin/src/app/(console)/layout.tsx`, `ota/admin/src/app/(console)/layout.test.tsx`, `ota/admin/src/app/(console)/page.tsx`, `ota/admin/src/app/(console)/dashboard-tiles.tsx`, `ota/admin/src/app/(console)/dashboard.test.tsx`, `ota/admin/src/app/(console)/pnr/page.tsx`, `ota/admin/src/app/(console)/pnr/page.test.tsx`, `ota/admin/src/app/(console)/queues/page.tsx`, `ota/admin/src/app/(console)/queues/[queueId]/page.tsx`, `ota/admin/src/app/(console)/queues/queues.test.tsx`, `ota/admin/src/app/(console)/shopping/page.tsx`, `ota/admin/src/app/(console)/shopping/page.test.tsx`, `ota/admin/src/app/(console)/supplier-log/page.tsx`, `ota/admin/src/app/(console)/supplier-log/page.test.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/sections.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/page.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/page.test.tsx`, `ota/admin/docs/routes.md`, `ota/admin/README.md`, `tools/e2e/specs/ota-admin/sso-bookings.e2e.ts`, `tools/e2e/specs/ota-admin/session-expiry.e2e.ts`, `tools/e2e/specs/ota-admin/settings-effects.e2e.ts`
+- **Steps:**
+  1. One helper answers whether this OTA may use the Amadeus tools, from `staff.tenant.supplierTools` (OBE-106): the entry `amadeus`. A missing member means no.
+  2. Without the tools, `consoleNavigation` leaves out PNR lookup, Queues, Shopping and Supplier log.
+  3. Without the tools, `/pnr`, `/queues`, `/queues/[queueId]`, `/shopping` and `/supplier-log` show a "not available" state with a link to the dashboard, before any API call. It is not the permission refusal, and it names no supplier.
+  4. Booking page: the tab `amadeus-order`, its link and the raw views of an Amadeus payload are not rendered, and `loadOrder` is not called; `tab=amadeus-order` falls back to the overview.
+  5. Dashboard: the queue tile (`con.queues.listSnapshots` in `page.tsx`) is neither read nor rendered.
+  6. Unit tests cover each change in both states. `sso-bookings.e2e.ts`, whose OTA uses the Velexis test pool, checks the menu, one direct link and axe on the "not available" state. `session-expiry.e2e.ts` and `settings-effects.e2e.ts` open `/supplier-log`: they move to an OTA with its own connection (the helper of X-055) and keep every assertion.
+  7. Update `routes.md` and README §5 and §8.
+- **Acceptance:**
+  - Without the tools the menu has none of the four entries, the booking page has no order tab and no raw Amadeus view, and the dashboard has no queue tile.
+  - A direct link to any of the five routes shows "not available" and calls no tool operation.
+  - With an own active Amadeus connection every screen works as today. axe finds no serious or critical violation on the "not available" state.
+  - No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/sso-bookings.e2e.ts specs/ota-admin/session-expiry.e2e.ts specs/ota-admin/settings-effects.e2e.ts specs/ota-admin/a11y-headers.e2e.ts specs/ota-admin/pnr-import.e2e.ts`
+- **Note (2026-11-25):** The plan's row OS-13 names the menu items PNR lookup, Queues, Shopping and Supplier log, the order tab and the raw views, so all of them are hidden here, in phase B (the lead's ruling). The API still serves three reads behind them until phase G (the lead's ruling S14): OBE-149 limits `console.supplierRequests.list` to the OTA's own sources and refuses `console.bookings.findByRecordLocator` with `403 FEATURE_DISABLED` without an own active Amadeus connection, and OBE-152 answers `console.bookings.retrieve` with `409 BOOKING_NOT_MODIFIABLE` for a Velexis-supplied booking. X-055 is added: step 6 uses its end-to-end helper. The specs under `tools/e2e/specs/ota-admin/` are this app's journeys (G4); the Verify runs them.
+- **Note (2026-11-25):** Rests on ADR-0030, question 8: staff Shopping is hidden with PNR lookup, Queues and Supplier log. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-106 · Answer `403 FEATURE_DISABLED` on the 15 Amadeus tool operations without an own Amadeus connection
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-055, SDK-020
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.8 and §9.3 (plan key HT-01, the first part of OS-04); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6 and 21; item 18, proposed; open question 8); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 10, proposed; the list "Notes that wait for a decision", its OADR-0011 line); ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (point 7; the Revisions line); ota/backend/openapi/README.md §3 and §6; ota/backend/src/amadeus/connection-resolver.ts (`resolve`); ota/backend/src/common/auth/tenant.guard.ts (its header); ota/backend/src/common/http/pending-operations.ts (the four deferred raw writes); the blocks of X-055 and SDK-020
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/console/amadeus-tools.guard.ts`, `ota/backend/src/console/amadeus-tools.guard.test.ts`, `ota/backend/src/console/raw-amadeus.controller.ts`, `ota/backend/src/console/queues.controller.ts`, `ota/backend/src/console/console-bookings.controller.ts`, `ota/backend/src/common/http/not-implemented.controller.ts`, `ota/backend/src/console/console.module.ts`, `ota/backend/src/identity/staff/staff-auth.service.ts`, `ota/backend/src/identity/staff/staff-auth.service.test.ts`, `ota/backend/test/integration/console/amadeus-tools-own-account.int.test.ts`, `ota/backend/src/dev/dev-seed.command.ts` (its comment on the console key), `ota/sdk/test/smoke/server-mode.smoke.test.js`, `ota/sdk/README.md`, `ota/docs/api-changes-console-and-internal.md`, `ota/docs/flows/console-operations.md`, `ota/docs/adr/0011-console-access-staff-sessions-and-environments.md`, `ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md`
+- **Steps:**
+  1. Contract first: `consoleImportBooking`, `consoleListQueue` and `consoleListQueueSnapshots` list `FEATURE_DISABLED`; their descriptions, the tag `Console Amadeus` and the paragraph common to `console.amadeus.*` say when it is answered. New `ConsoleTenant.supplierTools` (plan §4.8), optional as `storefrontUrl` is: `["amadeus"]` with an own active Amadeus connection, else `[]` (Proposed (lead); confirm in the pull request). Add the change-log row and run `pnpm contracts:generate`.
+  2. One gate serves the 15 operations (the 12 `console.amadeus.*`, `console.queues.list`, `console.queues.listSnapshots`, `console.bookings.import`), after the permission guard and before the handler. It answers `403 FEATURE_DISABLED` with `details.feature` `console.rawAmadeus` unless `ConnectionResolver.resolve()`, without an order office, returns the `credentialSource` `tenant`. So the resolver's `424` becomes this `403`; a `503` stays.
+  3. The four deferred raw writes answer it before their `501`. The tenant, scope, staff and permission guards skip the routes of pending operations (`tenant.guard.ts`), so there the gate resolves the caller's tenant itself; a request without a console credential keeps its `501`, as the route-parity probe expects.
+  4. `toConsoleTenant` fills `supplierTools` by the same rule.
+  5. Test `amadeus-tools-own-account`: the 15 on a `velexis` OTA, one without a connection, one whose connection is not `active`, and one with its own connection (X-055); `queues.poll` for the `velexis` OTA.
+  6. `queues.poll` and the dev seed's `velexis` demo OTA are not touched. The SDK smoke test keeps its successful raw reads on the key of X-055's second OTA and gains a case (ruling T): the demo OTA's console key gets `PermissionError` `403 FEATURE_DISABLED` on `console.amadeus.getFlightOffers`. The comment of `DEV_SEED_KEY_SCOPES` follows.
+  7. Records: a dated note under OADR-0011 point 7 and a clause in its **Revisions** line, in that record's style: without an own active Amadeus connection the raw operations answer `403 FEATURE_DISABLED`, the four writes before their `501` (ADR-0030 item 21; item 18, proposed; OADR-0019 item 10, proposed); with one, point 7 stands. Take its line out of OADR-0019's list "Notes that wait for a decision".
+- **Acceptance:**
+  - `amadeus-tools-own-account`: for an OTA whose connection is `velexis`, missing or not active, all 15 answer `403 FEATURE_DISABLED` with `details.feature` `console.rawAmadeus`; for an `active` `tenant` connection they answer as before, and `supplierTools` agrees with the gate.
+  - On the 11 bound operations a role without the permission still gets `403 FORBIDDEN`; a deferred write without a console credential still gets `501`; `queues.poll` still stores snapshots for a `velexis` OTA.
+  - Every existing tool test passes on the OTA of X-055, and the smoke test passes with its added case. No test is deleted or weakened.
+  - OADR-0011 point 7 carries the dated note, and OADR-0019 no longer lists it as waiting.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test amadeus-tools staff-auth route-parity && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/console test/integration/m4 && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/ota-sdk test:smoke && grep -q 'item 21' ota/docs/adr/0011-console-access-staff-sessions-and-environments.md`
+- **Note (2026-11-25):** `console.bookings.findByRecordLocator` (the PNR lookup screen) and `console.bookings.retrieve` (the order tab) read an Amadeus order and are not among the 15, so this task leaves them as they are. Phase G closes both, contract first (Proposed (lead), plan §4.7; the lead's ruling S14): OBE-149 refuses the PNR lookup with `403 FEATURE_DISABLED` for an OTA without its own active Amadeus connection, and OBE-152 answers the order read with `409 BOOKING_NOT_MODIFIABLE` for a Velexis-supplied booking. Neither is a question for the owner. SDK-020 is added: step 1 rewrites the sentences that SDK-020 adds to the tag and to the shared paragraph.
+- **Note (2026-11-25):** Rests on ADR-0030, question 8: staff Shopping goes with the other Amadeus screens. The wave proposal names it; the owner's go for the wave accepts it. The SDK's smoke test and README change with the refusal (the lead's ruling G4); the Verify runs the SDK's tests and its smoke test on the local stack of ota/sdk/README.md §8.1.
+
+### OBE-107 · Write the PKFare facts file, the question list for PKFare and the index of the saved reference
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A42), §4.6, §4.9 to §4.12, §8 and §9.2 (plan key G1-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5, 10 and 12); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (Context; items 4 to 13, proposed); docs/mvp/README.md §7; ota/docs/README.md
+- **Files:** `ota/docs/suppliers/pkfare-facts.md`, `docs/pkfare-api/README.md`, `ota/docs/README.md`, `docs/mvp/README.md`
+- **Steps:**
+  1. **Human step first:** the developer puts the saved pages of PKFare's API reference where the agent can read them, outside the repository.
+  2. The pages are not committed (the lead's ruling G12, which settles A42). `docs/pkfare-api/README.md` is the index of the saved reference: one row per page with its title, PKFare's address, the date read and the operations it describes.
+  3. `ota/docs/suppliers/pkfare-facts.md` has one row per PKFare statement that the plan relies on (§4.6, §4.9 to §4.12) and one per open fact of §9.2, the sandbox host and the production host included: an id, the statement in our own words, its source, its status, and the plan sections that rely on it.
+  4. The statuses: `stated` (a page of the index says it), `observed` (a sandbox fixture shows it), `assumed` (neither). No row is `observed` yet: X-057 and OBE-108 set that status.
+  5. A section "Questions for PKFare" turns every `assumed` row into a question, in the groups of §9.2. The developer sends the list (an outside step of plan §8).
+  6. The file states its rules at the top: an `assumed` fact of the money path blocks going live (plan §4.15), and later task blocks read this file first. Add the facts file to `ota/docs/README.md` and the index to §7 of `docs/mvp/README.md`, beside `docs/amadeus-api/`.
+- **Acceptance:**
+  - Every PKFare statement of plan §4.6 and §4.9 to §4.12, and every row of §9.2, has a row with a source and one of the three statuses.
+  - Every `stated` row cites a page of the index, and every `assumed` row has a question.
+  - `docs/pkfare-api/` holds the index only, and neither file holds a partner id, a key, a signature or personal data.
+- **Verify:** `test -f ota/docs/suppliers/pkfare-facts.md && test "$(ls docs/pkfare-api)" = README.md && grep -cE '(stated|observed|assumed)' ota/docs/suppliers/pkfare-facts.md`
+- **Note (2026-11-25):** Files outside the OTA group (the lead's ruling G4): the index and its row in `docs/mvp/README.md` stand beside the Amadeus reference, as the plan's row names them; no test reads them.
+
+### OBE-108 · Measure PKFare's sandbox response times and limits and record them in the facts file
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-056, OBE-107
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 (each source has its own deadline), §4.9, §9.2 (hosts and speed; wallet and key) and §9.6 item 5 (plan key G1-04); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 10); the block of X-056 (each recording stores its response time); ota/docs/performance.md §1
+- **Files:** `ota/docs/suppliers/pkfare-facts.md`
+- **Steps:**
+  1. **Human step first:** the developer runs the recorder of X-056 several times per operation in PKFare's sandbox and hands over the timing lines: operation, status and milliseconds, no body.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  3. Add the section "Sandbox measurements" to the facts file: per operation the count, the median, the 95th percentile and the slowest answer, with the date. Add "Limits met": each refusal or throttling with its code and after how many calls, and how often the balance could be read. Write "none met" where none was.
+  4. Derive two numbers and show the arithmetic: the PKFare search deadline, from Shopping, and the server budget of `checkout.complete`, from the supplier calls of one completion (plan §4.9: PrecisePricing, PreciseBooking, OrderPricing, the wallet balance, Ticketing). Mark both as proposals from sandbox data: production times stay a question for PKFare, and the load test of OBE-167 fixes the search deadline.
+  5. Set the rows that the measurements show to `observed`.
+- **Acceptance:**
+  - The facts file has a measurements table with every operation that the sandbox serves: count, median, 95th percentile and date.
+  - Every limit met is listed with its code and call count.
+  - The PKFare search deadline and the server budget of `checkout.complete` are stated with their arithmetic and marked as proposals.
+  - The file holds no credential, signature or body.
+- **Verify:** `grep -q 'Sandbox measurements' ota/docs/suppliers/pkfare-facts.md && grep -q 'checkout.complete' ota/docs/suppliers/pkfare-facts.md`
+- **Note (2026-11-25):** OBE-107 is added: this task writes into its facts file.
+
+### OBE-109 · Record a golden baseline of today's Amadeus search, pricing and upsell
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §6 (plan key E2-01; the line "Proof" and the exit of P2); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 3); tools/amadeus-stub/README.md (`requests()`, which records no body; `X-Stub-Scenario`); packages/testing/src/amadeus.ts; ota/backend/src/amadeus/amadeus.module.ts (`AMADEUS_FETCH` calls Node's `fetch` at each request); ota/backend/test/integration/bookings/reconcile.int.test.ts (a spy on `globalThis.fetch` that passes calls through); ota/backend/test/integration/shopping/search.int.test.ts, pricing.int.test.ts and offer-upsell.int.test.ts (their set-up and scenarios)
+- **Files:** `ota/backend/test/integration/supply/golden-shopping.int.test.ts`, `ota/backend/test/supply/golden/`, `ota/backend/README.md`
+- **Steps:**
+  1. List the stub scenarios that the three shopping integration files run for `flights.search`, `flights.price` and `flights.upsell`: the success fixtures and each refusal. The golden test runs them through the API in-process, with the same set-up.
+  2. Per scenario, record the Amadeus requests (method, path, query and body), the `supplier_requests` rows, the stored `flight_offers` and `priced_offers` rows, and the API answer (status and body). The stub's `requests()` holds no body: take the bodies from a spy on `globalThis.fetch` that passes every call through. Leave out the token request, whose body holds the client secret.
+  3. Store the records as files under `ota/backend/test/supply/golden/`, in a form that `pnpm format:check` accepts. One helper replaces only what differs from run to run (generated ids, timestamps, durations, request ids) by fixed placeholders. Amadeus request bodies are compared byte for byte.
+  4. The test fails on any difference and never rewrites a file by itself. A new recording is an explicit run (Vitest file snapshots with `-u`) that CI never does. A row is compared on the columns recorded here.
+  5. Prove that the test bites: change one character of a request that `buildAmadeusSearch` builds, see it fail, revert, and say so in the pull request.
+  6. README §8: what the baseline holds, how to record it again, and that a golden file changes only in a task whose block names the difference.
+- **Acceptance:**
+  - `golden-shopping.int.test.ts` passes on today's code and holds, per scenario, the Amadeus request bodies, the `supplier_requests` rows, the stored offer and priced-offer rows and the API answers of search, price and upsell.
+  - A one-byte change of a request body fails the test.
+  - No file under `ota/backend/src` and no existing test changes.
+  - The golden files hold no token, secret or card number, and no token request.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int golden-shopping`
+
+### OBE-110 · Define the supplier adapter interface, capabilities, outcome sets and neutral offer types
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** —
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §9.1 (plan key E2-02; in §9.1 the row on the folder `supply/testing`); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 12 and 13; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 6; item 8, proposed; item 9, proposed); ota/backend/tsconfig.build.json (what the build ships); ota/backend/src/shopping/offers.mapper.ts (`ParsedOffer`); ota/backend/src/shopping/priced-offers.mapper.ts (`PricingReply`, `ConfirmedOffer`)
+- **Files:** `ota/backend/src/supply/interface/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/README.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. Create `ota/backend/src/supply/interface/`: types and constants only, no I/O, no Nest provider, no supplier's name.
+  2. Outcome sets: one per action of the table in plan §4.1 (nine rows), with exactly its outcomes.
+  3. The adapter interface has two parts. The calls: Search, with a pure `prepare` step that answers a prepared request, `skipped` with a reason, or a request problem; and Price. The pure readers of a stored offer and a stored priced offer, usable without injection. The booking actions get their methods in phase E.
+  4. Capabilities: a typed declaration with the rows and values of the table in plan §4.2.
+  5. Neutral types: the neutral offer has the members of today's `ParsedOffer`, with a supplier offer reference (an opaque text that the adapter chooses) in place of `amadeusId`; the neutral priced offer builds on it. No caller changes: the mappers keep their types until OBE-118 and OBE-119.
+  6. The fake adapter lives outside `src`, so it never ships. A test scripts its outcomes, delays, offers and capabilities and reads its calls.
+  7. Unit tests: the outcome names equal the table of plan §4.1; the fake implements the interface. Describe the module in README §2 and architecture.md §2.
+- **Acceptance:**
+  - The folder exports the adapter interface, a capability declaration with every row of plan §4.2 and one outcome set per action of plan §4.1; a unit test pins the outcome names.
+  - The neutral offer carries a supplier offer reference; no exported name contains a supplier's name.
+  - The fake adapter implements the interface and is in no build output. No caller changes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/interface && pnpm --filter @velexis/ota-backend typecheck`
+
+### OBE-111 · Move the Amadeus client into `supply/adapters/amadeus/` and make the supplier call log common
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-109, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E2-03); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 13; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 1; item 7, proposed); ota/docs/adr/0001-amadeus-client-design.md (points 1, 2 and 9); ota/backend/src/amadeus/ (every file); ota/backend/scripts/amadeus-types.mjs; eslint.config.mjs (the three places that name the folder); ota/backend/src/lint-rules.test.ts; ota/backend/test/contract/redaction-coverage.contract.test.ts (the writer's path); .github/workflows/ci.yml (the step on the generated Amadeus types); deploy/scripts/test/check-vm.test.sh (its X-041 case, which skips a missing file today); AGENTS.md §5 (the guidebook); guidebook/README.md (the build, and the paths and lines it checks)
+- **Files:** `ota/backend/src/amadeus/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/supply/supplier-requests.repository.ts`, `ota/backend/src/supply/supplier-requests.repository.test.ts`, `ota/backend/src/` (import paths and the comments that name the folder), `ota/backend/test/` (import and file paths only), `ota/backend/scripts/amadeus-types.mjs`, `eslint.config.mjs`, `ota/backend/src/lint-rules.test.ts`, `.github/workflows/ci.yml`, `deploy/scripts/test/check-vm.test.sh`, `ota/docs/adr/0001-amadeus-client-design.md`, `ota/docs/architecture.md`, `ota/docs/flows/amadeus-connection-and-tokens.md`, `ota/docs/pci/data-flow.md`, `ota/docs/performance.md`, `ota/backend/README.md`
+- **Steps:**
+  1. Move every file of `ota/backend/src/amadeus/` but the call log with `git mv` to `ota/backend/src/supply/adapters/amadeus/`, tests and generated types included. Only import paths change.
+  2. The call log becomes common: `supplier-requests.repository.ts` and its test move to `ota/backend/src/supply/`. `SupplierRequestRecord` gets a required `provider`, and `insert` writes it instead of its own literal. The Amadeus client passes `amadeus`. The table and its CHECK stay.
+  3. Follow the move wherever the folder is named: the importers in `src` and `test`, and the comments that name it; the writer's path in `redaction-coverage.contract.test.ts`; the output folder of `amadeus-types.mjs`; the three places in `eslint.config.mjs` (the same rules on the new folder; the boundary is X-060) and the probe paths of `lint-rules.test.ts`; the step in `ci.yml`; the generated types' line in the root Prettier ignore file.
+  4. `check-vm.test.sh`: its X-041 case reads the official Amadeus hosts from `connection-resolver.ts` at the new path. The case fails when a file that it reads is missing, instead of skipping it: a silent skip would weaken the test.
+  5. The guidebook names the moved files: change its repository paths under `ota/backend/src/amadeus/` to the new ones (the journeys, the glossary, the issue KI-045 and the line it cites, the pages `concepts.md` and the OTA API's `architecture.md`, and its components diagram) and rebuild `guidebook/dist/content.js` with `node guidebook/tools/build.mjs --strict`.
+  6. Documents: a dated note under point 1 of OADR-0001 (the new folder, the common call log), architecture.md §2, the flow document, the README's folder tree, the links into the folder in `ota/docs/performance.md` and `ota/backend/test/load/README.md`, and the links of the PCI data flow (`tools/ci/fix-pci-refs.mjs` moves their line numbers).
+- **Acceptance:**
+  - `ota/backend/src/amadeus/` is gone, and git shows renames. Apart from paths, the only code change is the required `provider`.
+  - `SupplierRequestsRepository.insert` does not compile without a provider; a unit test reads the stored value.
+  - `golden-shopping.int.test.ts` passes without a new recording. In an existing test only a path changes; no test is deleted or weakened. The X-041 case of `check-vm.test.sh` still checks the official Amadeus hosts and fails when a file that it reads is missing.
+  - `pnpm lint` and `pnpm format:check` pass, `pnpm --filter @velexis/ota-backend amadeus:types` leaves no diff, the PCI references check finds no problem and the guidebook builds without errors.
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int && pnpm lint && pnpm format:check && node tools/ci/check-pci-refs.mjs && node --test tools/ci/ci-workflow.test.mjs guidebook/tools/guidebook.test.mjs && shellcheck -S style deploy/scripts/test/check-vm.test.sh && sudo env PATH="$PATH" bash deploy/scripts/test/check-vm.test.sh` (the last command needs root, as in CI's check-vm job)
+- **Note (2026-11-25):** Workflow file: the owner approves this change with the wave.
+- **Note (2026-11-25):** Files of the foundation name the folder (the root ESLint config, `ci.yml`, `check-vm.test.sh`), so Verify runs their tests: the lint, the workflow test, and shellcheck and `check-vm.test.sh` (the lead's ruling S7). Steps 3 and 5 also change the root Prettier ignore file and the guidebook, which plan-lint refuses in Files; CI's guidebook test checks every repository path, and every line of an issue, that the guidebook names.
+
+### OBE-112 · Add the supply registry: the sources that are on, adapter look-up and `capabilities()`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-110, OBE-111, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §4.4 (plan key E2-05); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2 and 13; item 14, proposed; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 3; item 9, proposed); ota/backend/src/supply/adapters/amadeus/connection-resolver.ts (its header; there since OBE-111); ota/backend/src/tenancy/platform-cache.ts (`connection`); ota/backend/src/tenancy/platform-read.repository.ts (`amadeusConnection`); the block of OBE-146, which replaces this registry's reads
+- **Files:** `ota/backend/src/supply/registry/`, `ota/backend/src/supply/supply.module.ts`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/README.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. The registry answers which sources are on for a tenant and an environment. Today that is one source: the tenant's Amadeus connection of that environment, on when its row is `active`. Read it as the connection resolver does, through `PlatformCache`; add no cache and no platform query. A source that is not on keeps the resolver's reason.
+  2. A source has its supplier and no supply id yet (OBE-146 brings the platform's supply sources). The registry reports the connection whatever its `credential_source` and builds nothing for a second account of an OTA (milestone M8).
+  3. Adapter look-up: the adapter registered for a supplier. An unknown supplier is a typed failure, never a default.
+  4. `capabilities()` returns the declaration of a source's adapter. Start the Amadeus adapter class with its declaration only: one value per row of plan §4.2 that describes today's behaviour. The pull request names the code behind each value.
+  5. `supply.module.ts` provides the registry; no business module uses it yet.
+  6. Unit tests with the fake adapter and a fake platform read: an `active` row gives one source; no row or another status gives none, with the reason; a row of another tenant or environment never serves; an unknown supplier fails.
+- **Acceptance:**
+  - The registry returns the Amadeus source exactly when the connection that the resolver reads is `active`, and it reads through `PlatformCache` only.
+  - Look-up returns the registered adapter, an unknown supplier fails, and the Amadeus declaration has a value for every row of plan §4.2.
+  - No caller changes: the golden test of OBE-109 passes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/registry supply/adapters && pnpm --filter @velexis/ota-backend test:int golden-shopping`
+- **Note (2026-11-25):** OBE-109 is added as a dependency: the acceptance and Verify run its golden test.
+
+### OBE-113 · Add the source columns to offers and priced offers and the table `flight_search_sources`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-110, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.4 and §5 (plan key E2-06; in §5 the paragraph "Task ids"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 9; item 14, proposed; item 15, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 3; item 8, proposed); ota/backend/migrations/README.md; docs/mvp/conventions.md §9; ota/docs/data-model.md §3; the block of OBE-105 (its migration tests); the blocks of OBE-125, OBE-147 and OBE-215 (the same rule on `bookings`, the writers of `supply_id`, the contract step)
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/migrations/tenant-0002.int.test.ts`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/shopping/searches.repository.ts`, `ota/backend/src/shopping/offers.repository.ts`, `ota/backend/src/shopping/priced-offers.repository.ts`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/shopping/upsell.service.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Write one tenant migration, phase `expand`, with the next free tenant migration number (0006 is reserved by OBE-105). It adds `supplier`, `supply_id` and `supplier_offer_ref` to `flight_offers` and `priced_offers`, each with its `COMMENT ON`. `supply_id` stays nullable: OBE-147 writes it and fills the old rows, and the contract step OBE-215 (milestone M8) makes it NOT NULL.
+  2. `supplier` is NOT NULL with `DEFAULT 'amadeus'`, and no CHECK lists the suppliers. No row is rewritten, nothing is filled, and a row that the previous release writes during the fan-out is an Amadeus row (conventions §9). The registry refuses an unknown supplier (OBE-112), so the fake source and the unknown-source cases of phase E can be stored. Every writer of this release names the supplier itself; OBE-215 drops the default. An Amadeus row keeps its offer id in `amadeus_offer_id`.
+  3. `flight_offers.amadeus_offer_id` and `priced_offers.amadeus_request` become nullable; a CHECK per table, added `NOT VALID` and then validated, keeps them required for an Amadeus row. `flight_searches.amadeus_request` and `offer_upsells.amadeus_request` become nullable too, without a CHECK.
+  4. The readers that assumed a value answer as before, and an Amadeus row without its column is an internal error: `SearchesRepository` (`searchById`, `offerSummaries`), `SearchesService.searchResponse` (the criteria echo) and `OffersRepository` (`OFFER_COLUMNS`, `searchOfferIds`, `reusableUpsell`, which never matches a NULL request). List them in data-model §3; OBE-160 makes them serve a search or an offer without the column.
+  5. Create `flight_search_sources`, one row per search and source: the search (deleted with it), the source (its supplier, with no CHECK of the suppliers, and its supply id, nullable), the outcome (the five Search outcomes of plan §4.1), the skip reason, the offers received, kept and dropped, the duration. This `supply_id` stays nullable: OBE-147 makes the row's writer set it, and OBE-215 does not touch it (the lead's ruling S16).
+  6. Run `pnpm db:codegen`, update the tests that list the tenant migrations as `0005` did, and add a migration test: an empty and a populated schema, an insert without the new columns, a row of another supplier, the CHECKs.
+  7. Both `insertOffers` helpers and `PricedOffersRepository.insert` require the source; a new helper writes `flight_search_sources`. The three services pass the Amadeus source for now. Tenant data only through `tenantTx`.
+- **Acceptance:**
+  - The migration applies to an empty and to a populated schema, `pnpm db:codegen` leaves no diff, and `flight_search_sources` has the outcome set of Search and goes with its search.
+  - A row inserted without `supplier`, as the previous release inserts it, is an Amadeus row; a row of another supplier is stored as given; the CHECK refuses an Amadeus row without its Amadeus columns.
+  - No offer or priced offer is inserted without its source. The golden test of OBE-109 passes; no existing test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provision dev-seed shopping golden-shopping`
+- **Note (2026-11-25):** OBE-109 is added as a dependency: the baseline must exist before this first change to shopping code. `packages/db` and `packages/testing` change with the migration, so Verify runs their tests.
+- **Note (2026-11-25):** Proposed (lead); confirm in the pull request: `supplier` is NOT NULL with `DEFAULT 'amadeus'`, no CHECK lists the suppliers, and every new writer names the supplier (the lead's rulings S1 and S12); `bookings.supplier` of OBE-125 follows the same rule. The contract step ships at least one release after its writers, and after the launch: OBE-215 (milestone M8) drops the default and makes `supply_id` of the offers and priced offers NOT NULL (the lead's ruling S2), not that of `flight_search_sources` (S16).
+
+### OBE-114 · Build the engine core: the action pipeline, the three hooks and routing by row
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-112, OBE-110, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.3 (plan key E2-07; the action table, the hook table and its last bullet); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 20; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 3 and 4; item 8, proposed; item 11, proposed; item 12, proposed; item 14, proposed); ota/backend/src/supply/interface/; ota/backend/src/supply/registry/; ota/backend/test/supply/fake-adapter.ts; ota/backend/src/bookings/staff-alerts.ts (`StaffAlerts`, which reach OTA staff); the block of X-072 (the alert inventory)
+- **Files:** `ota/backend/src/supply/engine/`, `ota/backend/src/supply/supply.module.ts`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/README.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. One pipeline for every action of plan §4.1: pre-action hooks, the adapter step, post-action hooks once per supplier result and, for Search, post-merge hooks once on the merged list. One table in code drives it: per action, its outcome set and its hook policy (the column "Hooks" of §4.1 and the last bullet of §4.3). The engine answers outcomes only.
+  2. Routing: Search goes to every source of the registry. Any other action takes the source that its caller read from the offer or booking row; a row without a source, or with an unknown one, is refused before any adapter step (`unknown-source-refused`).
+  3. Hook inputs are typed as the hook table of §4.3 says, and the engine checks each result against its row. Pre-action may remove a source or refuse; it never adds a source or changes travellers, dates or amounts. Post-action may drop offers or adjust a price, on Search and Price only (an upsell takes the hooks of Price, OBE-121); it never changes flights. Post-merge never changes a price.
+  4. On money and servicing actions the hooks get read-only inputs, and nothing they return is applied (`money-hooks-cannot-mutate`); on Create order, pre-action may refuse.
+  5. A hook that throws fails Search, Price and Create order closed (`hook-failure-fails-closed`). On the six other actions the action goes on (`hook-failure-never-blocks-servicing`), and the failure is the alert of plan §4.3: one error log event `supply.hook_failed` with the hook, the action and the source, without payload, secret or personal data. It reaches Velexis staff through the alert inventory of X-072, never through `StaffAlerts`, which reach OTA staff and would reveal Velexis's rules.
+  6. Register no handler, so no request changes. Handlers are code: nothing from a tenant or from staff is stored or run.
+  7. Unit tests under these four names, with the fake adapter, which also supplies the step of an action without an adapter method.
+- **Acceptance:**
+  - The tests `unknown-source-refused`, `money-hooks-cannot-mutate`, `hook-failure-fails-closed` and `hook-failure-never-blocks-servicing` pass with the fake; the last two cover every action of plan §4.1.
+  - A pre-action hook cannot add a source, a post-action hook cannot change flights, and a post-merge hook cannot change a price.
+  - A hook that fails on a servicing action writes one `supply.hook_failed` event, without payload, and no staff alert of the OTA.
+  - Nothing calls the engine yet: the golden test of OBE-109 passes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/engine && pnpm --filter @velexis/ota-backend test:int golden-shopping`
+- **Note (2026-11-25):** OBE-109 and OBE-110 are added as dependencies: the acceptance runs OBE-109's golden test, and this task builds on OBE-110's interface and extends its fake adapter. The event of step 5 and its receiver are the lead's ruling S12: X-072's inventory names the event with its receiver and runbook, and its drill raises it.
+- **Note (2026-11-25):** Rests on ADR-0030, question (44c): the hooks keep the names "pre-action", "post-action" and "post-merge" until the owner answers. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-115 · Run `flights.search` through the engine with a deadline per source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-113, OBE-114, OBE-118, OBE-110, OBE-112, OBE-111, OBE-109
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E2-08); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 13; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 3; item 8, proposed); ota/docs/adr/0002-offer-and-priced-offer-caching.md (points 1, 2 and 7); ota/docs/adr/0001-amadeus-client-design.md (point 7); ota/docs/flows/search-and-price.md §2; ota/backend/src/shopping/searches.service.ts (`prepare`, `singleFlight`, `run`, `fail`, `complete`); ota/backend/src/shopping/offers.mapper.ts (`buildAmadeusSearch`)
+- **Files:** `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/shopping/searches.repository.ts`, `ota/backend/src/shopping/offers.mapper.ts`, `ota/backend/src/shopping/offers.mapper.test.ts`, `ota/backend/src/shopping/shopping.module.ts`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/supply/engine/`, `ota/backend/test/integration/supply/search-engine.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/search-and-price.md`, `ota/docs/adr/0002-offer-and-priced-offer-caching.md`, `ota/backend/README.md`
+- **Steps:**
+  1. Move `buildAmadeusSearch`, with the types and helpers that only it uses, into the Amadeus adapter as its pure `prepare` step: no I/O, the same input and output; its unit tests move unchanged. `SearchesService` answers its problems with today's errors: the same `VALIDATION_FAILED` path, code and message, `FEATURE_DISABLED` for `sources`, `SCOPE_NOT_ALLOWED` for negotiated fares.
+  2. The fan-out: for each source of the registry, `prepare`, then the adapter's search, all sources at once, each with its own deadline (for Amadeus the client's timeout of today). The adapter answers neutral offers, read by its reader (OBE-118). A failed or late source gets `failed` or `timed_out`; the search fails only when no called source answers.
+  3. `SearchesService.run` calls the engine and imports nothing from the adapter. The search row, its link to the `supplier_requests` rows, `fail` and `complete` stay. With one source a failed search answers the error of today, `424 SUPPLIER_NOT_CONFIGURED` included.
+  4. Single flight: with one source the hash covers the same value as today, so the Redis key does not change. A unit test pins the hash of a fixed request.
+  5. The transaction that completes or fails the search writes one `flight_search_sources` row per source, with its supplier and no supply id yet (OBE-147 sets the supply id once OBE-146 gives sources one). Offers get their source through the helpers of OBE-113.
+  6. Tests: `search-engine.int.test.ts` with the Amadeus stub (the stored row for `ok`, `empty`, `failed` and `timed_out`; a tenant without a connection); unit tests with two fake sources (one late, one failing, both failing). If the list of X-060 has merged, remove this task's entries from it.
+  7. Documents: search-and-price.md §2, a dated note under point 2 of OADR-0002, README.
+- **Acceptance:**
+  - `searches.service.ts` imports nothing from `src/supply/adapters/`.
+  - `search.int.test.ts` passes without a change, the golden comparison of OBE-109 is equal for search, and the single-flight key of a fixed request does not change. No test is deleted or weakened.
+  - Every search writes one `flight_search_sources` row per source; a late or failing source does not fail a search that another source answers.
+  - A request that `buildAmadeusSearch` refuses today gets the same code, path and message.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply shopping lint-rules && pnpm --filter @velexis/ota-backend test:int shopping supply`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-118 (the adapter answers neutral offers and needs its reader first), OBE-110 (the fake adapter), OBE-112 (the registry and the adapter class), OBE-111 (the adapter's folder) and OBE-109 (the golden comparison of the acceptance). `eslint.config.mjs` is a root file of the foundation: this task only removes its own entries from the list of X-060, and Verify runs `lint-rules`.
+
+### OBE-116 · Merge search results with a share of the limit per source and one currency
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-115, OBE-110, OBE-112, OBE-113, OBE-114, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3, §4.1, §4.3 and §7 (plan key E2-09; A17; in §7 the row "Rules for shares, deadlines, preferred source"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 3; item 8, proposed; item 11, proposed); ota/backend/src/shopping/offers.mapper.ts (`MAX_OFFERS_PER_SEARCH`, `offersBoundOf`); ota/backend/src/shopping/searches.service.ts (`complete`)
+- **Files:** `ota/backend/src/supply/engine/`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/test/supply/fake-adapter.ts`, `ota/docs/flows/search-and-price.md`, `ota/backend/README.md`
+- **Steps:**
+  1. Write the merge as a pure function of the engine, run at post-merge. Input: each source's offers in the order of its answer, and the limit. Output: the kept offers and the counts kept and dropped per source.
+  2. The limit is today's: what the search asks for (`max` or `maxFlightOffers`, bounded by `offersBoundOf`), never above `MAX_OFFERS_PER_SEARCH`.
+  3. Shares are equal by default: the limit divided among the sources that answered, the remainder to the first in the registry's order. A source with fewer offers than its share passes the rest on. Inside a source the order of its answer decides.
+  4. The shares are a typed settings object of the engine with defaults in code: no table, no API member, no environment variable. OBE-193 puts stored rules behind it.
+  5. One currency per search, no conversion. A source whose declared currencies lack the search's currency is not called: `skipped`, with the reason stored. An offer in another currency is dropped and counted.
+  6. `SearchesService.complete` stores the merged list; `flight_search_sources` gets the offers received, kept and dropped.
+  7. Unit tests with two fake sources: equal shares; an odd limit; a short, an empty and a failed source; three sources; a source skipped for the currency; one source alone.
+- **Acceptance:**
+  - With one source the merged list is the source's list cut at today's limit: `search.int.test.ts` and the golden test of OBE-109 pass unchanged.
+  - With two fake sources each gets half of the limit, an unused share passes to the other, and the list never exceeds the limit.
+  - A source that cannot quote the search's currency gets no call and a stored skip reason; no amount is converted.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/engine && pnpm --filter @velexis/ota-backend test:int shopping golden-shopping`
+- **Note (2026-11-25):** The settings object of step 4 with its defaults in code is Proposed (lead); confirm in the pull request. Added dependencies, whose products this task uses: OBE-110 (the fake adapter), OBE-112 (the registry's order), OBE-113 (`flight_search_sources`), OBE-114 (the post-merge hook) and OBE-109 (the golden test of the acceptance).
+
+### OBE-117 · Remove like-for-like duplicates across sources at post-merge
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-116, OBE-110, OBE-112, OBE-114, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §2, §3, §4.1 and §4.3 (plan key E2-10; the lead's proposal 3, not confirmed; A17 and A18); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 3; item 8, proposed; item 11, proposed); ota/backend/src/supply/engine/
+- **Files:** `ota/backend/src/supply/engine/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/docs/flows/search-and-price.md`, `ota/backend/README.md`
+- **Steps:**
+  1. The like-for-like key is a pure function of a neutral offer. It holds what A18 compares: every segment's flight (carrier, number, airports, local times) and cabin, the included checked bags, and the change and refund conditions; not the price. An offer with an unknown change or refund condition is like no other offer, so both stay.
+  2. Removal runs at post-merge, before the shares and the limit (the order of plan §4.3). Among offers of different sources with one key, one stays.
+  3. Two settings decide the winner: a preferred source and a minimum saving. The other source's offer wins only when it is cheaper than the preferred source's by at least the minimum saving. The price compared is the offer's total at post-merge.
+  4. Both join the settings object of OBE-116, with neutral defaults: no preferred source and a minimum saving of 0. Then the cheaper offer wins, and a tie keeps the first source in the registry's order. The owner's numbers are not decided.
+  5. A losing duplicate is not stored (A17) and counts as dropped for its source.
+  6. Unit tests with two fake sources: equal flights, cabins, bags and conditions; a different cabin, bag allowance or condition; cheaper below and above the minimum saving; no preferred source; a tie; an unknown condition.
+- **Acceptance:**
+  - Two like-for-like offers of two fake sources give one stored offer; offers that differ in flights, cabin, included bags or a change or refund condition both stay.
+  - With a preferred source and a minimum saving, the other source wins only when it is cheaper by at least that saving; the losing offer is not stored and counts as dropped.
+  - With one source nothing is removed: `search.int.test.ts` and the golden test of OBE-109 pass unchanged.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/engine && pnpm --filter @velexis/ota-backend test:int shopping golden-shopping`
+- **Note (2026-11-25):** Proposed (lead); confirm in the pull request: the settings with their defaults (no preferred source, a minimum saving of 0), an unknown condition never a duplicate, and the total compared at post-merge. Added dependencies, whose products this task uses: OBE-110 (the fake adapter), OBE-112 (the registry's order), OBE-114 (the post-merge hook) and OBE-109 (the golden test of the acceptance).
+
+### OBE-118 · Read stored offers through the reader of their source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-113, OBE-110, OBE-111, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E2-11); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 8, proposed); ota/backend/src/supply/interface/; ota/backend/src/shopping/offers.mapper.ts (`parseOffer`, `ParsedOffer`); the block of X-060 (no business file imports an adapter)
+- **Files:** `ota/backend/src/supply/readers/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/shopping/offers.mapper.ts`, `ota/backend/src/shopping/offers.mapper.test.ts`, `ota/backend/src/shopping/priced-offers.mapper.ts`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/shopping/offers.service.ts`, `ota/backend/src/shopping/upsell.service.ts`, `ota/backend/src/payments/card-fees.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/bookings/order-recorder.ts`, `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/src/bookings/bookings.mapper.ts`, `ota/backend/README.md`
+- **Steps:**
+  1. `parseOffer` and its helpers become the Amadeus adapter's pure offer reader, in the adapter's folder; their unit tests move unchanged. `ParsedOffer` becomes the neutral offer of the interface, and its `amadeusId` the supplier offer reference. `offers.mapper.ts` keeps exporting the type name.
+  2. Add `ota/backend/src/supply/readers/`: one pure look-up from a row's `supplier` to its reader. Five sites hold a `flight_offers` or `priced_offers` row and dispatch through it: `toFlightOffer`, `SearchesService.page`, `parsedOfferOf`, `CardFees.prepare` and the orchestrator's `confirmedOffersOf`. A row whose supplier has no reader is an internal error, never read with another reader.
+  3. Six sites read an Amadeus answer or order without such a row: `SearchesService.complete`, `UpsellService.store`, `readCreatedOrder`, `offersOfPricedOffer`, `customerOrderOf` and `snapshotOffersOf`. Each asks the look-up of step 2 for the reader of `amadeus`, behind a guard that refuses another supplier's data, so no business file gains an import of the adapter (X-060). Where a row is in reach (an upsell's base offer, the reconciliation's priced offer) the guard checks its `supplier`. The order sites take the supplier from their caller, which passes `amadeus` until bookings carry their source (OBE-125).
+  4. The counts, 5 and 6, are the plan's and hold at commit 04127444. Count again with `grep -rn "parseOffer(" ota/backend/src`; the pull request lists every site with its treatment.
+  5. Unit tests: each of the five sites refuses a row of the fake supplier, and each of the six guards refuses the fake supplier.
+- **Acceptance:**
+  - No offer is read without a source: the five sites dispatch by the row's `supplier`, the six Amadeus-only sites refuse another supplier, and a unit test proves the refusal at each site.
+  - No file outside `src/supply/` gains an import from `src/supply/adapters/`.
+  - The shopping, checkout, payment and booking tests and the golden test of OBE-109 pass. In an existing test only an import path changes, or the member `amadeusId` is renamed with the same expected value; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int shopping checkout payments bookings golden-shopping`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the neutral offer), OBE-111 (the adapter's folder, and the importers that both tasks change) and OBE-109 (the golden test of the acceptance). None lengthens the critical path.
+
+### OBE-119 · Read priced offers through the reader of their source and read pricing snapshot version 2
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-118, OBE-110, OBE-111, OBE-113, OBE-109
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E2-12); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 8, proposed); ota/docs/adr/0005-markup-and-fee-engine.md (point 8); docs/mvp/conventions.md §9; ota/backend/src/shopping/priced-offers.mapper.ts (`readPricingReply`, `confirmedOffersOf`, `PricingSnapshot`, `snapshotOf`, `PricedOfferPart`); ota/backend/src/supply/readers/; the block of OBE-162
+- **Files:** `ota/backend/src/shopping/priced-offers.mapper.ts`, `ota/backend/src/shopping/priced-offers.mapper.test.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/checkout/ancillaries.service.ts`, `ota/backend/src/payments/card-fees.ts`, `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/order-request.builder.ts`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/supply/readers/`, `ota/backend/test/integration/supply/pricing-snapshot.int.test.ts`, `ota/docs/adr/0005-markup-and-fee-engine.md`, `ota/docs/flows/search-and-price.md`, `ota/docs/data-model.md`
+- **Steps:**
+  1. `readPricingReply` and the mapper's `confirmedOffersOf` become the Amadeus adapter's pure priced-offer reader, in the adapter's folder; their unit tests move unchanged.
+  2. Dispatch every call line through the reader of the priced offer's `supplier` (the look-up of OBE-118): the 15 of `readPricingReply` (`priced-offers.service.ts` 7, `ancillaries.service.ts` 2, `card-fees.ts` 2, `reconcile.service.ts` 1, the orchestrator 3); the 8 of `confirmedOffersOf` (`priced-offers.service.ts` 3, `ancillaries.service.ts` 2, and the 3 calls of the orchestrator's own helper of that name); and the orchestrator's call of the mapper's function under the alias `confirmedPricingOffersOf`. A site without the row reads the supplier with the response; none falls back to a default, and no business file gains an import of the adapter (X-060).
+  3. Snapshot version 2: each offer entry and the fare-rules load name an offer by the supplier offer reference, not by `amadeusOfferId`. `snapshotOf` reads both versions into one shape keyed by that reference: a version 1 snapshot is an Amadeus row, and its `amadeusOfferId` is the reference. An unknown version is refused. Stored responses are not rewritten.
+  4. This task keeps writing version 1. A stored row never gets its new reader and its new writer in one release (conventions §9), so a rollback to the release before this one still reads every priced offer. OBE-162, the first writer of version 2, switches the writer before its own changes, in a release after this one.
+  5. The code that matches offers by the Amadeus id (`PricedOfferPart`, `bookingRequirementsOf`, `creditCardFeesOf`, `toPricedOffer`, the orchestrator's helper) matches by the supplier offer reference. No API answer changes.
+  6. Tests: `snapshotOf` with both versions and an unknown one; `pricing-snapshot.int.test.ts` reads a priced offer as today's code writes it, and one stored with a version 2 snapshot, through checkout.get, flights.getPricedOffer, flights.getAncillaries, flights.getFareRules and a re-price.
+  7. Add a dated note under point 8 of OADR-0005; describe version 2 (read, not written yet) in the flow document and the data model.
+- **Acceptance:**
+  - Every call line of `readPricingReply` and `confirmedOffersOf` reads through the reader of its priced offer's supplier; the pull request lists them.
+  - New priced offers still hold a version 1 snapshot; every reader reads version 1 and version 2 alike, and an unknown version is refused.
+  - No API answer changes, and the golden comparison of OBE-109 is equal without a new recording. No existing test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int shopping checkout payments bookings supply`
+- **Note (2026-11-25):** Step 4 is the lead's ruling, with S12: OBE-162 is the first writer of version 2 and ships in a release after this task's reader. A dependency alone does not make a later release (conventions §9), so OBE-162's pull request names the release.
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the neutral priced offer), OBE-111 (the adapter's folder), OBE-113 (the priced offer's `supplier`, which step 2 dispatches on) and OBE-109 (the golden comparison of the acceptance).
+
+### OBE-120 · Price and re-price through the engine and refuse offers of mixed sources
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-114, OBE-119, OBE-110, OBE-112, OBE-113, OBE-111, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 and §4.1 (plan key E2-13; A27); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 4 and 13; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 8, proposed); docs/mvp/adr/0006-contract-first-openapi.md; ota/backend/openapi/README.md §3 and §6; ota/backend/openapi/velexis-ota-booking-api.openapi.yaml (`x-error-catalogue`: `OFFER_COMBINATION_INVALID`); ota/backend/src/shopping/priced-offers.service.ts (`price`, `prepare`, `repriceForCheckout`, `reload`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/shopping/shopping.module.ts`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/supply/engine/`, `ota/backend/test/integration/supply/price-engine.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. Contract first. Offers of different sources are refused with a code the contract has, `422 OFFER_COMBINATION_INVALID`. Add one value of `details.reason`, `different_source` (a neutral name, plan A27), to that code's description in `x-error-catalogue` and a row to the change log (README §6), then run `pnpm contracts:generate`, which regenerates the catalogue of `@velexis/errors`. No operation is added.
+  2. The Amadeus adapter gets the Price call: the request built as today, then `quoteAirOffers`. It classifies the answer into `priced`, `sold_out`, `refused` or `unavailable` and keeps today's public error in the outcome.
+  3. The three call lines of `priced-offers.service.ts` (in `price`, `repriceForCheckout` and `reload`) call the engine's Price action. The source comes from the offer rows, so `unknown-source-refused` applies. The hooks run; no handler exists yet. Each outcome maps to the error of today.
+  4. `prepare` refuses offers of more than one source before any adapter call.
+  5. `priced-offers.service.ts` imports nothing from the adapter. The other `quoteAirOffers` callers stay until OBE-130 and OBE-131. If the list of X-060 has merged, remove this task's entries from it.
+  6. Tests: `price-engine.int.test.ts` with the Amadeus stub covers each outcome and the re-price; a unit test prices offers of two fake sources and gets the refusal without an adapter call.
+- **Acceptance:**
+  - `priced-offers.service.ts` imports nothing from `src/supply/adapters/`; its three call lines go through the engine.
+  - `pricing.int.test.ts` passes without a change, and the golden comparison of OBE-109 is equal for price. No test is deleted or weakened.
+  - Offers of two sources are refused with `422 OFFER_COMBINATION_INVALID` and the reason `different_source`, before any supplier call. `pnpm contracts:lint` passes, the generated catalogue is committed, and the change log names the value.
+- **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/errors test && pnpm --filter @velexis/ota-backend test supply shopping lint-rules && pnpm --filter @velexis/ota-backend test:int shopping checkout bookings supply`
+- **Note (2026-11-25):** The plan's row says "refused" and names no error. The lead's ruling takes `422 OFFER_COMBINATION_INVALID`; the value `different_source` is Proposed (lead); confirm in the pull request. `packages/errors` holds the generated catalogue and `eslint.config.mjs` the list of X-060: both change with this task, and Verify runs their tests.
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the fake adapter), OBE-112 (the adapter class), OBE-113 (the offer rows' `supplier`), OBE-111 (the adapter's folder, where the Price call goes) and OBE-109 (the golden comparison of the acceptance).
+
+### OBE-121 · Make upsell a capability and skip it for a source without it
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-120, OBE-110, OBE-112, OBE-113, OBE-114, OBE-111, OBE-109
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §4.3 (plan key E2-14; the capability table; the hook table); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 12); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 2 and 6; item 9, proposed; item 11, proposed; item 14, proposed); ota/docs/flows/search-and-price.md §2 (step 6); ota/backend/src/shopping/upsell.service.ts (`upsell`, `prepare`, `store`, `buildUpsellRequest`, the status `no_upsell`); ota/backend/openapi/velexis-ota-booking-api.openapi.yaml (`UpsellResult`); ota/backend/test/integration/shopping/offer-upsell.int.test.ts; the block of OBE-192 (its price rule at the post-action of Upsell)
+- **Files:** `ota/backend/src/shopping/upsell.service.ts`, `ota/backend/src/shopping/upsell.service.test.ts`, `ota/backend/src/shopping/shopping.module.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. Add the capability "upsell" to the capability declaration and an adapter method for it. The Amadeus adapter declares it: its pure step is today's `buildUpsellRequest`, moved with its tests, and its call is `upsellAirOffers`.
+  2. The engine routes an upsell by the source of the base offer's row. It answers the outcome set of the row "Price, extras" of plan §4.1 and runs that row's pre-action and post-action hooks: a failing hook fails the upsell closed, as it fails Price. It adds no outcome and registers no handler; the price rule of OBE-192 runs at the post-action of Upsell.
+  3. `UpsellService.upsell` asks the capability of the base offer's source; the storefront feature check stays first. With the capability, it calls the engine and stores the answer as today. Without it, the step is skipped: no adapter call and no `supplier_requests` row.
+  4. A skipped upsell stores an `offer_upsells` row with the status `no_upsell` and no Amadeus request (nullable since OBE-113), and answers it as today's `no_upsell` result: an `UpsellResult` without alternatives. No migration and no contract change.
+  5. `upsell.service.ts` imports nothing from the adapter. If the list of X-060 has merged, remove this task's entries from it.
+  6. Unit tests with the fake adapter: without the capability, no adapter call and no alternatives; with it, the call goes through the engine, and a failing hook fails the upsell closed.
+- **Acceptance:**
+  - For an offer whose source declares no upsell, `flights.upsell` makes no adapter call, writes no `supplier_requests` row and answers an upsell without alternatives. The code asks the capability and tests no supplier's name.
+  - With the capability, the upsell runs the pre-action and post-action hooks of Price, and a failing hook fails it closed.
+  - For Amadeus nothing changes: `offer-upsell.int.test.ts` passes without a change, and the golden comparison of OBE-109 is equal for upsell.
+  - `upsell.service.ts` imports nothing from `src/supply/adapters/`. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test upsell supply lint-rules && pnpm --filter @velexis/ota-backend test:int shopping golden-shopping`
+- **Note (2026-11-25):** The plan's row does not say what a skipped upsell answers; today's `no_upsell` answer is the lead's ruling. Proposed (lead); confirm in the pull request: an upsell runs the hooks of Price and fails closed as Price does (the lead's ruling S14); OBE-192's pull request adds the dated note on it to OADR-0019.
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the capability declaration, the fake adapter), OBE-112 (the adapter class), OBE-113 (the nullable request), OBE-114 (the engine's routing and hooks), OBE-111 (the adapter's folder, where `buildUpsellRequest` goes) and OBE-109 (the golden comparison of the acceptance). `eslint.config.mjs` is a root file: this task only removes its own entries from the list of X-060.
+
+### OBE-122 · Add the adapter conformance suite, part 1, for the Amadeus adapter and the fake
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-120, OBE-110, OBE-112, OBE-115, OBE-118, OBE-119, OBE-111
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §4.15 (plan key E2-15); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 4 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 8, proposed; item 9, proposed); ota/docs/adr/0001-amadeus-client-design.md (points 7 and 9); ota/backend/src/supply/interface/; ota/backend/test/supply/fake-adapter.ts; tools/amadeus-stub/README.md (the scenarios `timeout`, `server-error`, `sold-out`, `price-changed`; the `timers` option)
+- **Files:** `ota/backend/test/supply/conformance/`, `ota/backend/test/integration/supply/conformance-amadeus.int.test.ts`, `ota/backend/test/integration/supply/conformance-fake.int.test.ts`, `ota/backend/README.md`
+- **Steps:**
+  1. The suite is one function in `ota/backend/test/supply/conformance/` that takes a harness (build the adapter, make its supplier answer a scenario, read its call-log rows). Each adapter has one small test file that calls it. OBE-140 adds part 2; OBE-166 runs it for PKFare.
+  2. Capabilities: a value for every capability of the declaration (the rows of plan §4.2 and those added later, such as upsell); the adapter does nothing that it declares missing.
+  3. Search and read: `prepare` is pure. A search answers one of `ok`, `empty`, `failed`, `timed_out` or `skipped`; every offer is a neutral offer with a supplier offer reference, and an unreadable offer is counted. The readers read back what the adapter stored and refuse another supplier's data.
+  4. Price: a scenario produces each of `priced`, `sold_out`, `refused` and `unavailable`, and no other outcome.
+  5. Deadlines: an answer held past the source's deadline gives `timed_out` for Search and `unavailable` for Price, and the call is aborted.
+  6. Redaction: a known secret, token and contact value of the scenario are in no call-log row, log line or error; no key, signature, card number or document number is stored.
+  7. No supplier name in neutral output: outside the stored payload that only the adapter's reader opens, outcomes, offers, priced offers and errors hold no supplier name, error code or payload.
+  8. A broken fake fails the matching case (a leaked name, a late answer, an outcome outside the set, an unredacted secret). README §8 says how a new adapter joins.
+- **Acceptance:**
+  - The same cases run against the Amadeus adapter with its stub and against the fake: capabilities, search, read, price, deadlines, redaction, no supplier name in neutral output.
+  - A broken fake fails the matching case, and the suite takes a harness, so OBE-140 and OBE-166 copy no case.
+  - No file under `ota/backend/src` and no existing test changes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int supply/conformance`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-115 (the adapter's search and its deadline, which no other dependency brings), OBE-110 (the interface and the fake), OBE-112 (the declaration), OBE-118 and OBE-119 (the readers) and OBE-111 (the common call log, whose rows the harness reads). The critical path keeps its length.
+
+### OBE-123 · Prove phase D: the golden comparison is equal and the search load test runs through the engine
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-115, OBE-116, OBE-117, OBE-118, OBE-119, OBE-120, OBE-121, OBE-122, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §6 (plan key E2-16; the exit of P2); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 19); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 3); ota/docs/performance.md §1, §9 and §10; ota/backend/test/load/README.md ("Run it"); the blocks of OBE-109 and OBE-119
+- **Files:** `ota/docs/performance.md`
+- **Steps:**
+  1. Golden: run `golden-shopping.int.test.ts` on a head with every task of phase D, and compare the golden files with their first recording (the commit of OBE-109): they are byte-equal, the stored rows included. Any difference is a defect: report it, never record over it.
+  2. List every test file that existed before OBE-109 and changed since, with the reason (a moved file, an import path, a renamed member).
+  3. No file of `src/shopping/` imports from `src/supply/adapters/`.
+  4. Load: run `search-load.mjs` before (the merge base of OBE-109) and after (this head), three runs each, back to back, on one machine with the same build flags, as §10 of performance.md did. Write down `nproc` and the load average.
+  5. Record a new section in performance.md and a row in its §9: p50 and p95 of `flights.search` without the stub delay, CPU per search and RSS, before and after, against the 500 ms budget. If the budget is met before and missed after, stop and tell the lead; do not raise it.
+- **Acceptance:**
+  - The golden files of phase D's head are byte-equal with their first recording.
+  - The pull request lists every existing test file that phase D changed and shows that no assertion was deleted or weakened.
+  - performance.md has the before and after runs, three each, with a §9 row; the p95 of `flights.search` stays within 500 ms.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int golden-shopping && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
+- **Note (2026-11-25):** The plan names tools/perf as a component; the search load test is ota/backend/test/load/search-load.mjs, so no file of tools/perf changes. OBE-109 is added as a dependency: step 1 compares its first recording.
+
+### OBE-124 · Record a golden baseline of today's Amadeus booking calls
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-123, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §6 (plan key E3-01; the line "Proof" and the exit of P3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2); the block of OBE-109 (the form of the golden files); tools/amadeus-stub/README.md (`requests()`, which records no body; the order scenarios); ota/backend/src/supply/adapters/amadeus/amadeus.module.ts (the `AMADEUS_FETCH` provider); ota/backend/test/integration/bookings/ (the nine files)
+- **Files:** `ota/backend/test/integration/supply/golden-booking.int.test.ts`, `ota/backend/test/supply/golden/`, `ota/backend/README.md`
+- **Steps:**
+  1. List what the nine files of `ota/backend/test/integration/bookings/` send to the stub, per scenario, for the seven calls: create, issue, read, cancel, patch, queue list and read by reference. The pull request holds the list.
+  2. The golden test runs these scenarios in-process with the set-up of the nine files.
+  3. The stub's `requests()` holds no body, so the test takes each request (method, path, query and body) from a spy on `globalThis.fetch` that passes every call through, as OBE-109 does; `AMADEUS_FETCH` calls it at call time. The token request, whose body holds the client secret, is left out. Per scenario the test records these requests and the `supplier_requests` rows, in the form of OBE-109. Its helper replaces only what differs from run to run: ids, times, durations, request ids and the booking reference, also inside the remark. The rest is compared byte for byte.
+  4. An order paid by airline card is recorded as the call log stores it, redacted, never as sent. The test fails when a golden file holds a card number, a security code, a token, a client secret or an unmasked document number.
+  5. The test never rewrites a file by itself; a new recording is an explicit run that CI never does.
+  6. Prove that the test bites: change one character of the body that `buildCreateOrderRequest` builds, see it fail and revert. Describe the baseline in README §8.
+- **Acceptance:**
+  - `golden-booking.int.test.ts` passes on the code of its merge base and holds, per scenario, the request bodies and `supplier_requests` rows of the seven calls.
+  - Every scenario of the nine files that reaches one of the seven calls is in the baseline, and a one-byte change of a request body fails the test.
+  - No file under `ota/backend/src` and none of the nine files changes. The golden files hold no card number, token or secret.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int golden-booking`
+- **Note (2026-11-25):** OBE-109 is added as a dependency: this test takes its golden form and folder.
+
+### OBE-125 · Add `supplier`, `supply_id` and `supplier_order_ref` to `bookings` and the helper `hasSupplierOrder`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-113
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.4 and §4.9 (plan key E3-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 9; item 14, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed); docs/mvp/conventions.md §9; ota/backend/migrations/README.md; the blocks of OBE-113 (the same column on the offers; the tests that list the tenant migrations), OBE-147 (the batched job) and OBE-215 (the contract step)
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/bookings/supplier-order.ts`, `ota/backend/src/bookings/supplier-order.test.ts`, `ota/backend/src/bookings/`, `ota/backend/src/console/`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Write one tenant migration, phase expand, with the next free tenant migration number (0006 is reserved by OBE-105). It adds to `bookings`, each with its `COMMENT ON`: `supplier`, NOT NULL with `DEFAULT 'amadeus'`, the rule of the offers' column (OBE-113); `supply_id`, nullable until the contract step OBE-215 (M8) makes it NOT NULL (OBE-147 writes it); `supplier_order_ref`, nullable. No row is rewritten, and an insert without a supplier (the previous release, the existing tests) gives an Amadeus row. No CHECK lists the suppliers: the registry refuses an unknown supplier, and OBE-126 and OBE-145 store bookings of the fake source and of an unknown supplier.
+  2. The migration fills no old row (conventions §9), and the previous release still writes `amadeus_order_id` alone. So `hasSupplierOrder` reads `supplier_order_ref` or, for an Amadeus row without it, `amadeus_order_id`. The batched job of OBE-147 fills the old rows, and the contract step OBE-215 (M8) removes this fallback. Say so in data-model §3.
+  3. `hasSupplierOrder` in `supplier-order.ts` is the one place of that rule, for a row and, as a query fragment, for SQL.
+  4. It replaces the null tests of `amadeus_order_id`: 19 at commit 04127444 (the plan says about 18), listed in the pull request. The four in job queries (the ticketing and sync scans, the undecided cancellations, the issuance after a late capture) wait for OBE-126.
+  5. Both writers of `amadeus_order_id` (`OrderRecorder.record`, the PNR import) also write `supplier_order_ref`. Both inserts of a booking (the orchestrator's claim, the PNR import) go through `BookingsRepository.insertBooking`, which requires the supplier: the priced offer's for the claim, `amadeus` for the import. No writer of this release relies on the default. Tenant data only through `tenantTx`.
+  6. Run `pnpm db:codegen`, update the tests that list the tenant migrations, and test the migration on an empty and on a populated schema, with an insert that names no new column.
+- **Acceptance:**
+  - The migration applies to an empty and to a populated schema; `pnpm db:codegen` leaves no diff.
+  - Every booking has a supplier, a row of the previous release included; `hasSupplierOrder` is true for an Amadeus row that holds only `amadeus_order_id`.
+  - Outside `supplier-order.ts` and the four job queries, no code tests `amadeus_order_id` for null. The nine booking integration files pass unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test supplier-order bookings console migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed bookings console`
+- **Note (2026-11-25):** The plan's row fills old rows from `amadeus_order_id`; conventions §9 allows no fill inside a migration. Proposed (lead); confirm in the pull request: the helper reads either column, OBE-147's batched job fills the old rows, and no CHECK lists the suppliers. The contract step ships at least one release after its writers, after the launch: OBE-215 (M8) makes `supply_id` NOT NULL, drops the default of `supplier` and removes the fallback of step 2. G4: `packages/db` (the generated tenant types and the tests that list the migrations) and `packages/testing` (its test-database test) change with the migration, so Verify runs their tests.
+
+### OBE-126 · Make the five booking job queries select by `supplier` and report a booking of an unknown source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-125, OBE-110, OBE-112
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.9 (plan key E3-03; the bullet "Each background job query names the supplier it serves"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed); ota/backend/src/bookings/reconcile.service.ts (`adoptStaleClaims`, `dueBookingIds`); cancellation-state.ts (`undecidedFlags`); ota/backend/src/payments/payments.repository.ts (`requestIssuanceAfterPayment`); ota/backend/src/supply/registry/ (the adapter look-up)
+- **Files:** `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/bookings/booking-sync.service.ts`, `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/src/bookings/reconcile.processor.ts`, `ota/backend/src/bookings/cancellation-state.ts`, `ota/backend/src/bookings/staff-alerts.ts`, `ota/backend/src/bookings/` (their callers and unit tests), `ota/backend/src/payments/payments.repository.ts`, `ota/backend/src/payments/` (its callers), `ota/backend/test/integration/supply/job-sources.int.test.ts`, `ota/docs/architecture-booking.md`
+- **Steps:**
+  1. Each of the five queries filters `bookings.supplier` by the suppliers its job serves: the ticketing scan, the sync scan, the reconcile scan with its adoption of stale claims, the undecided cancellations, and the issuance after a late capture. Each job names its suppliers in one constant, Amadeus alone today; a test can pass another list. Today's signatures stay valid: `complete-stripe.int.test.ts` calls `TicketingRepository.dueBookingIds` directly.
+  2. Where a query tests for an order, it uses the query fragment of OBE-125.
+  3. No blind dispatch: a job hands the row's `supplier` on with the booking and never assumes Amadeus. The Amadeus-only predicates and the CHECK are OBE-145.
+  4. A booking whose `supplier` has no adapter in the registry is returned by no query. One more query of the reconcile scan lists such bookings that are not final. Each is logged at error level (its id and the stored value only) and raises one staff alert per booking and UTC day through `StaffAlerts`, with a neutral text.
+  5. `job-sources.int.test.ts` inserts, through `tenantTx`, a booking of the fake source and one of an unknown source beside an Amadeus booking, each in the state every query selects.
+- **Acceptance:**
+  - Each of the five queries names the suppliers of its job and returns no booking of another supplier; `job-sources.int.test.ts` proves it with the fake source.
+  - A booking of an unknown source is skipped by every job, logged at error level and alerted once per UTC day.
+  - The nine booking integration files pass unchanged. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test bookings payments && pnpm --filter @velexis/ota-backend test:int bookings payments job-sources`
+- **Note (2026-11-25):** OBE-110 and OBE-112 are added as dependencies: the test uses the fake source, and step 4 uses the registry's adapter look-up. The plan's row says "alerted" and names no channel. Proposed (lead); confirm in the pull request: the error log and `StaffAlerts` (step 4).
+
+### OBE-127 · Let the order recorder take a neutral order; move `readCreatedOrder` into the Amadeus adapter
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-125, OBE-110, OBE-111, OBE-118
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §4.9 (plan key E3-04; step 5 of the flow); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 8, proposed); ota/docs/adr/0008-ticketing-policy.md (point 3); ota/backend/src/bookings/order-recorder.ts (the file header; `CreatedOrder`, `readCreatedOrder`, `OrderRecorder.record`, `deadlineLocalOf`); the block of OBE-118 (`readCreatedOrder` behind the Amadeus offer reader); ota/docs/pci/data-flow.md (the row "Redaction in `supplier_requests`") and ota/docs/pci/README.md §5
+- **Files:** `ota/backend/src/supply/interface/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/bookings/order-recorder.ts`, `ota/backend/src/bookings/` (the callers), `ota/backend/src/console/` (the callers), `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/order-recorder.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/architecture-booking.md`, `ota/docs/pci/data-flow.md`
+- **Steps:**
+  1. Define the neutral order in `supply/interface/`: the supplier order reference (required), an optional record locator, the offers, travellers and tickets as `CreatedOrder` gives them (no ticket is valid), an explicit pay-by time, the snapshot already redacted, and the warnings. What only Amadeus gives (the office ids, the ticketing agreement, the automated process, the associated records) is optional.
+  2. `readCreatedOrder`, `ticketsOf` and `CreatedOrder` move into the Amadeus adapter unchanged. A new adapter step turns a `CreatedOrder` into the neutral order: it redacts (`redactPayload`, `maskedIdentifications`) and gives the pay-by time that `deadlineLocalOf` computes today.
+  3. `OrderRecorder.record` takes the neutral order: it writes `supplier_order_ref`, stores the snapshot as given, takes `ticketing_deadline_at` from the pay-by time and accepts an order without a record locator. It reads no supplier field and redacts nothing.
+  4. The call sites of `readCreatedOrder` (ten at commit 04127444) keep working until their own tasks route them through the engine. `order-recorder.ts` keeps a re-export of the name until OBE-141: 16 test files import it there (13 under `ota/backend/test/`), five of them among the nine booking integration files. The re-export is an adapter import: once X-060 is merged, `order-recorder.ts` is on its list with OBE-141 as the task that removes it. If X-060 merged first, this task adds the entry; X-060's test accepts it and OBE-128's `order-request.builder.ts` as its only later entries (the lead's ruling S16).
+  5. `order-recorder.int.test.ts` records an order of the fake source without a record locator and with an explicit pay-by time, and an Amadeus order whose stored rows, events and e-mail equal today's.
+  6. The PCI pack cites the recorder's redaction (`order-recorder.ts:696` and `:699` in `ota/docs/pci/data-flow.md`), which now happens in the adapter step of step 2. The cited code leaves its file, so re-place both references by hand (the lead's ruling S16): point them at that step, each with a piece of its line, and run `node tools/ci/check-pci-refs.mjs` (ota/docs/pci/README.md §5).
+- **Acceptance:**
+  - `OrderRecorder.record` stores the neutral order's reference, redacted snapshot and pay-by time, and records an order without a record locator.
+  - `readCreatedOrder` lives under `src/supply/adapters/amadeus/`, unchanged, and `order-recorder.ts` still exports it.
+  - For an Amadeus order nothing changes: the nine booking integration files pass unchanged. No test is deleted or weakened.
+  - `node tools/ci/check-pci-refs.mjs` finds no problem: the PCI pack names the adapter step that redacts the order.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply bookings console lint-rules && pnpm --filter @velexis/ota-backend test:int bookings console order-recorder && pnpm lint && node tools/ci/check-pci-refs.mjs`
+- **Note (2026-11-25):** OBE-110, OBE-111 and OBE-118 are added as dependencies: the interface and the fake, the adapter's folder, and the Amadeus offer reader that `readCreatedOrder` calls since OBE-118. G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060, here the entry of the kept re-export, so Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-128 · Create the order through the engine in the booking orchestrator, with the four outcomes
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-124, OBE-127, OBE-110, OBE-111, OBE-113, OBE-114
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.9 and §8 (plan key E3-05; in §8 the row on Amadeus test credentials); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 4 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 10, proposed; item 14, proposed); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (points 1, 2 and 9); ota/backend/src/bookings/booking-orchestrator.service.ts (`completeWith`, `claimIn`, `afterClaim`, `sendOrder`, `createFailureKind`); order-request.builder.ts (`buildCreateOrderRequest`); ota/docs/pci/data-flow.md (the references to `booking-orchestrator.service.ts:677` and `:686`) and ota/docs/pci/README.md §5
+- **Files:** `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/bookings/order-request.builder.ts`, `ota/backend/src/bookings/order-request.builder.test.ts`, `ota/backend/src/bookings/bookings.module.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/create-order-engine.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/architecture-booking.md`, `ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md`, `ota/docs/pci/data-flow.md`
+- **Steps:**
+  1. **Gate:** the Amadeus proof of plan §8 is a human step. The owner gives Amadeus Enterprise test credentials for a proof on the real test environment, or accepts a proof on the stub only. The pull request records which.
+  2. Create order joins the adapter interface with the outcomes `created`, `rejected`, `not_sent` and `unknown`. In the Amadeus adapter `buildCreateOrderRequest` becomes the pure step, with its unit tests, and `createFailureKind` moves in unchanged with its tests, unless OBE-136 moved it first. `order-request.builder.ts` keeps a re-export of the builder until OBE-141: 20 test files import it there. The re-export is an adapter import: once X-060 is merged, `order-request.builder.ts` is on its list with OBE-141 as the task that removes it. If X-060 merged first, this task adds the entry; X-060's test accepts it and OBE-127's `order-recorder.ts` as its only later entries (the lead's ruling S16). Every other adapter answers `unknown` unless it classifies a failure itself.
+  3. The orchestrator knows outcomes only. `completeWith` no longer resolves the Amadeus connection (line 818). `claimIn` takes the source from the priced offer's row, and the adapter gives the connection and office ids (lines 1178 to 1180). `sendOrder` (lines 1485 and 1493) calls the engine. `afterClaim` (line 1326) gets the neutral order of OBE-127 with `created`.
+  4. Each outcome takes today's path of OADR-0003 point 9: `rejected`, `not_sent`, and `unknown` with `504 SUPPLIER_TIMEOUT`. The adapter keeps the public error in the outcome, so every API answer stays.
+  5. The pre-action hook may refuse Create order, and a failing hook fails closed.
+  6. The airline card stays an Amadeus-only extension outside the common interface: the adapter's own entry builds the body with the card inside the call and logs the redacted request. `airlineCardOrderBody` and `redactedAirlineCardOrderBody` move into that entry. No card number or security code reaches a log or a stored payload. The PCI pack cites both (`booking-orchestrator.service.ts:677` and `:686` in `ota/docs/pci/data-flow.md`), and the cited code leaves its file: re-place those references by hand at the adapter's entry (the lead's ruling S16) and run `node tools/ci/check-pci-refs.mjs` (ota/docs/pci/README.md §5).
+  7. Tests: unit tests with the fake for the four outcomes; `create-order-engine.int.test.ts` with the stub. Add a dated note under point 9 of OADR-0003.
+- **Acceptance:**
+  - The orchestrator calls the engine for Create order and no longer calls `createFlightOrders` or the connection resolver; `createFailureKind` lives in the Amadeus adapter, unchanged.
+  - The golden comparison of OBE-124 is equal for create; `complete-stripe.int.test.ts` and `airline-card-completion.int.test.ts` pass unchanged. No test is deleted or weakened.
+  - An adapter without a classifier answers `unknown`: the booking stays `pending` and nothing is voided.
+  - `node tools/ci/check-pci-refs.mjs` finds no problem, and the PCI pack names the adapter's entry as the only reader of the full card.
+- **Verify:** `pnpm --filter @velexis/ota-backend test booking-orchestrator order-request supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings payments golden-booking create-order-engine && pnpm lint && node tools/ci/check-pci-refs.mjs`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the interface and the fake), OBE-111 (the adapter's folder), OBE-113 (the priced offer's `supplier`) and OBE-114 (the engine and its hooks). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060, here the entry of the kept re-export, so Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-129 · Dispatch the completion replay and the airline-card completion by the booking's source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-128, OBE-110, OBE-111, OBE-112, OBE-124, OBE-125
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §4.9 (plan key E3-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 9, proposed; item 10, proposed); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (point 6); ota/docs/flows/checkout-airline-card.md §4; ota/backend/src/bookings/booking-orchestrator.service.ts (`replay`, `completeWithAirlineCard`, `completionIn`)
+- **Files:** `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/payments/airline-card/airline-card-completion.service.ts`, `ota/backend/src/payments/airline-card/airline-card-completion.service.test.ts`, `ota/backend/src/payments/payments.module.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/completion-entries.int.test.ts`, `ota/docs/flows/checkout-airline-card.md`
+- **Steps:**
+  1. The capability declaration says which payment methods a source takes, the card paid to the airline among them. Plan §4.2 has no such row; this row's "refused for a source without that payment method" needs one. The Amadeus adapter declares the airline card; the fake does not, unless a test says so. The airline-card call itself stays outside the common interface (OBE-128 step 6).
+  2. `checkout.completeWithAirlineCard` reads the source of the checkout's priced offer and its capabilities before the claim and before the card is used. A source without that payment method gets the answer the operation already has for a method that is off: `403 FEATURE_DISABLED` with `details.feature` `airlineCard`. No request leaves and no payment changes.
+  3. The replay hook (`BookingOrchestrator.replay`) reads the booking's `supplier` with the row. It answers the same `504` while the booking is `pending` and builds the final answer from the stored rows, as today. It never calls an adapter and reads no stored supplier payload.
+  4. A booking whose supplier no adapter serves is never read as Amadeus: the replay answers the stored `504` and logs the booking id at error level.
+  5. Tests: a unit test refuses the airline-card completion for a checkout of the fake source; `completion-entries.int.test.ts` replays a booking of the fake source in each state and one of an unknown source.
+- **Acceptance:**
+  - `checkout.completeWithAirlineCard` on a checkout whose source lacks the payment method answers `403 FEATURE_DISABLED` before any supplier call; the card reaches no log and no stored payload.
+  - A same-key retry answers by the booking's source; an unknown source is never read as Amadeus. No contract changes.
+  - `airline-card-completion.int.test.ts` and `complete-stripe.int.test.ts` pass unchanged; the golden comparison of OBE-124 is equal. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test booking-orchestrator airline-card && pnpm --filter @velexis/ota-backend test:int payments bookings golden-booking completion-entries`
+- **Note (2026-11-25):** OBE-110, OBE-111, OBE-112, OBE-124 and OBE-125 are added as dependencies: the capability declaration, the Amadeus adapter that declares the card, the registry that answers a source's capabilities, the golden comparison of the acceptance and Verify (OBE-124, added as a producer: the lead's ruling S5), and `bookings.supplier`. Proposed (lead); confirm in the pull request: the payment-method capability of step 1, which plan §4.2 does not list. OBE-155 cuts the checkout's payment methods by it.
+
+### OBE-130 · Run the extras catalogue and the price with extras through the engine; skip the step without extras
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-120, OBE-110, OBE-111, OBE-112, OBE-113, OBE-114
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §4.11 (plan key E3-07; the row "Price, extras"; the extras table); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 12); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 2 and 6; item 8, proposed; item 9, proposed); ota/backend/src/checkout/ancillaries.service.ts (`quote`, `buildServicesRequest`, `servicesErrorOf`); ota/backend/src/shopping/priced-offers.service.ts (`ancillaries`, `ancillariesForCheckout`)
+- **Files:** `ota/backend/src/checkout/ancillaries.service.ts`, `ota/backend/src/checkout/ancillaries.service.test.ts`, `ota/backend/src/checkout/checkout.module.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/extras-engine.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/checkout-stripe.md`
+- **Steps:**
+  1. The capability "Extras" gets two adapter methods: the catalogue of a priced offer and the price with selections. The Amadeus adapter declares what the code serves today.
+  2. `buildServicesRequest` becomes the Amadeus adapter's pure step; its unit tests move unchanged. The adapter answers `priced`, `sold_out`, `refused` or `unavailable` and keeps what `servicesErrorOf` needs for today's error.
+  3. `AncillariesService.quote` (line 977) and the orchestrator's `repriceWithExtras` (line 1681) call the engine with the source of the base priced offer's row. The fall-back to `repriceFlights` for a refused extra stays.
+  4. The catalogue (`ancillaries`, `ancillariesForCheckout`) asks the capability first. Without it, or with an empty catalogue, the step is skipped: no adapter call and no `supplier_requests` row. A selection for such an offer gets `422 ANCILLARY_NOT_AVAILABLE`, which `checkout.setAncillaries` lists today; no contract changes.
+  5. Tests: unit tests with the fake (no capability, an empty catalogue, each outcome); `extras-engine.int.test.ts` with the stub; one test pins today's request body.
+- **Acceptance:**
+  - For an offer whose source declares no extras, or whose catalogue is empty, the extras step makes no adapter call; the code tests no supplier's name.
+  - `ancillaries.service.ts` imports nothing from `src/supply/adapters/`; the two call lines go through the engine.
+  - `ancillaries.int.test.ts` and `complete-stripe.int.test.ts` pass unchanged, and the request body of the price with extras is byte-equal to today's. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test ancillaries supply lint-rules && pnpm --filter @velexis/ota-backend test:int checkout bookings extras-engine && pnpm lint`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the interface and the fake), OBE-111 (the adapter's folder), OBE-112 (the capabilities), OBE-113 (the priced offer's `supplier`) and OBE-114 (the engine). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-131 · Make the supplier's card-fee quote a capability and skip it for a source without it
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-120, OBE-110, OBE-111, OBE-112, OBE-113, OBE-114, OBE-119
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E3-08; the sentence that the flow skips a step whose capability is missing); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 9, proposed); ota/backend/src/payments/card-fees.ts (`quote`, `cardFeeRequest`, `quotedCardFee`, `pricedOfferCardFee`); the block of OBE-121 (the same form for upsell)
+- **Files:** `ota/backend/src/payments/card-fees.ts`, `ota/backend/src/payments/card-fees.test.ts`, `ota/backend/src/payments/payments.module.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/checkout-stripe.md`
+- **Steps:**
+  1. Add the capability "card-fee quote" and an adapter method for it. The Amadeus adapter declares it: its pure step is today's `cardFeeRequest`, its call `quoteAirOffers`, its reader what `quotedCardFee` reads of the answer. Their unit tests move unchanged.
+  2. The engine routes the quote by the source of the priced offer's row and answers the outcome set of the row "Price, extras" of plan §4.1.
+  3. `CardFees.quote` (line 373) asks the capability of the priced offer's source. With it, it calls the engine and maps each outcome to the error of today. Without it, the step is skipped: no adapter call, no `supplier_requests` row and a supplier fee of zero; the OTA's own fee lines apply as today.
+  4. `pricedOfferCardFee` reads a fee that the priced offer already holds through the reader of the offer's source (OBE-119).
+  5. Unit tests with the fake: without the capability, no call and the OTA's lines alone; with it, the call goes through the engine. One test pins today's request body.
+- **Acceptance:**
+  - For a priced offer whose source declares no card-fee quote, `CardFees.quote` makes no adapter call and answers the OTA's fee lines with a supplier fee of zero.
+  - For Amadeus nothing changes: the payments integration tests pass unchanged, and the quote's request body is byte-equal to today's.
+  - `card-fees.ts` imports nothing from `src/supply/adapters/`. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test card-fees supply lint-rules && pnpm --filter @velexis/ota-backend test:int payments && pnpm lint`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the interface and the fake), OBE-111 (the adapter's folder), OBE-112 (the capabilities), OBE-113 (the priced offer's `supplier`), OBE-114 (the engine) and OBE-119 (the priced-offer reader of step 4). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-132 · Send the orchestrator's issue step through Request ticketing and handle `accepted`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-128, OBE-110, OBE-111, OBE-114, OBE-124, OBE-125
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.9 (plan key E3-09; the row "Request ticketing"; steps 7 and 8 of the flow); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 14, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 4, proposed; item 5, proposed; item 9, proposed); ota/backend/src/bookings/booking-orchestrator.service.ts (`issue`); cancellation-state.ts (a state kept as a booking event)
+- **Files:** `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/bookings/order-request.builder.ts`, `ota/backend/src/bookings/order-request.builder.test.ts`, `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/request-ticketing.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/ticketing-and-documents.md`
+- **Steps:**
+  1. Request ticketing joins the adapter interface with the outcomes `issued`, `accepted`, `rejected`, `balance_refused` and `unknown`. The Amadeus adapter builds the request with today's `buildIssueRequest`, moved with its tests, calls `issueFlightOrder` and answers `issued` with the neutral order and its tickets, else `rejected` or `unknown`. `order-request.builder.ts` keeps a re-export of `buildIssueRequest` until OBE-141, for the three test files that import it; the file stays on the list of X-060 until then.
+  2. The orchestrator's `issue` (line 2428) calls the engine with the booking's source. Its claim and the cancellation hold stay. Hooks observe only.
+  3. `issued`: the tickets are recorded as today. For Amadeus every other outcome takes today's failure path and retry schedule.
+  4. `accepted`: the supplier tickets later. No ticket rows are written and the booking is not `ticketed`. One function, which the ticketing job reuses (OBE-133), stores the acceptance as a booking event, as the cancellation flag is one (`cancellation-state.ts`), so that no reader takes it for a claim in flight and no second request is scheduled.
+  5. For a source paid from a supplier balance, `rejected`, `balance_refused` and `unknown` schedule no next attempt and raise a staff alert in neutral words: no re-send (plan §4.9).
+  6. Tests: unit tests with the fake for the five outcomes; `request-ticketing.int.test.ts` with the stub.
+- **Acceptance:**
+  - `booking-orchestrator.service.ts` no longer calls `issueFlightOrder`.
+  - With the fake answering `accepted`, the booking has no ticket rows, is not `ticketed`, and no second request leaves for it. For a fake source paid from a supplier balance, the failure outcomes schedule no next attempt and alert staff.
+  - `complete-stripe.int.test.ts` and `ticketing.int.test.ts` pass unchanged; the golden comparison of OBE-124 is equal for issue. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test booking-orchestrator order-request supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings golden-booking request-ticketing && pnpm lint`
+- **Note (2026-11-25):** The plan names no column for `accepted`. Proposed (lead); confirm in the pull request: the booking event of step 4. Added dependencies: OBE-110 (the interface and the fake), OBE-111 (the adapter's folder), OBE-114 (the engine), OBE-124 (the golden comparison) and OBE-125 (`bookings.supplier`). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-133 · Run the ticketing job through the engine: read first, request once, never again after `accepted`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-126, OBE-132, OBE-134, OBE-110, OBE-114, OBE-124
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.9 (plan key E3-10; the bullet on ticketing answers); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 14, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 5, proposed; item 8, proposed); ota/docs/adr/0008-ticketing-policy.md (points 4 and 5); ota/backend/src/bookings/ticketing.service.ts (the file header; `dueBookingIds`, `claimSkip`, `attempt`, `getOrder`, `issueOrder`, `recordIssuedTickets`)
+- **Files:** `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/bookings/ticketing.service.test.ts`, `ota/backend/src/console/console-booking-actions.service.ts` (its call of the record step), `ota/backend/src/supply/engine/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/ticketing-job.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/ticketing-and-documents.md`, `ota/docs/runbooks/ticketing-failures.md`
+- **Steps:**
+  1. `getOrder` (line 599) calls the engine's Read order (OBE-134) and `issueOrder` (line 622) the engine's Request ticketing (OBE-132), with the supplier of the claimed row. `ticketing.service.ts` imports nothing from the adapter.
+  2. Read first: every attempt reads the order before it asks. Tickets that the read shows are recorded and nothing is requested, as today (OADR-0008 point 4). A read that answers `not_found` or `unavailable` sends no request.
+  3. Request once: an attempt sends at most one request, under the job's claim and fence, as today.
+  4. No repeat after `accepted`: the job records `accepted` with the function of OBE-132. From then on an attempt on that booking only reads the order and never sends a request, the branch of an abandoned claim included; `recordIssuedTickets` records the tickets that a read shows. It takes the neutral order of OBE-127 instead of the Amadeus `CreatedOrder` and stores its snapshot as given, which the adapter redacted, so OBE-174 records PKFare tickets with it. Until OBE-137 sends the console's issue through the engine, its other caller, `recordIssue` in `console-booking-actions.service.ts`, hands it the neutral order that OBE-127's adapter step makes of its `CreatedOrder`. Whichever of OBE-133 and OBE-137 merges first changes the signature; the later keeps it. The signatures of `dueBookingIds` and `claimSkip` stay: `complete-stripe.int.test.ts` calls both.
+  5. For Amadeus the retry schedule, the 8 attempts, the deadline rule and the give-up alert stay (OADR-0008 points 4 and 5). For a source paid from a supplier balance the failure outcomes schedule no retry and alert staff, as in OBE-132. Hooks observe only.
+  6. Tests: unit tests with the fake (a read that shows tickets; `accepted`, then five scans without a second request; an abandoned claim after `accepted`; each failure outcome); `ticketing-job.int.test.ts` with the stub. Update the runbook.
+- **Acceptance:**
+  - Lines 599 and 622 go through the engine; `ticketing.service.ts` imports nothing from `src/supply/adapters/`.
+  - After `accepted`, no scan and no attempt sends a second request for the booking, an abandoned claim included; a unit test with the fake proves it.
+  - `recordIssuedTickets` takes the neutral order and redacts nothing itself; the console's issue records its tickets as before (`issue-cancel.int.test.ts` passes unchanged).
+  - For Amadeus the job behaves as before: `ticketing.int.test.ts` passes unchanged, and the golden comparison of OBE-124 is equal for read and issue. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test ticketing console-booking-actions supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings console golden-booking ticketing-job && pnpm lint`
+- **Note (2026-11-25):** OBE-134 is added to the plan's dependencies: "read first" uses Read order, which OBE-134 adds to the interface. OBE-110, OBE-114 and OBE-124 are added too: the fake, the engine and the golden comparison. G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-134 · Run the booking sync through Read order; read stored order snapshots by their source's reader
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-127, OBE-110, OBE-111, OBE-114, OBE-118, OBE-125
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E3-11; the row "Read order"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 8, proposed; item 14, proposed); ota/backend/src/bookings/booking-sync.service.ts (the file header; `read`, `record`, `bucketWaitMs`); bookings.mapper.ts (`snapshotOffersOf`, `customerOrderOf`); ota/backend/src/console/console-bookings.mapper.ts (`consoleOrderOf`); the block of OBE-118 (`supply/readers/`); guidebook/content/issues/issues.json (KI-045, its `where` lines)
+- **Files:** `ota/backend/src/bookings/booking-sync.service.ts`, `ota/backend/src/bookings/booking-sync.service.test.ts`, `ota/backend/src/bookings/` (the readers of the stored snapshot), `ota/backend/src/console/` (the readers of the stored snapshot), `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/supply/readers/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/read-order.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/architecture-booking.md`
+- **Steps:**
+  1. Read order joins the adapter interface with the outcomes `order`, `not_found` and `unavailable`. `order` carries the neutral order of OBE-127 and says whether the supplier cancelled it. The Amadeus adapter calls `getFlightOrder`; a `404` is `not_found`; any other failure is `unavailable`, with the public error and the rate-limit wait that `bucketWaitMs` reads today.
+  2. `BookingSyncService.read` (line 867) calls the engine with the supplier of the claimed row. Hooks observe only. The claim, the diff, the events and the e-mails stay.
+  3. `record` stores the snapshot that the adapter redacted. Business code redacts no order.
+  4. `supply/readers/` gets the look-up from a booking's `supplier` to its snapshot reader. The sites that read `bookings.order_snapshot` as an Amadeus order dispatch through it (`snapshotOffersOf`, `customerOrderOf`, `consoleOrderOf` and their callers; the pull request lists each). A snapshot whose supplier has no reader is refused, never read with another reader.
+  5. Tests: unit tests with the fake (each outcome; a fake snapshot refused by the Amadeus reader); `read-order.int.test.ts` with the stub.
+  6. Guidebook: the known issue KI-045 (`guidebook/content/issues/issues.json`) cites `booking-sync.service.ts:1000`, the sync's redaction of the snapshot, which step 3 moves into the adapter. Update that `where` line, every other KI-045 line in a file this task changes, and its text, then rebuild the bundle with `node guidebook/tools/build.mjs`.
+- **Acceptance:**
+  - Line 867 goes through Read order, and `booking-sync.service.ts` imports nothing from `src/supply/adapters/`.
+  - A stored snapshot is read through the reader of its booking's supplier; another supplier's snapshot and an unknown supplier are refused.
+  - `sync.int.test.ts`, `customer-bookings.int.test.ts`, `guest-access.int.test.ts` and `bookings-read.int.test.ts` pass unchanged. No test is deleted or weakened.
+  - `node --test guidebook/tools/guidebook.test.mjs` passes, and KI-045 points at the code it describes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test booking-sync bookings.mapper console supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings console read-order && pnpm lint && node --test guidebook/tools/guidebook.test.mjs`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the interface and the fake), OBE-111 (the adapter's folder), OBE-114 (the engine), OBE-118 (`supply/readers/`) and OBE-125 (`bookings.supplier`). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`. plan-lint cannot list `guidebook/` in Files: the guidebook change of step 6 ships in this pull request, and CI's guidebook test checks its lines.
+
+### OBE-135 · Move the queue-and-remark search into the Amadeus adapter as Find order; `incomplete` never fails
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-126, OBE-110, OBE-111, OBE-112, OBE-114
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §4.10 (plan key E3-12; the row "Find order"; the capability "Find order"; the paragraph on a lost order answer); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 9, proposed); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (points 3, 4 and 5, with their dated notes); ota/backend/src/bookings/reconcile.service.ts (`search`, `queueCandidates`, `orderOfBooking`, `reconcileDecision`); ota/backend/src/console/review-closure.service.ts (`readOrder`)
+- **Files:** `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/src/bookings/reconcile.service.test.ts`, `ota/backend/src/console/review-closure.service.ts`, `ota/backend/src/console/review-closure.service.test.ts`, `ota/backend/src/console/console.module.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/find-order.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/runbooks/supplier-timeout-and-reconciliation.md`, `ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md`
+- **Steps:**
+  1. Find order joins the adapter interface with the outcomes `found`, `absent` and `incomplete`. The capability "Find order" says how a source searches: by queue and remark, by our reference, or none.
+  2. The search moves into the Amadeus adapter unchanged: the Queue List call (line 1667) and the reads by reference (line 1704), with `queueCandidates`, `readSlice`, `listedGap`, `carriesVelexisRemark`, `orderOfBooking` and their limits. Their unit tests move unchanged. `reconcile.service.ts` keeps a re-export of `RECONCILE_QUEUE_LIST_MAX` until OBE-141, for `reconcile.int.test.ts`; the file stays on the list of X-060 until then.
+  3. The adapter answers `found` only for an order that carries this booking's remark, `absent` only after a complete search, and `incomplete` otherwise, with whether the cause is transient and with the queue's count for the nearly-full alert.
+  4. `ReconcileService.search` calls the engine. The decisions stay business code (`reconcileDecision`): `found` records the order, `absent` fails the booking as today, and `incomplete` never fails or voids: the booking stays `pending`, is searched again and goes to the staff's review at the deadline (OADR-0003 points 4 and 5).
+  5. A source whose capability is "none" is never searched and never failed by this job: its booking stays `pending` for staff (plan §4.10).
+  6. `ReviewClosureService.readOrder` (line 503) uses the adapter's Find order with the record locator that staff give; the proof by the remark stays.
+  7. Tests: unit tests with the fake (`incomplete` before, at and after the deadline; a source without the capability); `find-order.int.test.ts` with the stub. Add a dated note under point 4 of OADR-0003.
+- **Acceptance:**
+  - `reconcile.service.ts` and `review-closure.service.ts` import nothing from `src/supply/adapters/` but the re-export of step 2; lines 1667, 1704 and 503 are behind Find order.
+  - `incomplete` never fails a booking: unit tests with the fake show that only `absent` leads to the not-found decision, and that a source without the capability is never searched.
+  - `reconcile.int.test.ts` and `review-closure.int.test.ts` pass unchanged. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test reconcile review-closure supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings console find-order && pnpm lint`
+- **Note (2026-11-25):** Added dependencies, whose products this task uses: OBE-110 (the interface and the fake), OBE-111 (the adapter's folder), OBE-112 (the capabilities) and OBE-114 (the engine). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-136 · Cancel or release orders through the engine; the mode comes from capability and order state
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-126, OBE-134, OBE-110, OBE-111, OBE-112, OBE-114
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2, §4.12 and §9.1 (plan key E3-13; the row "Cancel or release"; the capability "Cancel, void, refund, change"; in §9.1 the row on A8); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 9, proposed); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (point 7); ota/docs/flows/change-and-cancel.md §3; ota/backend/src/bookings/cancellation.service.ts (`cancel`, `cancelByStaff`, `deleteFailureOf`, `CancellationChecks.readOrder`); cancellation-mode.ts (`cancellationModeOf`); ota/backend/src/console/console-bookings.mapper.ts (`consoleCancellationModeOf`)
+- **Files:** `ota/backend/src/bookings/cancellation.service.ts`, `ota/backend/src/bookings/cancellation.service.test.ts`, `ota/backend/src/bookings/cancellation-mode.ts`, `ota/backend/src/bookings/cancellation-mode.test.ts`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/console/console-bookings.mapper.test.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/cancel-order.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/change-and-cancel.md`
+- **Steps:**
+  1. Cancel or release joins the adapter interface with the outcomes `cancelled`, `order_not_found`, `refused`, `version_conflict`, `not_sent` and `unknown`: the six kinds of today's `DeleteOutcome`. The Amadeus adapter calls `cancelFlightOrder`.
+  2. `deleteFailureOf` moves into the Amadeus adapter with its tests, unchanged. It calls `createFailureKind`, which moves with it when OBE-128 has not moved it yet.
+  3. `cancel` (line 2431) and `cancelByStaff` (line 2711) call the engine with the booking's supplier. Hooks observe only. Each outcome takes today's path.
+  4. The check of a flagged cancellation (`CancellationChecks.readOrder`, line 3411) uses Read order (OBE-134). The cancelled state of its `order` decides as `orderCancelled` does today.
+  5. The mode comes from the capability "Cancel, void, refund, change" and the order state. "By API" keeps today's rule of `cancellationModeOf`: `release`, `void` on the day of issue, else `request_only`. "By request" and a missing capability give `request_only` for a ticketed order, and nothing is sent. `consoleCancellationModeOf` follows the same rule.
+  6. Tests: `cancellation-mode.test.ts` and `console-bookings.mapper.test.ts` gain the capability cases and keep every case of today; unit tests with a fake that cancels by request; `cancel-order.int.test.ts` with the stub.
+- **Acceptance:**
+  - `cancellation.service.ts` imports nothing from `src/supply/adapters/`; lines 2431, 2711 and 3411 go through the engine, and `deleteFailureOf` lives in the Amadeus adapter.
+  - For a fake source that cancels by request, a ticketed booking gets `request_only` and no adapter call; the code tests no supplier's name.
+  - For Amadeus every mode and outcome is as before: `cancel.int.test.ts` and `issue-cancel.int.test.ts` pass unchanged. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test cancellation console-bookings.mapper supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings console cancel-order && pnpm lint`
+- **Note (2026-11-25):** OBE-134 is added to the plan's dependencies: the check of line 3411 uses Read order, which OBE-134 adds to the interface. OBE-110, OBE-111, OBE-112 and OBE-114 are added too: the interface and the fake, the adapter's folder, the capabilities and the engine. G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`.
+
+### OBE-137 · Run the contact change and the console booking actions through the engine, by capability
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-134, OBE-136, OBE-132, OBE-110, OBE-111, OBE-112, OBE-114, OBE-124
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.2 (plan key E3-14; the action table; the capability table); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 9, proposed; item 10, proposed); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (point 7); ota/backend/src/bookings/booking-changes.service.ts (`update`); ota/backend/src/console/console-booking-actions.service.ts (`retrieve`, `patch`, `issue`, `resyncBeforeIssue`, `afterUnknownIssue`); console-bookings.mapper.ts (`consoleActionsOf`); guidebook/content/issues/issues.json (KI-045, its `where` lines)
+- **Files:** `ota/backend/src/bookings/booking-changes.service.ts`, `ota/backend/src/bookings/booking-changes.service.test.ts`, `ota/backend/src/bookings/ticketing.service.ts` (its record step, if this task merges first), `ota/backend/src/console/console-booking-actions.service.ts`, `ota/backend/src/console/console-booking-actions.service.test.ts`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/console/console-bookings.mapper.test.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/console-actions.int.test.ts`, `eslint.config.mjs` (the list of X-060, once merged), `ota/docs/flows/console-operations.md`, `ota/docs/flows/change-and-cancel.md`
+- **Steps:**
+  1. The order patch has no row in the plan's action table. Add one optional operation to the interface and the engine for a change of an order's contact and traveller details, with a capability and the hook policy "observe only". Its outcome set is what the two callers tell apart today: applied (with the new order), refused, version conflict, not sent and unknown. Extend the unit test of OBE-110 that pins the outcome names, and the engine's test `hook-failure-never-blocks-servicing` (OBE-114) to this operation.
+  2. The Amadeus adapter builds today's PATCH bodies (the builders move with their tests) and calls `patchFlightOrder`. `BookingChangesService.update` (line 663) and the console's `patch` (line 1303) call the engine with the booking's supplier.
+  3. The console's `retrieve` (line 1183), `resyncBeforeIssue` (line 2312) and `afterUnknownIssue` (line 2347) use Read order (OBE-134). `issue` (line 2138) uses Request ticketing (OBE-132), with its own claim, capture and fence as today. `recordIssue` hands `recordIssuedTickets` the neutral order that these give. If this task merges before OBE-133, it makes that change of OBE-133 step 4 itself, and the ticketing job hands `recordIssuedTickets` the neutral order that OBE-127's adapter step makes of its `CreatedOrder` until OBE-133; the later of the two keeps it.
+  4. `consoleActionsOf` takes the capabilities of the booking's source: an action whose capability is missing is false. Its reason is one that the contract has, `no_amadeus_order`, so no contract changes; OBE-156 brings neutral reasons. Each console operation refuses by the same rule before any adapter call.
+  5. Tests: unit tests with the fake (each outcome of the patch; an action switched off by a missing capability); `console-actions.int.test.ts` with the stub.
+  6. Guidebook: the known issue KI-045 (`guidebook/content/issues/issues.json`) cites lines of `console-booking-actions.service.ts` (790 to 815, 947 to 952, 1962 and 1963) and its functions `orderRemarksOf` and `keptOrderDataOf`. Update its `where` lines, and its text where such a function moves into the adapter, then rebuild the bundle with `node guidebook/tools/build.mjs`.
+- **Acceptance:**
+  - `booking-changes.service.ts` and `console-booking-actions.service.ts` import nothing from `src/supply/adapters/`; the six call lines go through the engine.
+  - For a booking whose source lacks a capability, the matching console action is false with a reason, and its operation is refused before any adapter call. The code tests no supplier's name.
+  - `update.int.test.ts`, `bookings-actions.int.test.ts` and `issue-cancel.int.test.ts` pass unchanged; the golden comparison of OBE-124 is equal for patch, read and issue. No test is deleted or weakened, and no contract changes.
+  - `node --test guidebook/tools/guidebook.test.mjs` passes, and KI-045 points at the code it describes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test booking-changes console ticketing supply lint-rules && pnpm --filter @velexis/ota-backend test:int bookings console golden-booking console-actions && pnpm lint && node --test guidebook/tools/guidebook.test.mjs`
+- **Note (2026-11-25):** OBE-132 is added to the plan's dependencies: the console's issue uses Request ticketing. OBE-110, OBE-111, OBE-112, OBE-114 and OBE-124 are added too: the interface and its pinned outcome names, the adapter's folder, the capabilities, the engine and the golden comparison. The plan's row has neither the patch operation of step 1 nor the reason of step 4. Proposed (lead); confirm in the pull request: both, the reason until OBE-156. G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060: an entry leaves when its file imports no adapter any more. Verify runs `lint-rules` and `pnpm lint`. plan-lint cannot list `guidebook/` in Files: the guidebook change of step 6 ships in this pull request, and CI's guidebook test checks its lines.
+
+### OBE-138 · Put the Amadeus tools behind one tools class with the own-account guard
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-060, OBE-106, OBE-111, OBE-112
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §6 (plan key E3-15; the bullet on Amadeus's own tools; the exit of P3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6 and 21; item 18, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 1; item 10, proposed); the blocks of OBE-106, X-060 and OBE-149; ota/backend/src/identity/staff/staff-auth.service.ts (`toConsoleTenant`); guidebook/content/issues/issues.json (KI-045, its `where` lines)
+- **Files:** `ota/backend/src/supply/tools/`, `ota/backend/src/supply/supply.module.ts`, `ota/backend/src/console/raw-amadeus.service.ts`, `ota/backend/src/console/pnr-import.service.ts`, `ota/backend/src/console/queues.service.ts`, `ota/backend/src/console/queue-poller.processor.ts`, `ota/backend/src/console/amadeus-tools.guard.ts`, `ota/backend/src/console/` (the unit tests of these files), `ota/backend/src/identity/staff/staff-auth.service.ts`, `eslint.config.mjs`, `ota/docs/flows/console-operations.md`
+- **Steps:**
+  1. Add one tools class under `ota/backend/src/supply/tools/`: the only door from business code to the Amadeus client for the Amadeus-only tools. It has one method per call line of today, twelve in all: eight in `raw-amadeus.service.ts` (lines 500 to 744), two in `pnr-import.service.ts` (1228 and 1820), one in `queues.service.ts` (364) and one in `queue-poller.processor.ts` (209). Each returns what the client returns.
+  2. The own-account guard is one method of the class: whether the tenant's Amadeus connection of the environment is its own and active, as `ConnectionResolver.resolve()` reports it. The gate of OBE-106 and `toConsoleTenant` call it. It stays on; OBE-149 re-keys it to supply sources.
+  3. The guard covers the console's calls only. The worker's `queues.poll` keeps polling for every OTA. The tools class refuses nothing by itself: the gate of OBE-106 decides for its 15 operations, and `console.bookings.findByRecordLocator`, which shares the call of line 1820, stays served for every OTA until OBE-149 refuses it.
+  4. The four files, the gate of OBE-106 (`amadeus-tools.guard.ts`) and `staff-auth.service.ts` import nothing from the adapter: what they need of its types, limits and error marks comes through the tools class. Remove their entries from the list of X-060.
+  5. Tests: the unit tests of the four services inject the tools class; a unit test of the guard covers a `tenant`, a `velexis` and a missing connection.
+  6. Guidebook: the known issue KI-045 (`guidebook/content/issues/issues.json`) cites `pnr-import.service.ts` lines 1443 and 1501 to 1513. Move those `where` lines to where that code is now, then rebuild the bundle with `node guidebook/tools/build.mjs`.
+- **Acceptance:**
+  - The four files, `amadeus-tools.guard.ts` and `staff-auth.service.ts` import nothing from `src/supply/adapters/`; the twelve call lines go through the tools class.
+  - `amadeus-tools-own-account` passes without a change, and `queues.poll` still stores snapshots for a `velexis` OTA.
+  - `raw-amadeus.int.test.ts`, `pnr-import.int.test.ts` and `queues.int.test.ts` pass unchanged. No test is deleted or weakened.
+  - `node --test guidebook/tools/guidebook.test.mjs` passes, and KI-045 points at the code it describes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test console supply staff-auth lint-rules && pnpm --filter @velexis/ota-backend test:int console m4 && pnpm lint && node --test guidebook/tools/guidebook.test.mjs`
+- **Note (2026-11-25):** OBE-106 is added to the plan's dependencies: this task moves its gate's read of the connection resolver behind the tools class. OBE-111 and OBE-112 are added too: the adapter's folder and `supply.module.ts`. "No file outside the adapter imports the client" holds once OBE-128 to OBE-137 are merged; OBE-141 proves it and deletes the list of X-060. Proposed (lead): OBE-149 refuses the PNR lookup for an OTA without its own active Amadeus connection; until then this task leaves it served (step 3). This task keeps one Amadeus connection per tenant and environment: serving an OTA's own connection beside Velexis's is OBE-216 (M8). G4: the root `eslint.config.mjs` (a foundation file) changes only in the list of X-060, so Verify runs `lint-rules` and `pnpm lint`. plan-lint cannot list `guidebook/` in Files: the guidebook change of step 6 ships in this pull request, and CI's guidebook test checks its lines.
+
+### OBE-139 · Add the optional service request and notification operations to the interface and the engine
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-134, OBE-110, OBE-114
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.10 and §4.12 (plan key E3-16; the row "Service request"; the bullet "PKFare's notifications are not authenticated"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 9, proposed; item 14, proposed); ota/backend/src/supply/engine/ (the action table of OBE-114); the block of OBE-182
+- **Files:** `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/README.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. Service request: an optional adapter method for the kinds void, refund and change, with the outcomes `quoted`, `submitted`, `completed` and `refused` (plan §4.1). The capability "Cancel, void, refund, change" says whether a source serves a kind by API, by request or not at all. The engine routes by the booking's source and never calls an adapter that does not declare the kind. Hooks observe only: a failing hook gives the event `supply.hook_failed` of OBE-114, and the request goes on.
+  2. Notification: an optional adapter method that reads an inbound supplier message into a neutral trigger: which order it names, and nothing else. The engine's only reaction is Read order (OBE-134) for that booking. It never changes a booking, a payment or a ticket from the message's content (`notification-triggers-read-only`).
+  3. A message that names no known booking is dropped and counted. The message is not stored; a log line holds counts and ids only.
+  4. The Amadeus adapter declares neither. No business code calls them yet; the endpoint for notifications is OBE-182.
+  5. Unit tests with the fake: `notification-triggers-read-only` (a message that claims a ticket or an amount leads to one Read order and to no other write); each outcome of a service request.
+  6. Describe both operations in README §2 and architecture.md §2.
+- **Acceptance:**
+  - The interface and the engine have the optional service request (void, refund, change; `quoted`, `submitted`, `completed`, `refused`) and the notification; the Amadeus adapter declares none.
+  - The test `notification-triggers-read-only` passes with the fake: a notification leads to at most one Read order and to no other write, whatever it claims.
+  - An adapter that declares no service request is never called, and a failing hook does not stop one. No file of `ota/backend/src` outside `src/supply/` changes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply && pnpm --filter @velexis/ota-backend typecheck`
+- **Note (2026-11-25):** OBE-110 and OBE-114 are added as dependencies: the interface with the fake, and the engine with its action table.
+
+### OBE-140 · Add the adapter conformance suite, part 2: orders, ticketing, read, cancel and notifications
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-128, OBE-129, OBE-130, OBE-131, OBE-132, OBE-133, OBE-134, OBE-135, OBE-136, OBE-137, OBE-138, OBE-139, OBE-110, OBE-122
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2 and §4.15 (plan key E3-17; in §4.2 the line "Proof"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 4 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 9, proposed); the block of OBE-122 (the harness and part 1)
+- **Files:** `ota/backend/test/supply/conformance/`, `ota/backend/test/integration/supply/conformance-amadeus.int.test.ts`, `ota/backend/test/integration/supply/conformance-fake.int.test.ts`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/README.md`
+- **Steps:**
+  1. Extend the harness of OBE-122: both test files run part 2 beside part 1. A case runs only for an adapter that declares its capability.
+  2. Create order: a scenario for each of `created`, `rejected`, `not_sent` and `unknown`, and no other outcome. `create-order-lost-answer`: the supplier creates the order and the answer is lost; the adapter answers `unknown`, never `rejected` or `not_sent`, and sends no second request.
+  3. Find order: `found` only for this booking's order and `absent` only after a complete search. `find-order-incomplete-never-absent`: a cut list, a failed read or an unreadable entry gives `incomplete`.
+  4. Ticketing now and later: a source that tickets now answers `issued` with ticket numbers; one that tickets later answers `accepted` and gets no second request.
+  5. Read order, Cancel or release, service requests and notifications: every outcome that the adapter's supplier can produce, and none outside the set; one notification leads to one Read order.
+  6. Redaction of the order snapshot: a known document number, card number, contact value and secret of the scenario are in no snapshot, call-log row, log line or error.
+  7. The suite's own test: a broken fake fails the matching case (`rejected` on a lost answer, `absent` on an incomplete search, a second ticketing request, an unredacted snapshot).
+- **Acceptance:**
+  - Part 2 runs against the Amadeus adapter with its stub and against the fake: the four create outcomes with `create-order-lost-answer`, `find-order-incomplete-never-absent`, ticketing now and later, read, cancel, service requests, notifications and the redaction of the order snapshot.
+  - A broken fake fails the matching case, and OBE-184 can run part 2 for another adapter without copying a case.
+  - No file under `ota/backend/src` and no existing test changes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int supply/conformance`
+- **Note (2026-11-25):** OBE-110 and OBE-122 are added as dependencies: the fake and the harness of part 1.
+
+### OBE-141 · Prove phase E: equal booking golden files and the booking load test through the engine
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-140, OBE-124, X-060
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §6 (plan key E3-18; the line "Proof" and the exit of P3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 19); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2); ota/docs/performance.md §6 and §9; ota/backend/test/load/README.md (the section on `booking-load.mjs`); the blocks of OBE-124, X-060 and OBE-123
+- **Files:** `ota/docs/performance.md`, `ota/backend/test/load/README.md`, `ota/backend/README.md`, `eslint.config.mjs`, `ota/backend/src/lint-rules.test.ts`, `ota/backend/src/` (the last adapter imports and the re-exports), `ota/backend/test/` (import paths only)
+- **Steps:**
+  1. Golden: run `golden-booking.int.test.ts` on a head with every task of phase E and compare the golden files with their first recording (the commit of OBE-124): byte-equal. A difference is a defect: report it, and do not record over it.
+  2. The boundary: no file of `ota/backend/src` outside `src/supply/` imports from `src/supply/adapters/`. Switch the Nest modules that still import the Amadeus module (`bookings.module.ts`, `checkout.module.ts`, `console.module.ts`, `jobs.module.ts`, `payments.module.ts` and `shopping.module.ts` at commit 04127444) and the command-line entry `cli.ts` to `supply.module.ts`. The guidebook's components diagram of the OTA API (`guidebook/content/apps/ota-api/diagrams/components.json`) then shows those modules calling `supply`, not the Amadeus adapter; rebuild its bundle with `node guidebook/tools/build.mjs`. If a service still imports the client, stop and name the task that left it.
+  3. Remove the re-exports that phase E kept: `readCreatedOrder`, `buildCreateOrderRequest`, `buildIssueRequest` and `RECONCILE_QUEUE_LIST_MAX`, the last entries of `order-recorder.ts`, `order-request.builder.ts` and `reconcile.service.ts` on the list of X-060. The test files that import them change their import paths only; against the merge base of OBE-124 the nine booking integration files differ in nothing else. The list of X-060 is then empty: delete it; its case in `lint-rules.test.ts` now proves that the rule has no exception.
+  4. Load: run `booking-load.mjs` before (the merge base of OBE-124) and after (this head), one build each, as §6 of performance.md did, on a Redis of its own and under the machine-wide end-to-end lock (load README). Write down `nproc` and the load average.
+  5. Record a new section in performance.md and a row in its §9, with the figures of §6 before and after. If a figure that met its budget before misses it after, stop and tell the lead.
+- **Acceptance:**
+  - The golden comparison is equal: byte-equal request bodies and `supplier_requests` rows against the first recording of OBE-124.
+  - The nine booking integration files differ in import paths only and are green; the pull request lists every other existing test file that phase E changed and shows that no assertion was deleted or weakened.
+  - No file outside `src/supply/` imports from `src/supply/adapters/`, the list of X-060 is gone, and `pnpm lint` passes.
+  - performance.md has the before and after runs of `booking-load.mjs`, with a §9 row.
+- **Verify:** `pnpm --filter @velexis/ota-backend typecheck && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int && pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:xb && pnpm lint && node --test guidebook/tools/guidebook.test.mjs && node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 30`
+- **Note (2026-11-25):** The booking load test is ota/backend/test/load/booking-load.mjs, not a file of tools/perf. Steps 2 and 3 come from the exit of P3, which also wants the nine files unchanged. Proposed (lead); confirm in the pull request: they change their import paths only. OBE-124 and X-060 are added as dependencies: the golden files and the list. G4: the root `eslint.config.mjs` (a foundation file) loses the list of X-060 here, so Verify runs `lint-rules` (in the unit tests) and `pnpm lint`. plan-lint cannot list `guidebook/` in Files: the diagram change of step 2 ships in this pull request, and CI's guidebook test checks the bundle.
+
+### OBE-142 · Add the engine action Check payable and run it between create and record
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-128, OBE-110, OBE-111, OBE-114, OBE-124
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.9 (plan key BM3-01; the row "Check payable"; step 4 of the flow); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed; item 14, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 4, proposed; item 6, proposed); ota/backend/src/bookings/booking-orchestrator.service.ts (`afterClaim`, `unknownOutcome`, `capture`); the block of OBE-170
+- **Files:** `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/check-payable.int.test.ts`, `ota/docs/architecture-booking.md`
+- **Steps:**
+  1. Check payable joins the adapter interface with the outcomes `payable`, `refused`, `higher_amount`, `balance_short` and `unknown`. Hooks observe only: a failing hook gives the event `supply.hook_failed` of OBE-114, and the action goes on.
+  2. The Amadeus adapter answers `payable` from the created order, without a call: no `supplier_requests` row and no request to Amadeus.
+  3. The orchestrator runs the action as a step of its own between Create order (`created`) and the record step, for every source. `payable`: the flow goes on to the record step and the capture, as today.
+  4. Any other outcome: no confirmation and no capture. `unknown` leaves the booking `pending` for staff, with the card hold kept. For `refused`, `higher_amount` and `balance_short` the plan releases the order and voids the hold (§4.9); that release path is OBE-170. Until then these three take the path of `unknown`; the staff alert uses neutral words, and the error log line names the outcome.
+  5. Tests: unit tests with the fake for the five outcomes; `check-payable.int.test.ts` shows that a completion with the Amadeus stub sends the same requests as before. Update architecture-booking.md §1.
+- **Acceptance:**
+  - The interface and the engine have Check payable with exactly `payable`, `refused`, `higher_amount`, `balance_short` and `unknown`; the orchestrator runs it between create and record for every source.
+  - The Amadeus adapter answers `payable` without a call: the golden comparison of OBE-124 is equal, and `complete-stripe.int.test.ts` passes unchanged.
+  - With the fake, only `payable` reaches the capture. After any other outcome this step captures nothing, voids nothing and sends no confirmation.
+- **Verify:** `pnpm --filter @velexis/ota-backend test booking-orchestrator supply && pnpm --filter @velexis/ota-backend test:int bookings golden-booking check-payable`
+- **Note (2026-11-25):** The plan's row is silent on `refused`, `higher_amount` and `balance_short` before the release path of OBE-170 exists. Proposed (lead); confirm in the pull request: they take the path of `unknown`, with a neutral staff alert (step 4). OBE-110, OBE-111, OBE-114 and OBE-124 are added as dependencies: the interface and the fake, the adapter's folder, the engine and the golden comparison.
+
+### OBE-143 · Hold the confirmation e-mail and event back until ticketing is accepted; add the "finalising" text
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-127, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3, §4.9 and §4.10 (plan key BM3-02; A34; step 5 of the flow; the bullet "The traveller is told the truth"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 4, proposed; item 11, proposed); ota/backend/src/bookings/order-recorder.ts (`record`, `confirmationEmail`, the event `booking.created`, `ticketingMessageOf`); the blocks of OBE-156, OBE-178 and OBE-186
+- **Files:** `ota/backend/src/bookings/order-recorder.ts`, `ota/backend/src/bookings/order-recorder.test.ts`, `ota/backend/src/bookings/bookings.mapper.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/test/integration/supply/held-confirmation.int.test.ts`, `ota/docs/flows/ticketing-and-documents.md`
+- **Steps:**
+  1. The recorder gets an option for an order of a source that tickets later; the ticketing capability decides it, never a supplier's name (A34).
+  2. With the option, the record step writes the booking and its children as today, but queues no `booking.confirmed` e-mail and writes no customer-visible event "confirmed by the airline" (the summary of `booking.created`).
+  3. A second entry of the recorder serves the moment ticketing is accepted: it queues the held-back e-mail and writes that event, exactly once; a repeated call changes nothing.
+  4. Without the option nothing changes; Amadeus tickets now and never sets it. This task wires no caller: OBE-178 calls the second entry where Request ticketing answers `accepted` (OBE-132).
+  5. `ticketingMessageOf` gets the sentence "We are finalising your booking" (plan §4.10) for a booking whose confirmation is held back. It takes that fact as one more input, derived from stored rows: no column is added, and the contract does not change (the member is a free text). The other sentences stay as they are at the merge base, and the `manual_review` sentence keeps "Our team will issue your e-tickets", which `booking-orchestrator.service.test.ts` pins. The problem sentences for `failed` and `manual_review` are OBE-156's, and the sentence for a ticketless booking is OBE-186's: whichever of OBE-143, OBE-156 and OBE-186 merges last keeps every change, and the pinned "Our team will issue your e-tickets" holds.
+  6. Tests: `held-confirmation.int.test.ts` for both entries, the second also called twice; unit tests of `ticketingMessageOf`.
+- **Acceptance:**
+  - With the option, the record step queues no `booking.confirmed` e-mail and writes no customer-visible confirmation event; the second entry writes both exactly once.
+  - `ticketingMessageOf` answers "We are finalising your booking" while the confirmation is held back and keeps its other sentences, "Our team will issue your e-tickets" included.
+  - Without the option the recorder behaves as before: the nine booking integration files pass unchanged. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test order-recorder booking-orchestrator bookings.mapper && pnpm --filter @velexis/ota-backend test:int bookings held-confirmation`
+- **Note (2026-11-25):** OBE-110 is added as a dependency: the ticketing capability of the interface decides the option. OBE-156 and OBE-186 also change `ticketingMessageOf`: whichever of OBE-143, OBE-156 and OBE-186 merges last keeps every change; the pinned "Our team will issue your e-tickets" holds.
+
+### OBE-144 · Apply the ticketing policy by capability to sources paid from a supplier balance
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-128, OBE-129, OBE-110, OBE-112, OBE-113, OBE-114
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §4.9 (plan key BM3-03; the last bullet of §4.9); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4, 5 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 2 and 3; item 9, proposed; open question 2); ota/docs/adr/0008-ticketing-policy.md (point 1); ota/docs/adr/0020-suppliers-paid-from-a-balance.md ("Notes that wait for a decision"); ota/backend/src/bookings/order-request.builder.ts (`issueAtCreate`); ota/admin/src/app/(console)/settings/storefront/sections.tsx (the ticketing policy field)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/supply/engine/`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/order-request.builder.ts`, `ota/backend/src/bookings/order-request.builder.test.ts`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/ticketing-policy.int.test.ts`, `ota/admin/src/app/(console)/settings/storefront/sections.tsx`, `ota/admin/src/app/(console)/settings/storefront/sections.test.tsx`, `ota/admin/docs/routes.md`, `ota/docs/adr/0008-ticketing-policy.md`, `ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
+- **Steps:**
+  1. Contract first. The plan names no error for the refusal at completion. Proposed (lead); confirm in the pull request: a code that `checkout.complete` already lists, `422 UNPROCESSABLE`, with one new neutral `details.reason`, `offer_not_bookable`, that names no policy, stop, cap or limit. Its description says that it is the one reason of every completion refusal that the traveller did not cause: OBE-177's refusals before the capture (a sales stop, the open-case cap, the daily limit) answer the same value (the lead's ruling S16). Change the operation's description and the change log (ota/backend/openapi/README.md §6), then run `pnpm contracts:generate`. No operation is added.
+  2. One pure rule decides by the ticketing capability "paid from a supplier balance" and the tenant's `ticketing_policy`; it tests no supplier's name.
+  3. Search: for a tenant on `manual_review`, such a source is left out at pre-action: no adapter call, and its `flight_search_sources` row says `skipped` with a reason of its own.
+  4. Completion: `checkout.complete` refuses a checkout of such a source when the policy is `manual_review`, before the claim and any supplier call, with the answer of step 1.
+  5. `issue_at_booking` runs as `issue_after_payment` for such a source: `issueAtCreate` takes the capability, and ticketing is requested after the capture.
+  6. OTA admin: one static, neutral note at the ticketing policy field says what `manual_review` and `issue_at_booking` mean for such content. No supplier's name, no new API member.
+  7. Tests: `ticketing-policy.int.test.ts` with a fake source paid from a supplier balance, for the three policies; the admin's test renders the note.
+  8. Records: add a dated note under point 1 of OADR-0008, in the form of OADR-0003's dated notes: for a source paid from a supplier balance the policy applies by capability, as steps 2 to 5 do (OADR-0019, question 2). Take "OADR-0019, question 2" out of the OADR-0008 line of OADR-0020's "Notes that wait for a decision"; item 9 stays on that line.
+- **Acceptance:**
+  - For a tenant on `manual_review`, a source paid from a supplier balance gets no search call (stored as `skipped`), and its checkout is refused at completion before any supplier call, with `422 UNPROCESSABLE` and `details.reason` `offer_not_bookable`, whose description names no policy.
+  - For such a source `issue_at_booking` creates the order without the issue flag and requests ticketing after the capture. The settings page shows the note.
+  - For Amadeus every policy behaves as before: the nine booking integration files pass unchanged. No test is deleted or weakened; `pnpm contracts:lint` passes and `pnpm contracts:generate` leaves no diff.
+  - OADR-0008 holds the dated note of step 8, and OADR-0020 no longer lists it as waiting.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test supply order-request && pnpm --filter @velexis/ota-backend test:int bookings ticketing-policy && pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
+- **Note (2026-11-25):** Rests on OADR-0019, question 2: confirm the ticketing policy by capability (the lead's recommendation). The wave proposal names it; the owner's go for the wave accepts it. The plan's row names no error for the refusal and no text for the note; both are proposals of this block. The task changes files of the OTA admin: the note at the ticketing policy field ships with the rule it explains, so the OTA admin's tests and build run too. Added dependencies: OBE-110 and OBE-112 (the ticketing capability and its look-up), OBE-113 (`flight_search_sources`) and OBE-114 (the engine's pre-action).
+
+### OBE-145 · Fence the Amadeus retry and reconciliation jobs with `bookings_supplier_fence_ck` and fence tests
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-125, OBE-126, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.9 (plan key BM3-04; the bullet "Each background job query names the supplier it serves"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 8, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 9, proposed); docs/mvp/conventions.md §9; ota/backend/migrations/README.md; the blocks of OBE-125 and OBE-126
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/test/integration/supply/job-fence.int.test.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Predicates: the retry branch of the ticketing scan (`TicketingRepository.dueBookingIds`) and the reconciliation's scan and adoption (`ReconcileRepository.dueBookingIds`, `adoptStaleClaims`) carry the Amadeus predicate in their SQL, beside the supplier argument of OBE-126. No caller can widen them.
+  2. Write one tenant migration with the next free tenant migration number (0006 is reserved by OBE-105): the CHECK `bookings_supplier_fence_ck` on `bookings`, added `NOT VALID` and then validated (conventions §9).
+  3. The plan names the CHECK and not its predicate. Proposed (lead); confirm in the pull request: a row of another supplier than Amadeus holds no `amadeus_order_id`, no retry time (`ticketing_next_attempt_at`) and no reconciliation window (`reconcile_until`). It names no list of suppliers: it holds for every supplier but Amadeus, so a new supplier needs no migration.
+  4. Fence tests in `job-fence.int.test.ts`: a booking of the fake source, inserted through `tenantTx` in every state these queries select (ticketing due, a failed attempt, an abandoned claim, `pending` with and without a window), is never selected, adopted, retried or reconciled. A write that gives it one of the three columns fails on the CHECK.
+  5. Mutation tests: for each predicate and for the CHECK, name the test that fails when it is removed. Prove it once by removing each, and list the results in the pull request.
+  6. Run `pnpm db:codegen`, update the tests that list the tenant migrations, and describe the fence in data-model §3.
+- **Acceptance:**
+  - `bookings_supplier_fence_ck` is valid on an empty and on a populated schema and refuses the Amadeus-only state on a row of another supplier.
+  - `job-fence.int.test.ts` shows that a booking of the fake source is never selected, adopted, retried or reconciled; removing a predicate or the CHECK fails a named test.
+  - For Amadeus nothing changes: the nine booking integration files pass unchanged, and `pnpm db:codegen` leaves no diff.
+- **Verify:** `pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed bookings job-fence`
+- **Note (2026-11-25):** OBE-110 is added as a dependency: the fence tests use a booking of the fake source. G4: `packages/db` (the generated tenant types and the tests that list the migrations) and `packages/testing` (its test-database test) change with the migration, so Verify runs their tests.
+
+### OBE-146 · Read the supply registry from the platform and resolve which source sells and which serves
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** PBE-079, X-061, OBE-110, X-075, OBE-112, PBE-078, OBE-111, OBE-109
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.4, §4.6 and §4.15 (plan key SP-07); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2 and 3; item 14, proposed; item 16, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 1; item 9, proposed; item 10, proposed; item 12, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 3; item 8, proposed); the blocks of OBE-112, X-075, OBE-159 and X-073; ota/backend/src/supply/adapters/amadeus/connection-resolver.ts (its header and `AMADEUS_OFFICIAL_BASE_URLS`, since OBE-111); ota/backend/src/config.ts (`AMADEUS_BASE_URL_TEST`, `_LIVE`); ota/backend/src/tenancy/platform-read.repository.ts
+- **Files:** `ota/backend/src/tenancy/platform-read.repository.ts`, `ota/backend/src/tenancy/platform-read.types.ts`, `ota/backend/src/tenancy/platform-read.repository.test.ts`, `ota/backend/src/tenancy/platform-cache.ts`, `ota/backend/src/tenancy/platform-cache.test.ts`, `ota/backend/src/supply/registry/`, `ota/backend/src/supply/registry/supply-host-guard.test.ts`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/test/integration/supply/supply-switch.int.test.ts`, `ota/backend/test/integration/tenancy/`, `ota/backend/test/helpers/`, `ota/backend/README.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. `PlatformReadRepository` gains the reads of the registry: a supplier's global state, a tenant's supply rows of one environment with their sources, a source with its current id and its stop, a Velexis supplier account (the granted columns only, the wallet's currency included) and the source of an id. `PlatformCache` keeps them under the keys of X-061 for 60 s; a ciphertext stays encrypted.
+  2. `SupplySourceResolver`, selling rule: a source sells only when every level allows it. The supplier is on in that environment, the tenant's row is on and `active`, and the source has no stop.
+  3. Servicing rule: an existing offer or booking keeps its source while the tenant's row is not `disabled`. A source that is off or stopped still serves ticketing, polling, sync and servicing. `disabled` serves nothing, as today.
+  4. Environment check: nothing of another tenant or environment serves a call, and a `test` source never resolves to a `live` host. Host guard, in the order of today's Amadeus resolver: the environment's optional override (`AMADEUS_BASE_URL_TEST` and `_LIVE`; `PKFARE_BASE_URL_TEST` and `_LIVE`, which OBE-159 adds; the stub or the fake in development and CI), then the account's host (the Amadeus `base_url`; the `host` of the supplier account of PBE-079), then the supplier's official host. The official hosts are one named constant per supplier: `AMADEUS_OFFICIAL_BASE_URLS`, and the new `PKFARE_OFFICIAL_BASE_URLS` in `supply-host-guard.ts` of the registry folder. The new constant starts without a host: OBE-159 adds the test host of the facts file, and X-073 the production host. With `APP_ENV=production` only an official host passes (Proposed (lead)).
+  5. The registry of OBE-112 takes its sources from the resolver, and each source now carries its supply id. The Amadeus connection resolver keeps its rules for credentials and offices.
+  6. Tests: `supply-switch.int.test.ts` writes the platform rows as the migrator role, through the helpers of X-075 where they exist, and checks both rules for each level; `supply-host-guard.test.ts` covers the hosts and their order.
+- **Acceptance:**
+  - `supply-switch.int.test.ts`: with the global switch off, the per-tenant switch off or a stop set, the source no longer sells (no new search, pricing or checkout) and still serves an existing booking. `disabled` serves nothing. Switched on again, it sells after the event or the cache lifetime.
+  - `supply-host-guard.test.ts`: the guard takes the override, then the account's host, then the official host; a `test` source never resolves to a production supplier host; and production refuses a host that is not the official one, an override included.
+  - No row of another tenant or environment is returned. The OTA backend writes no platform table and reads no floor, warning level or balance.
+  - The golden test of OBE-109 passes. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/registry supply/adapters tenancy && pnpm --filter @velexis/ota-backend test:int supply-switch tenancy amadeus golden-shopping`
+- **Note (2026-11-25):** OBE-112 is added as a dependency: this task replaces the registry reads of E2-05 (the plan's row), which OBE-112 builds. PBE-078 (the tables read here) and OBE-111 (the folder of the Amadeus resolver) are added as producers. X-075 gives every connection that a test or a seed writes its supply source, so the resolver can rely on one. OBE-109 is added as a producer (the lead's ruling S5): its golden test `golden-shopping`, which Verify runs. Verify also runs the Amadeus resolver's integration tests (`resolver.int.test.ts`, `own-credentials.int.test.ts`), because step 4 puts its hosts in the guard's order. The OTA's own choice (plan §4.4) is milestone M8 and has no rule here. Rests on ADR-0030, question (44d): the lead recommends that an OTA's own PKFare account moves after the launch (milestone M8), so this task builds no level for the OTA's own choice. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-147 · Write `supply_id` on stored offers, priced offers and bookings and fill old rows in a batched job
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** PBE-080, OBE-146, OBE-113, OBE-125, OBE-115, OBE-109
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.4 and §5, the paragraph "Task ids" (plan key ED4-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 9 and 11; item 14, proposed; item 15, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 8, proposed); ota/backend/migrations/README.md (expand, migrate, contract; backfills as batched jobs per tenant); docs/mvp/conventions.md §9; the blocks of OBE-113, OBE-115, OBE-125, OBE-146 and OBE-215; ota/backend/src/cli.ts (the command registry); ota/docs/data-model.md §3
+- **Files:** `ota/backend/src/supply/`, `ota/backend/src/cli.ts`, `ota/backend/src/cli.test.ts`, `ota/backend/src/shopping/`, `ota/backend/src/bookings/`, `ota/backend/src/console/pnr-import.service.ts`, `ota/backend/test/integration/supply/supply-id-backfill.int.test.ts`, `ota/backend/migrations/README.md`, `ota/backend/README.md`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Writers first: every insert of a stored offer, a priced offer and a booking, and the `flight_search_sources` row of each called or skipped source (OBE-113, OBE-115), writes the current supply id of the source that `SupplySourceResolver` returns (OBE-146): the search and pricing paths, the orchestrator's claim and the PNR import. From here on no new row lacks it. The `supply_id` of `flight_search_sources` stays nullable (the lead's ruling S16), so the job of step 2 leaves its old rows as they are.
+  2. Fill old rows in a batched job per tenant that a command of the OTA backend starts, never inside a migration (conventions §9). For each row without a `supply_id` it takes the tenant's source of the row's supplier and environment; where a tenant has had two sources, the booking's office decides. It also copies `amadeus_order_id` into `supplier_order_ref` of old Amadeus bookings (Proposed (lead)). It writes through `tenantTx` and can run again.
+  3. A row with no source, or with more than one candidate, is not written. The job lists it in its report (tenant, table, row id, reason), so that a person can check before the contract step that no row is left unmapped. Per tenant, the report also prints how many old Amadeus bookings the job copied into `supplier_order_ref` and how many are left with `amadeus_order_id` but without it, so that OBE-215's Human step reads both conditions that its migration counts from one report. Nothing is guessed, and no traveller data is printed.
+  4. Each writer's unit test proves that it sets `supply_id`, and `cli.test.ts` names the new command.
+  5. Update data-model §3, the migrations README (this job is the backfill of the new columns) and the backend README (the command).
+- **Acceptance:**
+  - After the job, every offer, priced offer and booking of a schema with rows of a Velexis source and of an own source has the supply id of its source, and every old Amadeus booking with an order has it in `supplier_order_ref`. A second run changes nothing.
+  - A row that cannot be mapped keeps NULL and appears in the report with its reason; it never gets a guessed id. The report gives, per tenant, the bookings copied into `supplier_order_ref` and those left without it.
+  - No insert path writes an offer, a priced offer, a booking or a `flight_search_sources` row without a `supply_id`. Tenant data is written only through `tenantTx`, and no platform table is written.
+  - This task adds no migration. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int supply-id-backfill shopping bookings golden-shopping`
+- **Note (2026-11-25):** No migration here. A contract step ships at least one release after its writers, and those of M7 after the launch: OBE-215 (milestone M8) makes `supply_id` NOT NULL on the three tables, drops the `DEFAULT 'amadeus'` of OBE-113 and OBE-125 and removes the fallback of `hasSupplierOrder`, once a person has checked that this job's report shows no unmapped row in any environment; PBE-106 (milestone M8) is the platform contract step of the connections' supply source. Until then a row without `supply_id` answers without the member, and nothing is guessed (OBE-148). OBE-115 is added as a producer (the lead's ruling S5): its search transaction writes the `flight_search_sources` rows whose supply id step 1 sets. OBE-109 is added as a producer (S5): its golden test `golden-shopping`, which Verify runs.
+
+### OBE-148 · Add `supplyId` to offers, priced offers and bookings, and `supplyLabel` in console scope
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** PBE-080, OBE-113, OBE-147, OBE-146, OBE-125, X-075, OBE-109, OBE-123
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7 and §4.8 (plan key OS-03); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 9 and 11; item 14, proposed; item 15, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 5; item 8, proposed); docs/mvp/adr/0006-contract-first-openapi.md (Workflow for every API change); the blocks of OBE-109 and OBE-123 (the golden files and the proof of phase D), OBE-125, OBE-146, OBE-147 and X-075; ota/backend/src/shopping/offers.mapper.ts (`toFlightOffer`); ota/backend/src/console/console-bookings.mapper.ts (`toConsoleBookingSummary`); ota/backend/test/support/json-walk.ts (`CONSOLE_ONLY_FIELD`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/shopping/`, `ota/backend/src/bookings/`, `ota/backend/src/console/`, `ota/backend/src/supply/registry/`, `ota/backend/test/support/json-walk.ts`, `ota/backend/test/integration/supply/supply-id-surface.int.test.ts`, `ota/backend/test/supply/golden/`, `ota/sdk/docs/extensions.md`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. Contract first: add `supplyId` to `FlightOffer`, `PricedOffer`, `Booking`, `BookingSummary` and `ConsoleBookingSummary`, with the pattern of the platform contract (PBE-080); `ConsoleBooking` has it through `Booking`. Add `supplyLabel`, marked "Console scope only", to `FlightOffer`, `PricedOffer`, `ConsoleBookingSummary` and `ConsoleBookingDetails`. Both are optional, so a replayed older answer still validates. Add the change-log row and run `pnpm contracts:generate`.
+  2. The repositories select `supply_id`. `toFlightOffer`, `toPricedOffer`, `toBookingSummary`, `toCustomerBooking`, `toConsoleBookingSummary` and `toConsoleBooking` answer it unchanged. A row without one, which the job of OBE-147 could not map, answers without the member: nothing is guessed.
+  3. Add one helper to `ota/backend/src/supply/registry/`: for a supply id it answers whether the source is Velexis's and gives its label, through the registry reads of OBE-146. The label is "Velexis" for a Velexis source and the supplier's name for the OTA's own source. No code compares a supplier's name. OBE-150 to OBE-154 use this helper and add none of their own. `CONSOLE_ONLY_FIELD` of `json-walk.ts` gains `supplyLabel`.
+  4. A row keeps the id it was written with. After a rotation (PBE-080) the old id still resolves to its source, so the helper answers for it as before.
+  5. Tests: unit tests of each mapper in both scopes and of the helper. `supply-id-surface.int.test.ts` sets up a tenant on a Velexis Amadeus source with the helpers of X-075, follows one id from search to booking, reads the label in console scope, rotates the id by writing the id rows of PBE-080 as the migrator role, and reads the old offer and booking again.
+  6. Golden files: re-record OBE-109's golden files for the member `supplyId` alone (its value is a generated id that the helper replaces by a placeholder), after OBE-123's proof of phase D, with the diff in the pull request. Every other recorded byte stays.
+  7. Add the members to `ota/sdk/docs/extensions.md` §4 and to the flow document.
+- **Acceptance:**
+  - Every answer of the five schemas carries `supplyId`, equal to the row's `supply_id`, in every scope that answers the schema; a row without one answers without the member.
+  - `supplyLabel` is answered in console scope only: "Velexis" for a Velexis source, the supplier's name for an own source.
+  - After a rotation, an offer and a booking written before it answer their old id, and its label still resolves.
+  - OBE-109's golden files differ from their last recording by `supplyId` only, and `golden-shopping` passes.
+  - `pnpm contracts:generate` leaves no diff. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test offers.mapper priced-offers.mapper bookings.mapper console-bookings.mapper supply/registry && pnpm --filter @velexis/ota-backend test:int supply-id-surface no-net-amounts console golden-shopping && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** OBE-146 and OBE-125 are added as dependencies: the helper reads the registry through OBE-146; `bookings.supply_id` is OBE-125's column. X-075 is added: step 5 sets up its source with X-075's helpers. OBE-109 and OBE-123 are added as producers (the lead's rulings S5 and S17): step 6 re-records OBE-109's golden files, after OBE-123 has compared them with their first recording. `ConsoleBookingSummary` is its own schema and gets `supplyId` too (the row's "both scopes"; OAD-025's list reads it). This task carries no contract step (the lead's ruling): `supply_id` NOT NULL on the three tables, the end of the `DEFAULT 'amadeus'` of `supplier` and the end of the `amadeus_order_id` fallback of `hasSupplierOrder` are OBE-215, whose Human step first checks that OBE-147's report shows no unmapped row in any environment; the source NOT NULL on `supplier_connections` and the end of the `DEFAULT 'amadeus'` of its `provider` are PBE-106. Both are in milestone M8, the release after the launch. Until then a row without `supply_id` answers without the member. G4: `ota/sdk/docs/extensions.md` (the SDK) records the members with the contract change; the Verify runs the SDK's tests.
+
+### OBE-149 · Key the Amadeus tools guard to supply sources and make `ConsoleTenant.supplier` neutral
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-138, OBE-106, OBE-146, X-055, OBE-111, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7 and §4.8 (plan key OS-04, the second part); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6 and 21; item 14, proposed; item 18, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 10, proposed); ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (points 7 and 8); ota/backend/migrations/README.md; the blocks of OBE-106, OBE-138, OBE-146, OBE-159 (step 7: the provider filter), X-055, X-075 and OBE-154 (its Note on rows stored before phase G); ota/backend/src/identity/staff/staff-auth.service.ts (`toConsoleTenant`); ota/backend/src/console/pnr-import.service.ts (the PNR lookup); ota/backend/src/common/auth/tenant.guard.ts (its header); ota/backend/src/common/http/pending-operations.ts (the four deferred raw writes); ota/backend/src/supply/supplier-requests.repository.ts (the common call log, there since OBE-111)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/supply/`, `ota/backend/src/console/`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/identity/staff/staff-auth.service.ts`, `ota/backend/src/identity/staff/staff-auth.service.test.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/console/`, `ota/backend/test/helpers/`, `ota/docs/flows/console-operations.md`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Contract first: `priceFlightOffers` and `consoleFindBookingByRecordLocator` list `FEATURE_DISABLED`; `consoleFindBookingByRecordLocator`, `ConsoleTenant.supplier` and `consoleListSupplierRequests` get the descriptions of steps 3 to 5. Add the change-log row and run `pnpm contracts:generate`.
+  2. The own-account guard of the tools class (OBE-138) reads the OTA's own `active` Amadeus source of the environment from the supply registry (OBE-146), not the connection's `credentialSource`. The gate of the 15 operations, `supplierTools` and the tools' connection follow it. The refusal stays `403 FEATURE_DISABLED` with `console.rawAmadeus`. The gate keeps OBE-106's handling of the four deferred raw writes: the tenant, scope, staff and permission guards skip the routes of pending operations, so there the gate resolves the caller's tenant itself and answers `403` before the `501`; a request without a console credential keeps its `501`, as the route-parity probe expects.
+  3. The same refusal, without the tools, for a console `flights.price` body with `amadeusFlightOffers`, and for the PNR lookup `console.bookings.findByRecordLocator`, which returns the Amadeus order verbatim (Proposed (lead), plan §4.7). Today's `422` and the customer's `403 SCOPE_NOT_ALLOWED` stay.
+  4. `toConsoleTenant`, without an own Amadeus source: `supplier.officeIds` is empty, both office members are `null`, and `connected` says that a source sells in the environment.
+  5. Supplier log: one tenant migration, phase expand, with the next free tenant migration number (0006 is reserved by OBE-105), adds a nullable `supply_id` to `supplier_requests` with its `COMMENT ON`; no row is rewritten. The common call log (OBE-111) writes the call's supply id through `tenantTx`. `console.supplierRequests.list` (`SupplierLogRepository.page`) returns the rows of the OTA's own sources. A row written before this task has no `supply_id` and is listed as today: no read-time filter is built for old rows (Proposed (lead); OBE-154's Note states the limit). OBE-149 and OBE-159 both narrow `SupplierLogRepository.page`; whichever merges later keeps both filters (`provider = 'amadeus'`, and the OTA's own sources with old rows without `supply_id` listed as today). A booking's recent calls (`ConsoleBookingsRepository.supplierRequests`) keep OBE-159's `provider = 'amadeus'` too: a PKFare row written before this task has neither `supply_id` nor the `amadeus_api` that the contract requires, and would show Velexis's supplier. Run `pnpm db:codegen`, update the tests that list the tenant migrations and the migrations README, and test the migration on an empty and a populated schema.
+  6. Tests (ruling T): the OTAs of X-055 (the integration helper, the end-to-end helper and the dev seed's second OTA) have an own active Amadeus source with its `sup_` id, because the helpers and seeds of X-075, which builds on X-055, write each connection with its supply source. `amadeus-tools-own-account` gains the raw-offer and the PNR-lookup cases (class 3). `customers-supplier-log.int.test.ts` moves to the OTA with its own connection and keeps its assertions (class 1); a Velexis-only OTA gets an empty log (class 3). The tool specs on the OTA of X-055 and the SDK smoke test run unchanged.
+- **Acceptance:**
+  - `amadeus-tools-own-account`: without an own active Amadeus source, the 15 operations, raw offers in `flights.price` and the PNR lookup answer `403 FEATURE_DISABLED`; with one they work as before. A deferred raw write still answers `403` before its `501`, and `501` without a console credential.
+  - An OTA on Velexis supply gets no office id in its session and an empty supplier log, although its searches since this change wrote call-log rows.
+  - An OTA with its own source sees session, tools and log as today, and `queues.poll` is untouched: `pnr-import.e2e.ts`, `a11y-headers.e2e.ts` and the SDK smoke test pass without a change.
+  - The migration applies to an empty and to a populated schema, and `pnpm db:codegen` leaves no diff. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm db:codegen && git diff --exit-code -- packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test amadeus-tools staff-auth supplier-log supplier-requests route-parity migration-0002 && pnpm --filter @velexis/ota-backend test:int console shopping migrations provisioning dev-seed && pnpm --filter @velexis/ota-sdk test:smoke && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/pnr-import.e2e.ts specs/ota-admin/a11y-headers.e2e.ts`
+- **Note (2026-11-25):** OBE-146 and X-055 are added as dependencies: the guard and the session read supply sources through OBE-146; step 6 moves a test to the OTA of X-055. OBE-111 is added: step 5 changes its common call log. X-075 is added: its helpers and seeds write each connection with its supply source, which the re-keyed guard reads. The nullable `supply_id` on `supplier_requests` and the refusal of the PNR lookup are the lead's rulings, not questions for the owner (Proposed (lead); confirm in the pull request): the lookup returns Amadeus orders verbatim, which plan §4.7 hides for a Velexis source; OBE-106 leaves it served in phase B while OAD-024 hides its screen, and OBE-152 answers `console.bookings.retrieve` with `409` for a Velexis-supplied booking. An OTA's own Amadeus account beside Velexis supply is milestone M8 (PBE-103, the plan's SP-20, and OBE-216): nothing is built for it here. The SDK smoke test and the two OTA admin journeys of the Verify only prove that the own-connection OTAs keep their tools; none of their files changes.
+
+### OBE-150 · Omit the `amadeus` members and the search echo from customer answers for a Velexis source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-148, X-055, SDK-020, OBE-109, OBE-123, OBE-124
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.8 and §9.3 (plan key OS-05; the bullet "Extras"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 6 and 24; item 18, proposed); the blocks of OBE-109, OBE-123 and OBE-124 (the golden files), OBE-148, OBE-160 (step 6: the echo), OBE-185 and SDK-020 (its notes on `amadeus` members); ota/docs/flows/search-and-price.md §6; ota/backend/src/shopping/offers.mapper.ts (`toFlightOffer`, `sellingAmadeusOffer`, `searchCriteriaOf`); ota/backend/src/shopping/searches.service.ts (`warningsOf`); ota/backend/src/bookings/bookings.mapper.ts (`customerOrderOf`, `customerTicketsOf`, `toBookingFareRules`, `dictionariesOf`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/shopping/`, `ota/backend/src/bookings/`, `ota/backend/test/integration/` (the tests of step 6), `ota/backend/test/supply/golden/`, `ota/backend/test/integration/supply/customer-scope-velexis.int.test.ts`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. Contract first, descriptions only: `FlightOffer.amadeus`, `PricedOffer.amadeus`, `Booking.amadeus`, `Ticket.amadeus`, `BookingFareRules.amadeus` and `FlightSearchCriteria` say what a Velexis source answers. No schema changes: none of these members is required, and `amadeusOperationId` keeps its values. Add the change-log row and run `pnpm contracts:generate`.
+  2. The mappers ask the helper of OBE-148 whether a row's source is Velexis's. No code tests a supplier's name.
+  3. Customer scope, Velexis source: the mappers leave the member out of the offer, the priced offer, the ticket and the fare rules, and answer `null` for `Booking.amadeus`. The dictionaries carry no `amadeus` member in customer scope, as today.
+  4. Search: when a Velexis source took part, `criteria.amadeusQuery` and `criteria.amadeusBody` are `null`, and the required `criteria.amadeusOperationId` mirrors `mode`: `getFlightOffers` for `simple`, `searchFlightOffers` for `advanced`. `searchCriteriaOf` builds the echo once for both scopes, so console scope gets the same. OBE-150 and OBE-160 both change `searchCriteriaOf`; whichever merges later keeps both conditions (a Velexis source took part; no Amadeus request was sent) in one branch that answers the same echo.
+  5. The supplier's own `warnings` of a search or a priced offer are not passed on for a Velexis source.
+  6. An own source answers as today. Existing tests follow ruling T. Class 1, moved to the own-connection tenant of X-055 with every assertion: a test whose subject is an `amadeus` member or the echo, such as the echo cases of `shopping/search.int.test.ts`. Class 2, kept on the `velexis` tenant: a booking-flow test that only expects such a member (to check: `shopping/pricing.int.test.ts`, `checkout/checkout.int.test.ts`, `bookings/customer-bookings.int.test.ts`); only that expectation changes, listed in the pull request with its contract line. OBE-109's golden files are recorded again only for these members, after OBE-123's proof of phase D, with the diff in the pull request. OBE-124's golden files hold requests and call-log rows, no answer member: they stay as they are, and `golden-booking` shows that the booking requests did not change.
+  7. Tests (class 3): unit tests of each mapper for both kinds of source. `customer-scope-velexis.int.test.ts` runs search, offer, price, checkout, booking, tickets and fare rules on a Velexis source.
+- **Acceptance:**
+  - For a Velexis source, no customer answer of an offer, a priced offer, a booking, a ticket, the fare rules or the dictionaries carries an `amadeus` member that is not `null`, or a supplier warning. The one exception is the `amadeus` mapping that the contract requires on today's extras options (`AncillaryOption`, `BookingAncillaryOption`), until OBE-185 empties those lists for a Velexis source. Every answer matches the OTA document.
+  - The criteria echo of such a search is `null` in both scopes, and `amadeusOperationId` mirrors `mode`.
+  - For an own source every answer is as today. OBE-109's golden files change only in these members, and OBE-124's do not change. No test is deleted or weakened, and the storefront's unit tests pass.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test offers.mapper priced-offers.mapper bookings.mapper && pnpm --filter @velexis/ota-backend test:int customer-scope-velexis m2 shopping checkout bookings golden-shopping golden-booking && pnpm --filter @velexis/ota-frontend test`
+- **Note (2026-11-25):** X-055 is added as a dependency: step 6 moves tests to its OTA. SDK-020 is added: its 1.0.0 notes tell integrators not to rely on the `amadeus` members before this task leaves them out (ADR-0030 item 24). OBE-109, OBE-123 and OBE-124 are added as producers (the lead's rulings S5 and S17): step 6 re-records OBE-109's golden files after OBE-123 has compared them with their first recording, and Verify runs OBE-124's `golden-booking` to show that the booking requests did not change. Step 5 is this block's proposal (plan §4.7); confirm in the pull request. The required `amadeus` mapping of the extras options cannot be left out without a contract break (plan §9.3). Proposed (lead): today's extras lists keep that mapping until OBE-185's neutral `extras` exists and the storefront reads it; OBE-185 then empties them for a Velexis source, decided by source through the helper of OBE-148, as a changed meaning of Annex A part 3 that OBE-185 ships (the lead's ruling S16).
+
+### OBE-151 · Give the supplier error codes neutral default texts and keep `error.supplier` for own sources
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-148, X-055, OBE-111
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A27) and §4.7 (plan key OS-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 18, proposed); docs/mvp/conventions.md §6; packages/errors/README.md; packages/errors/src/envelope.ts (`exposeSupplier`); ota/backend/src/supply/adapters/amadeus/ (the error mapper, there since OBE-111); ota/backend/src/console/pnr-import.service.ts (`NO_ORDER_MESSAGE`, `noOrderFor`, `noOrderInAnswer`); ota/backend/src/console/review-closure.service.ts (`closureSupplierAnswerOf`); ota/backend/src/bookings/cancellation.service.ts (`ORDER_GONE_WARNING`, `STAFF_REQUEST_ONLY_WARNING`); ota/admin/src/lib/errors.ts (`isSupplierNotFound`); ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts (`closeBookingReview`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/errors/src/generated/catalogue.ts`, `ota/backend/test/contract/openapi-extensions.contract.test.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/bookings/`, `ota/backend/src/console/`, `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/common/http/error.filter.test.ts`, `ota/backend/test/integration/` (tests that expect the old texts), `ota/admin/src/lib/errors.ts`, `ota/admin/src/lib/errors.test.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/actions.test.ts`
+- **Steps:**
+  1. Contract first: in `x-error-catalogue`, no description of an OTA code names a supplier. Ten name Amadeus at commit 04127444: `SUPPLIER_NOT_CONFIGURED`, `SUPPLIER_ERROR`, `SUPPLIER_REJECTED`, `SUPPLIER_UNAVAILABLE`, `SUPPLIER_TIMEOUT`, `TICKETING_FAILED`, `VERSION_CONFLICT`, `CONTACT_DATA_INVALID`, `OFFICE_NOT_ALLOWED` and `ORDER_ALREADY_IMPORTED`; all ten become neutral. The examples that repeat these texts follow. `consoleCloseBookingReview` says that its `404` for a record locator without an order carries `details.reason` `order_not_found` for every source, and `error.supplier` only for an OTA's own source. Add the change-log row and run `pnpm contracts:generate`, which also writes the catalogue of `packages/errors`.
+  2. Reword every literal message of `AppError` that names Amadeus: 15 `message:` lines in six files at commit 04127444 (the plan counted 14), the text "Amadeus no longer has this order." handed to `supplierAnswerOf`, and `NO_ORDER_MESSAGE`. The pull request lists each old and new text. Codes, statuses and `details` stay, apart from the reason of step 4.
+  3. The other texts that console scope answers get neutral words for every source too: the warnings `ORDER_GONE_WARNING` and `STAFF_REQUEST_ONLY_WARNING`, and the summaries of new events that name Amadeus (the order time-out, the two cancellation events and the PNR import). Stored rows keep their text.
+  4. `error.supplier`: the Amadeus adapter's error mapper and `noOrderFor` attach the supplier's error only when the call's source is the OTA's own. Console scope then shows it for an own source and never for a Velexis source; customer scope never shows it, as today. So that staff can still tell a missing order from an unknown booking, every `404` that `console.bookings.closeReview` answers for a record locator without an order (an Amadeus `404` and an answer without an order) carries the neutral `details.reason` `order_not_found` (Proposed (lead); confirm in the pull request). `isSupplierNotFound` of the OTA admin reads that reason as well as `error.supplier`, so the review dialog keeps its message for a Velexis-supplied booking.
+  5. Tests: `openapi-extensions.contract.test.ts` fails when the description of an OTA code names a supplier; the error mapper's test covers both kinds of source; `review-closure.service.test.ts` pins the reason for both kinds of source. In the OTA admin, `errors.test.ts` and the closure cases of `actions.test.ts` gain a `404` with `order_not_found` and without `error.supplier`, which shows the "no order" message, while a `404` with neither stays an unknown booking (class 3). Existing tests follow ruling T: a test that expects an old text stays and changes only that expectation (class 2); a test that asserts `error.supplier` moves to the tenant with its own connection (X-055) and keeps its assertions (class 1).
+- **Acceptance:**
+  - No description of an OTA code, no literal message, no console warning and no new event summary in `ota/backend/src` names a supplier.
+  - In console scope `error.supplier` is present for an own source and absent for a Velexis source.
+  - A `404` of `console.bookings.closeReview` for a record locator without an order carries `details.reason` `order_not_found` for both kinds of source, and the OTA admin's review dialog shows its "no order" message for it.
+  - Codes and statuses are unchanged, and `details` changes only by that reason. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types packages/errors && pnpm --filter @velexis/errors test && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int console bookings shopping && pnpm --filter @velexis/ota-admin test && ! grep -rnE --include=*.ts --exclude=*.test.ts "(message: |MESSAGE = |summary: |title: ).*(Amadeus|AMADEUS)" ota/backend/src`
+- **Note (2026-11-25):** X-055 is added as a dependency: step 5 moves tests to its OTA. OBE-111 is added: the error mapper of step 4 lives in its folder `supply/adapters/amadeus/`. All ten catalogue descriptions become neutral by the lead's ruling, and the lead's ruling adds the reason `order_not_found` and resizes this task to M. Step 3 and the `noOrderFor` part of step 4 are this block's proposals (plan §4.7); confirm in the pull request. G4: the OTA admin's predicate must read the reason as soon as the API answers a `404` without `error.supplier`, so `lib/errors.ts` and its tests merge here, and the Verify runs the OTA admin's tests; OAD-025 rewords the texts of the same file, this task changes only the predicate. The staff alerts that name Amadeus or its offices for a Velexis-supplied booking get neutral wording and Velexis-support guidance from OBE-198 (the lead's ruling).
+
+### OBE-152 · Answer no verbatim offer, order or call detail in console scope for a Velexis source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-148, X-055, X-051, OBE-137
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.3, §4.7 and §4.8 (plan key OS-07); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 17, proposed; item 18, proposed; Annex A of X-051); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 13, proposed); ota/backend/openapi/README.md §4; the blocks of OBE-137, OBE-148 and OBE-150; ota/backend/src/shopping/offers.mapper.ts (`toFlightOffer`, lines 1268 to 1274); ota/backend/src/console/console-bookings.mapper.ts (`consoleOrderOf`, `toSupplierSync`, `consoleActionsOf`, `eventActorOf`, `toConsoleBooking`); ota/backend/src/console/console-booking-actions.service.ts (`retrieve`, `requireOrder`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/shopping/`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/console/console-bookings.mapper.test.ts`, `ota/backend/src/console/console-booking-actions.service.ts`, `ota/backend/src/console/console-booking-actions.service.test.ts`, `ota/backend/test/integration/` (the tests that step 6 moves), `ota/backend/test/integration/supply/console-scope-velexis.int.test.ts`, `ota/docs/flows/console-operations.md`
+- **Steps:**
+  1. Contract first, descriptions only: the members that Annex A part 3 lists (`netPrice` of `FlightOffer`, `PricedOffer` and `AncillaryOption`; `ConsoleBookingSummary.net`; `ConsoleBookingPricing` with its parts `net`, `netBase`, `netTaxes`, `netFees` and `netServices`) are the OTA's cost price, never the supplier's net (ADR-0030 item 17, in the words of the annex); today each description names Amadeus. The members of steps 2 to 5 say what a Velexis source answers; `consoleRetrieveFlightOrder` says that it answers a Velexis-supplied booking `409 BOOKING_NOT_MODIFIABLE`. Add the change-log row and run `pnpm contracts:generate`.
+  2. Offers and priced offers: no `amadeus` member, where `toFlightOffer` answers the verbatim payload today, and no verbatim dictionaries. `netPrice` answers the row's net total, the OTA's cost price; until Velexis price rules exist (OBE-192) it equals the supplier's net. The supplier's own `warnings` are not passed on, as in OBE-150.
+  3. Search: no `diagnostics` when a Velexis source took part. The `null` echo is OBE-150's, for both scopes.
+  4. Bookings, in the list and in the booking: `amadeusOrderId`, `supplierSync.lastSupplierRequestId` and the wrapped order (`consoleOrderOf`) are `null`. By the table of plan §4.7, `queuingOfficeId` and `ownerOfficeId` are `null` and `recentSupplierRequests` is empty. An event whose actor is the supplier names it "Supplier", not "Amadeus".
+  5. `console.bookings.retrieve`, which returns the verbatim order, answers a Velexis-supplied booking `409 BOOKING_NOT_MODIFIABLE`, as `requireOrder` does for a booking without an order. `consoleActions.canRetrieve` is false with the reason of an action that the source cannot do (OBE-137's rule; OBE-156 makes the value neutral).
+  6. An own source answers as today. Existing tests follow ruling T: a console test whose subject is the verbatim payload, `diagnostics`, an office id or the call log moves to the tenant with its own connection (X-055) and keeps every assertion (class 1); a booking-flow test that only expects such a member stays, and only that expectation changes, listed in the pull request (class 2).
+  7. Tests (class 3): unit tests of each mapper for both kinds of source. `console-scope-velexis.int.test.ts` reads a search, an offer, a priced offer, the bookings list, a booking with its events and the refused retrieve in console scope.
+- **Acceptance:**
+  - Console scope, Velexis source: no answer of a search, an offer, a priced offer or a booking holds a verbatim supplier payload, `diagnostics`, a supplier warning, an office id, an order id, a call-log id or the actor name "Amadeus". Every answer matches the OTA document.
+  - `console.bookings.retrieve` answers such a booking `409 BOOKING_NOT_MODIFIABLE`, and `netPrice` equals the stored cost price.
+  - For an own source every console answer is as today. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test offers.mapper priced-offers.mapper console-bookings.mapper console-booking-actions && pnpm --filter @velexis/ota-backend test:int console-scope-velexis console m2 shopping bookings`
+- **Note (2026-11-25):** X-055 and X-051 are added as dependencies: step 6 moves tests to the OTA of X-055; the new meaning of `netPrice` uses the words of Annex A. OBE-137 is added as a producer (the lead's ruling S5): step 5 sets `canRetrieve` through its capability rule in `consoleActionsOf`, and both tasks change `console-bookings.mapper.ts` and `console-booking-actions.service.ts`. The additions from plan §4.7 (step 5; the office ids and `recentSupplierRequests` of step 4) are Proposed (lead), accepted by the lead's ruling. The actor name of step 4 and the warnings of step 2 are this block's proposals; confirm in the pull request. The PNR lookup `console.bookings.findByRecordLocator`, which also returns an order verbatim, is refused by OBE-149 and not changed here.
+
+### OBE-153 · Make the offer source a content type with `LCC` and `OTHER`, in one change
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-051, OBE-113, OBE-110, OBE-148, OBE-109
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A10, A28) and §4.8 (plan key OS-08); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 17, proposed; item 26, proposed; Annex A parts 2 to 4, written by X-051; the list "Notes that wait for a decision", its ADR-0006 line); docs/mvp/adr/0006-contract-first-openapi.md (Revisions, Follow-ups); the block of OBE-148 (its helper); ota/backend/openapi/README.md §4; ota/backend/migrations/README.md; ota/backend/src/shopping/offers.mapper.ts (`OFFER_SOURCES`, `parseOffer`, `parseSearchDefaults`); ota/backend/src/settings/pricing-rules.mapper.ts (`SOURCES`); ota/backend/src/pricing/rule-matcher.ts (`offerFacts`); ota/backend/test/contract/console-settings.contract.test.ts (the pinned `sources` items); ota/admin/src/app/(console)/settings/pricing-rules.ts (`SOURCES`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/src/shopping/`, `ota/backend/src/supply/`, `ota/backend/src/pricing/`, `ota/backend/src/settings/pricing-rules.mapper.ts`, `ota/backend/test/contract/console-settings.contract.test.ts`, `ota/backend/test/integration/settings/pricing-rules.int.test.ts`, `ota/admin/src/app/(console)/settings/`, `ota/sdk/docs/extensions.md`, `ota/docs/data-model.md`, `docs/mvp/adr/0006-contract-first-openapi.md`, `docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md`
+- **Steps:**
+  1. Contract first, as Annex A part 2 of ADR-0030 says: a schema `FlightOfferSource` with today's five values plus `LCC` and `OTHER`, described as the content type, whatever the supplier. `FlightOffer.source`, `PricingRuleScope.sources` and `FeeRuleScope.sources` reference it. The Amadeus-named schemas keep `AmadeusFlightOfferSource`; `FlightSearchAdvancedQuery` follows the annex. No value is removed. Add the change-log row and run `pnpm contracts:generate`.
+  2. One tenant migration, phase expand, with the next free tenant migration number (0006 is reserved by OBE-105): the CHECK of `flight_offers.source` is replaced by one that also allows the two new values, added `NOT VALID` and then validated; no row is rewritten. Run `pnpm db:codegen`, and update the tests that list the tenant migrations and the migrations README.
+  3. Split `OFFER_SOURCES`: the Amadeus reader and request (`parseOffer`, `parseSearchDefaults`) keep the five values of `AmadeusFlightOfferSource`; the neutral offer of the interface (OBE-110) and the stored row take the seven.
+  4. The Velexis mapping: one pure function gives the content type of a Velexis source's offer: `GDS` and `NDC` stay, any other content answers `LCC` or `OTHER` as the annex says, never `LTC`, `PYTON` or `EAC`. It runs before the offer is stored, so the column, `toFlightOffer` and `offerFacts` see one value. An own source keeps the supplier's value. Velexis or own is decided by source through the helper of OBE-148; no code compares a supplier's name.
+  5. Both rule scopes: `SOURCES` of `pricing-rules.mapper.ts` accepts the new values; the matcher compares the stored value.
+  6. OTA admin: the label table of `pricing-rules.ts` gains "Low-cost" and "Other" for both rule forms.
+  7. Tests: the pinned contract test follows the new schema and pins its seven values; a matcher test; a unit test of the mapping over every input value; a migration test on an empty and a populated schema. Update `ota/sdk/docs/extensions.md` §4 and the data model.
+  8. Records: write the waiting note of ADR-0030 on the new meanings of item 17 into ADR-0006, dated, under Follow-ups with a clause in Revisions, apart from the note of SDK-020: `FlightOffer.source` (this task), `netPrice` (OBE-152), `recordLocator` (OBE-154) and today's extras lists (OBE-185), in the words of Annex A part 3, shipped in the minor SDK version 1.1.0 (part 4; Proposed (lead), the lead's ruling S16), accepted with the wave (item 26). Mark that line of ADR-0030's list "Notes that wait for a decision" as written, as its OADR-0016 line is.
+- **Acceptance:**
+  - `FlightOffer.source` and both rule scopes accept and answer the seven values; the pinned contract test fails when one is missing.
+  - A Velexis source never stores or answers `LTC`, `PYTON` or `EAC`; an own source answers as today, and the Amadeus request still sends only Amadeus values.
+  - The matcher test: a rule scoped to `LCC` or `OTHER` matches only offers of that content type.
+  - The migration applies to an empty and to a populated schema, and `pnpm db:codegen` leaves no diff. No test is deleted or weakened.
+  - ADR-0006 carries the dated note on the new meanings of item 17, and ADR-0030's list marks it as written.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm db:codegen && git diff --exit-code -- packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test offers.mapper pricing-rules rule-matcher console-settings migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed settings pricing shopping golden-shopping && pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-sdk test && grep -q 'item 17' docs/mvp/adr/0006-contract-first-openapi.md`
+- **Note (2026-11-25):** OBE-110 is added as a dependency: step 3 changes its neutral offer. OBE-148 is added: step 4 decides Velexis or own with its helper. OBE-109 is added as a producer (the lead's ruling S5): the golden test that the Verify runs. Where Annex A differs from steps 1 and 4, the annex wins (the lead's ruling). Step 8 is the waiting note "ADR-0006: the new meanings of item 17", which the lead's ruling gives to this task as the first that ships a new meaning; it names the tasks of the other three meanings whether or not they have merged. G4: the label table of the OTA admin must know the new values when the API first answers them, so it merges here; `ota/sdk/docs/extensions.md` (the SDK) records them. The Verify runs both components' tests.
+
+### OBE-154 · Show only airline record locators for a Velexis source and add `BookingRecordLocator.kind`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-148, X-055, X-051, OBE-143, OBE-125
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A27), §4.7, §4.8 and §9.3 (plan key OS-09); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 17, proposed; item 18, proposed; open question 9; Annex A of X-051); the blocks of OBE-148, OBE-143 (the held-back `booking.created`), OBE-125 (`supplier_order_ref`) and OBE-174 (the airline's reference it stores); ota/backend/migrations/tenant/0001_baseline.sql (`booking_associated_records`); ota/backend/src/bookings/bookings.mapper.ts (`orderRecordsOf`, `toBookingSummary`); ota/backend/src/bookings/order-recorder.ts (the event `booking.created`); ota/backend/src/documents/documents.repository.ts; ota/backend/src/notifications/templates/booking.confirmed.txt.hbs; ota/frontend/src/pages/confirmation.js and booking.js (the `1A` filter)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/bookings/`, `ota/backend/src/payments/`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/console/console-bookings.mapper.test.ts`, `ota/backend/src/documents/`, `ota/backend/test/integration/notifications/booking-emails.int.test.ts`, `ota/backend/test/integration/documents/render.int.test.ts`, `ota/backend/test/integration/bookings/`, `ota/frontend/src/pages/confirmation.js`, `ota/frontend/src/pages/booking.js`, `ota/frontend/test/confirmation-page.test.js`, `ota/frontend/test/booking-page.test.js`, `ota/sdk/docs/extensions.md`, `ota/docs/flows/ticketing-and-documents.md`
+- **Steps:**
+  1. Contract first: `BookingRecordLocator.kind`, optional, with the values `airline` for an airline's own reference and `supplier` for the booking system's record (Proposed (lead); confirm in the pull request). The descriptions of `Booking.recordLocator`, `BookingSummary.recordLocator` and `ConsoleBookingSummary.recordLocator` say, in the words of Annex A: for a Velexis source the airline's reference, or `null`. Add the change-log row and run `pnpm contracts:generate`.
+  2. One helper gives the locators that an OTA may see; it asks the helper of OBE-148 for the source. Own source: every record with its `kind`, the main locator as today. Velexis source: the airline records only; the main locator is the airline's or `null`, in the console too. An airline reference that a later adapter stores as the airline's own record in `booking_associated_records` (OBE-174 stores PKFare's `pnrList` reference, or the fall-back of the facts file, this way) is the main locator with the `kind` `airline`; the supplier's order number (`supplier_order_ref`, OBE-125) never is.
+  3. Every place that hands a booking's locator to an e-mail, a staff alert or a document takes the helper's main locator: the e-mail data built in `ota/backend/src/bookings/` and `ota/backend/src/payments/`, and `documents.repository.ts`. With none, the default templates print no "Airline reference" line and the PDFs print today's dash. No template text changes.
+  4. Events written from now on, the `booking.created` that the second entry of OBE-143 writes once ticketing is accepted included: for a Velexis source the summary of `booking.created` and its `data.recordLocator` hold the helper's main locator or none. Stored events keep their text.
+  5. Storefront: `confirmation.js` and `booking.js` choose the airline references by `kind` and keep the `1A` rule as the fall-back for an answer without `kind`.
+  6. Tests: mapper tests for both kinds of source, one of them a Velexis-supplied booking built from rows that holds such an airline record and a `supplier_order_ref`; `booking-emails.int.test.ts` and `render.int.test.ts` render a Velexis-supplied booking with and without an airline record; both page tests cover `kind` and the fall-back. Ruling T: a test of the supplier's locator itself moves to the tenant of X-055 with its assertions (class 1); a booking-flow test that only expects the main locator stays, and only that expectation changes, listed in the pull request (class 2).
+- **Acceptance:**
+  - For a Velexis source, customer scope lists airline locators only, each with the `kind` `airline`. `recordLocator` is the airline's reference or `null` in the booking, the summaries, the e-mails, the PDFs and new events, and never the supplier's order number.
+  - An e-mail and a PDF of a booking without an airline record hold no supplier locator, no `null` and no `undefined`.
+  - Both storefront pages show the same references with and without `kind`. An own source is shown as today. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test bookings.mapper console-bookings.mapper renderers && pnpm --filter @velexis/ota-backend test:int notifications documents bookings payments console && pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** X-055 and X-051 are added as dependencies: step 6 moves tests to the OTA of X-055; the descriptions use the words of Annex A. OBE-143 is added: step 4 also covers the `booking.created` that its second entry writes later. OBE-125 is added as a producer (the lead's ruling S5): the test of step 6 sets its `supplier_order_ref`. OBE-174, OBE-181 and OBE-186 depend on this task and read the airline's reference through its helper (step 2). Step 4 is this block's proposal (the traveller sees `booking.created`); confirm in the pull request. G4: the two storefront pages must read `kind` when the API first answers it, so they merge here; `ota/sdk/docs/extensions.md` (the SDK) records the member. The Verify runs both components' tests.
+- **Note (2026-11-25):** Rests on ADR-0030, question 9: show the airline's reference, or none until a ticket number exists, as item 17 drafts it. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-25):** Rows stored before phase G keep their supplier details: the summaries and `data.recordLocator` of earlier `booking.created` events, the staff-only event summaries that name Amadeus, and the `supplier_requests` rows without `supply_id` (OBE-149). No read-time filter is built for them (Proposed (lead)), because before the launch only test tenants hold such rows.
+
+### OBE-155 · Add `Checkout.paymentMethods`, cut by what the source of the offer can take
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-129, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6, A27), §4.8 and §4.9 (plan key OS-10); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 9, proposed; item 10, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 4, proposed); docs/mvp/adr/0006-contract-first-openapi.md (Workflow for every API change); the block of OBE-129; ota/backend/src/checkout/checkout.mapper.ts (`toCheckout`); ota/backend/src/payments/payments.service.ts (`create`); ota/backend/src/storefront/storefront.mapper.ts (`supportedMethods`, which differs by caller); ota/frontend/src/pages/checkout.js (`paymentMethods`); ota/frontend/docs/pages.md §7
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/checkout/checkout.mapper.ts`, `ota/backend/src/checkout/checkout.mapper.test.ts`, `ota/backend/src/checkout/checkout.service.ts`, `ota/backend/src/payments/payments.service.ts`, `ota/backend/test/integration/payments/create-payment.int.test.ts`, `ota/frontend/src/pages/checkout.js`, `ota/frontend/test/checkout-page.test.js`, `ota/frontend/docs/pages.md`, `ota/sdk/docs/extensions.md`, `ota/docs/flows/checkout-stripe.md`, `ota/docs/flows/checkout-airline-card.md`
+- **Steps:**
+  1. Contract first: `Checkout.paymentMethods`, an optional list of the methods this checkout can be paid with, in the values of the storefront configuration's `supportedMethods`; the name is a proposal (plan A27). `checkout.createPayment` says that a method outside the list answers `403 FEATURE_DISABLED`. Add the change-log row and run `pnpm contracts:generate`.
+  2. `toCheckout` fills the list: the OTA's methods, as `storefront.get` answers them to the same caller, cut by the capabilities of the source of the checkout's priced offer, which OBE-129 declares. The code tests no supplier's name.
+  3. `checkout.createPayment` refuses a method that is not on the list with `403 FEATURE_DISABLED` and `details.feature` set to the method, as for a method that is off today, before any call to a payment provider or a supplier. `checkout.completeWithAirlineCard` keeps the refusal of OBE-129.
+  4. The checkout page reads `checkout.paymentMethods` and falls back to the storefront configuration when the member is missing. With one method it offers no choice.
+  5. Tests: `checkout.mapper.test.ts` with an Amadeus source and with the fake source without the airline card; `create-payment.int.test.ts` gains the refusal for a checkout of the fake source; `checkout-page.test.js` covers the list, the fall-back and a single method. Add the member to `ota/sdk/docs/extensions.md` §4, to both checkout flow documents and to `pages.md` §7.
+- **Acceptance:**
+  - A checkout of a source without the airline card lists `card` only, although the OTA accepts both methods. A checkout of an Amadeus source lists the OTA's methods as `storefront.get` does for the same caller.
+  - `checkout.createPayment` with a method outside the list answers `403 FEATURE_DISABLED` and creates no payment.
+  - The checkout page offers exactly the listed methods; without the member it behaves as today.
+  - `pnpm contracts:generate` leaves no diff. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test checkout payments && pnpm --filter @velexis/ota-backend test:int checkout payments && pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** OBE-110 is added as a producer (the lead's ruling S5): the fake source of step 5, whose capabilities lack the airline card. The checkout page, its test and `pages.md` (G4: the storefront) merge with this change, so that the page offers only the listed methods when the API first answers them; the Verify builds and tests the storefront. `ota/sdk/docs/extensions.md` belongs to the SDK, whose tests the Verify runs.
+
+### OBE-156 · Answer allowed actions and ticketing messages that are true for every source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-136, OBE-137, OBE-125, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2, §4.10 and §4.12 (plan key OS-11); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 11, proposed; item 13, proposed); ota/backend/openapi/README.md §4; the blocks of OBE-110 (the fake source), OBE-125, OBE-136, OBE-137, OBE-143 and OBE-186 (both change `ticketingMessageOf`); ota/backend/src/bookings/allowed-actions.ts (the file header); ota/backend/src/bookings/order-recorder.ts (`ticketingMessageOf`); ota/backend/src/bookings/booking-orchestrator.service.test.ts (its pin of the `manual_review` sentence); ota/backend/src/console/console-bookings.mapper.ts (`consoleActionsOf`, `withoutOrderOf`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/bookings/`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/console/console-bookings.mapper.test.ts`, `ota/backend/test/integration/supply/allowed-actions.int.test.ts`, `ota/sdk/docs/extensions.md`, `ota/docs/flows/change-and-cancel.md`
+- **Steps:**
+  1. Contract first: `BookingAllowedActions.reasons` and `ConsoleBookingActions.reasons` gain one neutral value, `not_supported`, for an action that the booking's source cannot do (Proposed (lead); confirm in the pull request). The console answers it where OBE-137 answers `no_amadeus_order` for a missing capability. For a Velexis source it never answers `no_amadeus_order`, which names the supplier, and answers `not_supported` there too. Add the change-log row and run `pnpm contracts:generate`.
+  2. `allowedActionsOf` takes the capabilities of the booking's source, as `consoleActionsOf` does since OBE-137, and `hasSupplierOrder` (OBE-125) instead of the Amadeus order id.
+  3. `canCancel` follows the mode rule of OBE-136: true when the order can be released, voided or cancelled by request; false without a cancel capability, and from a ticketing request until its final status. `canRefresh` is true only when the source can be read now, `canAddAncillaries` only when it sells extras after booking.
+  4. Each false action answers a reason that is true: `pending` only for a booking that is pending or being finalised, `not_supported` for a missing capability.
+  5. `ticketingMessageOf`: for `failed`, the sentence says that the tickets are not issued and that the travel agency's team is working on the booking. For `manual_review` it keeps "Our team will issue your e-tickets" and drops "shortly", so it names no time and the pin in `booking-orchestrator.service.test.ts` holds. The "finalising" sentence is OBE-143's and the ticketless sentence OBE-186's.
+  6. Tests: `allowed-actions.test.ts` keeps every case and gains the capability cases; a unit test pins the sentence of each state, `failed` included; `allowed-actions.int.test.ts` reads a booking of the fake source in each state. A test that expects an old sentence or reason changes only that expectation, listed in the pull request (ruling T, class 2).
+- **Acceptance:**
+  - For a booking whose source cannot cancel, refresh or sell extras after booking, the action is false, its reason is not `pending`, and the operation refuses by the same rule.
+  - A `failed` ticketing never reads "E-tickets are being issued", and for a Velexis source no reason names a supplier.
+  - For an Amadeus booking on an own source every action and reason is as today. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test allowed-actions console-bookings.mapper booking-orchestrator && pnpm --filter @velexis/ota-backend test:int bookings console allowed-actions && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** OBE-125 is added as a dependency: step 2 uses its `hasSupplierOrder`. OBE-110 is added as a producer (the lead's ruling S5): the fake source that step 6 reads in each state. The wording of step 5 is this block's proposal; confirm in the pull request. OBE-143 and OBE-186 also change `ticketingMessageOf`: whichever of OBE-143, OBE-156 and OBE-186 merges last keeps every change; the pinned "Our team will issue your e-tickets" of `booking-orchestrator.service.test.ts` holds (the lead's ruling). G4: `ota/sdk/docs/extensions.md` (the SDK) records the value; the Verify runs the SDK's tests.
+
+### OFE-033 · Show ticketing problems, cancel notes and "cannot be changed or refunded" on the storefront
+- **Status:** todo
+- **Component:** ota-frontend
+- **Milestone:** M7
+- **Depends on:** OBE-156
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.10, §4.11 and §4.12 (plan key OS-12); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 11, proposed; item 12, proposed; item 13, proposed); the block of OBE-156; ota/frontend/docs/pages.md §6, §7 and §11; ota/frontend/docs/pages-account.md §2 and §3; ota/docs/storefront-accessibility.md; ota/frontend/src/pages/confirmation.js (`ConfirmationState`); ota/frontend/src/pages/booking.js (the reasons of `canCancel` that the page explains); ota/frontend/src/components/cancel-dialog.js (the text of `request_only`); ota/frontend/src/pages/price.js (the total box)
+- **Files:** `ota/frontend/src/pages/confirmation.js`, `ota/frontend/src/pages/booking.js`, `ota/frontend/src/pages/bookings.js`, `ota/frontend/src/pages/price.js`, `ota/frontend/src/pages/checkout.js`, `ota/frontend/src/components/cancel-dialog.js`, `ota/frontend/src/lib/i18n.js`, `ota/frontend/confirmation.html`, `ota/frontend/booking.html`, `ota/frontend/bookings.html`, `ota/frontend/price.html`, `ota/frontend/checkout.html`, `ota/frontend/test/confirmation-page.test.js`, `ota/frontend/test/booking-page.test.js`, `ota/frontend/test/bookings-page.test.js`, `ota/frontend/test/price-page.test.js`, `ota/frontend/test/checkout-page.test.js`, `ota/frontend/docs/pages.md`, `ota/frontend/docs/pages-account.md`
+- **Steps:**
+  1. Problem state: a confirmed booking whose `ticketing.status` is `failed` is not shown as a success (Proposed (lead); confirm in the pull request). The confirmation page, the booking page and its row in the my-bookings list show `ticketing.message` (OBE-156) as a warning with the OTA's support contact. For `manual_review` the pages show the message and claim nothing about tickets.
+  2. The state comes from the API's statuses and message only. No page tests a supplier's name or a `supplyId`.
+  3. Cancel note: when the quote's mode is `request_only`, the cancel dialog says, before the request is sent, that the travel agency handles the cancellation with the airline and that nothing is cancelled or refunded yet. When `canCancel` is false, the booking page has a sentence for every value of the reasons, the value of OBE-156 included; an unknown value gets a general sentence with the support contact.
+  4. The line "This fare cannot be changed or refunded" stands on the price page and in the checkout, before payment, exactly when `conditions.refundable` and `conditions.changeable` are both `false`.
+  5. Every new text is a key of `i18n.js`. The notices follow the roles and headings of the pages' other notices. Unit tests cover each state on each page; update `pages.md` and `pages-account.md`.
+- **Acceptance:**
+  - A confirmed booking whose ticketing failed shows the warning with the API's message and the support contact on the three pages, and no success text about tickets.
+  - The cancel dialog explains a request-only cancellation before the request is sent, and the booking page explains every closed reason, an unknown value included.
+  - The price page and the checkout show the line exactly when both conditions are `false`.
+  - The storefront specs pass without a change. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts specs/storefront/account-bookings.e2e.ts`
+- **Note (2026-11-25):** The plan's row does not say which ticketing status is a problem state: step 1 takes `failed`, a proposal by the lead's ruling. The low-cost block of OBE-164 answers both conditions `false`, so the line of step 4 also covers low-cost fares (OADR-0020 item 12, proposed).
+
+### OAD-025 · Use neutral wording in the OTA admin and show the supply label on bookings
+- **Status:** todo
+- **Component:** ota-admin
+- **Milestone:** M7
+- **Depends on:** OBE-148, OAD-024, PFE-032
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7 (plan key OS-14; the row "OTA admin" of its table); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 18, proposed; open question 8); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (items 3 and 4; item 11, proposed); the blocks of OAD-024, OBE-148, OBE-151 and PFE-032; ota/admin/docs/routes.md; ota/admin/README.md §5, §8 and §9; ota/admin/src/lib/supplier-tools.ts (from OAD-024); ota/admin/src/lib/errors.ts; ota/admin/src/lib/portal-links.ts (`PORTAL_AREAS`); ota/admin/src/app/(console)/bookings/[bookingId]/sections.tsx (`DETAIL_STRINGS`)
+- **Files:** `ota/admin/src/app/(console)/`, `ota/admin/src/components/`, `ota/admin/src/lib/errors.ts`, `ota/admin/src/lib/errors.test.ts`, `ota/admin/src/lib/portal-links.ts`, `ota/admin/src/lib/portal-links.test.ts`, `ota/admin/src/lib/supply.ts`, `ota/admin/src/lib/supply.test.ts`, `ota/admin/src/test/fake-ota-api.ts`, `ota/admin/src/test/neutral-wording.test.ts`, `ota/admin/docs/routes.md`, `ota/admin/README.md`, `tools/e2e/specs/ota-admin/sso-bookings.e2e.ts`
+- **Steps:**
+  1. The rule: a text that every OTA can see names no supplier. The supplier's name stays only inside the screens and views that need `supplierTools`: PNR lookup, Queues, Shopping, Supplier log, the order tab and its raw views. OAD-024 hides these from an OTA on Velexis supply. Code comments are not texts.
+  2. Go through the files that name Amadeus (39 files and 472 lines, in any letter case, at commit 04127444, tests left out): on the booking page the sync button, its texts (`syncFailed`, `syncNothing`), the hint on masked numbers and the dialogs; the hints of the dashboard tiles; the saved views of the bookings list; the settings texts; and `lib/errors.ts`, where the supplier codes say "the supplier" (its predicate `isSupplierNotFound` is OBE-151's).
+  3. Where a text must differ between OTAs, it depends on the helper of OAD-024 or on the supply helper of step 4. No condition compares a supplier's name.
+  4. Supply label: `ota/admin/src/lib/supply.ts` reads `supplyId` and `supplyLabel` (OBE-148) and says whether a booking is Velexis-supplied. The bookings list gets a column "Supply", and the booking's overview a row with the label and the id. A missing member shows nothing.
+  5. Portal links: the entry of `PORTAL_AREAS` whose id and path are `amadeus` becomes "Suppliers", with the path `suppliers` of the page of PFE-032 and a description without a supplier name.
+  6. Tests: `neutral-wording.test.ts` renders every console page for a session without the tools, through `fake-ota-api.ts`, and finds no supplier name. It also fails when a file outside its short list of tool files holds the name in a string. The existing tests follow the new texts and keep every other assertion. `sso-bookings.e2e.ts` checks the column. Update `routes.md` and the README.
+- **Acceptance:**
+  - For an OTA without `supplierTools`, no page, dialog, hint or error text of the OTA admin names a supplier: `neutral-wording.test.ts` proves it.
+  - An OTA with its own Amadeus connection sees the tool screens with their words as today.
+  - The bookings list and the booking page show the supply label and the id. The portal page links "Suppliers".
+  - axe finds no serious or critical violation on the changed pages. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/sso-bookings.e2e.ts specs/ota-admin/a11y-headers.e2e.ts`
+- **Note (2026-11-25):** `tools/e2e/specs/ota-admin/sso-bookings.e2e.ts` belongs to the end-to-end tests (G4): it checks the new column, so it merges with this change, and the Verify runs it.
+- **Note (2026-11-25):** Rests on ADR-0030, question 8: staff Shopping is hidden with PNR lookup, Queues and Supplier log (OAD-024), so its texts may keep the supplier's name. The wave proposal names it; the owner's go for the wave accepts it. Neutral texts say nothing about suppliers, so they need no counsel's wording (43d).
+
+### OBE-157 · Walk every customer answer of shopping, checkout and bookings for supplier leaks
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-150, OBE-151, OBE-154, X-055, OBE-110, OBE-146, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.8 and §9.3 (plan key OS-15); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 18, proposed); ota/backend/test/support/json-walk.ts (the file header, `customerScopeLeaks`); ota/backend/test/integration/m2/no-net-amounts.int.test.ts; the blocks of OBE-150, OBE-151, OBE-154, OBE-185, X-055 and X-075; ota/backend/test/supply/fake-adapter.ts (from OBE-110); packages/api-types/src/generated/operations.ts (`otaOperations`)
+- **Files:** `ota/backend/test/support/json-walk.ts`, `ota/backend/test/integration/supply/customer-leak-walk.int.test.ts`, `ota/backend/test/supply/`, `ota/backend/test/helpers/`, `ota/backend/README.md`
+- **Steps:**
+  1. `customerScopeLeaks` gains a Velexis mode, an option. In this mode these are leaks too: an `amadeus` member that is not `null`, at any depth; a string value that holds, in any letter case, a supplier word from the list the test passes (the supplier names, the office ids, the hosts of its sources and the supplier record locators of the test's bookings); a record locator entry that is not the airline's; a search echo with `amadeusQuery` or `amadeusBody`. Member names are not checked: the contract keeps its Amadeus-named members (plan §9.3). Each leak names its JSON pointer and its reason. Without the option the walk is as today.
+  2. One allowance by schema path in `json-walk.ts`: the `amadeus` mapping that the contract requires on today's extras options (`AncillaryOption`, `BookingAncillaryOption`). OBE-158 shares it: whichever of the two walks merges first adds it, the other reuses it. A comment names OBE-185 as the task that removes it (its step 7) once it empties those lists for a Velexis source. OBE-185 depends on both walks, so the allowance always exists first.
+  3. The test sets up two tenants on Velexis supply: one on a Velexis Amadeus source with the Amadeus stub, through the helpers of X-075, and one on a Velexis source that the fake adapter serves, the stub source, whose platform rows it writes as the migrator role. So the walk proves the rule, not one adapter.
+  4. It runs every customer operation of shopping, checkout and bookings for both tenants: as the storefront edge, with a publishable key and with a plain secret key. The list comes from `otaOperations`. The test fails when an operation of these areas is neither walked nor on a short list with its reason; a deferred operation is on the list as deferred.
+  5. It walks error answers too: a supplier outage, a refusal and a time-out.
+  6. Positive control: the same journey on a tenant with its own Amadeus connection (the helper of X-055) trips the Velexis mode. If the walk finds a leak that no merged task covers, stop and tell the lead. Name the test in the README's test section.
+- **Acceptance:**
+  - `customer-leak-walk.int.test.ts`: in Velexis mode no answer of a customer operation of shopping, checkout or bookings leaks, for the Velexis Amadeus source and for the Velexis stub source. Every answer matches the OTA document.
+  - The test fails when a customer operation of these areas is not covered. Its positive control finds each kind of leak that the mode knows.
+  - `no-net-amounts.int.test.ts` passes without a change. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int customer-leak-walk no-net-amounts`
+- **Note (2026-11-25):** X-055, OBE-110 and OBE-146 are added as dependencies: the positive control uses the helper of X-055, the stub source is the fake adapter of OBE-110, and the tenants on Velexis supply need the registry reads of OBE-146. X-075 is added: the Velexis Amadeus tenant of step 3 comes from its helpers. The allowance of step 2 is Proposed (lead): today's lists keep their required `amadeus` mapping until OBE-185 empties them for a Velexis source, and the allowance lasts no longer: OBE-185's step 7 removes it, and both walks then pass without it.
+
+### OBE-158 · Walk the console answers of session, shopping, bookings and supplier log for supplier leaks
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-149, OBE-152, X-055, OBE-150, OBE-156
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.3, §4.7, §4.8 and §9.3 (plan key OS-16); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 17, proposed; item 18, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 13, proposed); ota/backend/test/support/json-walk.ts; ota/backend/test/integration/m2/no-net-amounts.int.test.ts (its console answers); the blocks of OBE-149, OBE-150, OBE-152, OBE-156, OBE-157 and X-055
+- **Files:** `ota/backend/test/support/json-walk.ts`, `ota/backend/test/integration/supply/console-leak-walk.int.test.ts`, `ota/backend/test/helpers/`, `ota/backend/README.md`
+- **Steps:**
+  1. Add `consoleScopeLeaks` to `json-walk.ts`: the check of a console answer for a Velexis source. Leaks are: an `amadeus` member that is not `null`; `diagnostics`; `error.supplier`; an office id (`officeIds` with an entry, `defaultOfficeId`, `queuingOfficeId`, `ownerOfficeId`); `amadeusOrderId`; a call-log id (`lastSupplierRequestId`, `supplierRequestId`); a search echo with `amadeusQuery` or `amadeusBody`; a string value with a supplier word, in any letter case, from the list the test passes; a string equal to one of the supplier's net amounts. Member names are not checked (plan §9.3).
+  2. The supplier's net amounts are the stub's own figures. While no Velexis price rule applies to the source (OBE-192), the cost price equals the supplier's net, so the test allows such an amount in the cost-price members only: `netPrice` and the console's net amounts. A comment says why; OBE-192's `supply-net-leak.int.test.ts` proves the case with a rule. The required `amadeus` mapping of today's extras options is allowed by the one allowance by schema path of OBE-157's step 2, which this walk shares: whichever of the two walks merges first adds it, with the comment that names OBE-185; OBE-185 depends on both walks and removes it (its step 7).
+  3. The test runs for a tenant on a Velexis Amadeus source, with a staff token and with a secret key in console scope: the session (`console.auth.signIn`, `refresh` and `me`), shopping (search, offer, upsell and price), bookings (the list, a booking and the other reads of the booking page) and the supplier log. The refusals of OBE-149 and OBE-152 (the PNR lookup and the retrieve) are walked as error answers. It fails when a console operation of these areas is neither walked nor on a short list with its reason.
+  4. It walks the error answers of a supplier failure too.
+  5. Positive control: the same reads on a tenant with its own Amadeus connection (the helper of X-055) trip the check. If the walk finds a leak that no merged task covers, stop and tell the lead. Name the test in the README's test section.
+- **Acceptance:**
+  - `console-leak-walk.int.test.ts`: no console answer of session, shopping, bookings or supplier log leaks for a Velexis source. The supplier log is empty. Every answer matches the OTA document.
+  - The supplier's net amount appears nowhere outside the cost-price members of step 2.
+  - The positive control finds each kind of leak that `consoleScopeLeaks` knows. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int console-leak-walk no-net-amounts`
+- **Note (2026-11-25):** X-055, OBE-150 and OBE-156 are added as dependencies: the positive control uses the helper of X-055, the `null` echo in console scope is OBE-150's, and before OBE-156 the console answers the reason `no_amadeus_order`, a supplier word. The net-amount allowance of step 2 is not in the plan's row; it is this block's proposal, because without a Velexis price rule the cost price is the supplier's net. Confirm it in the pull request. The extras allowance is Proposed (lead) and lasts until OBE-185 removes it.
+
+### SDK-021 · Document supply ids and hidden suppliers for integrators, for SDK 1.1.0
+- **Status:** todo
+- **Component:** ota-sdk
+- **Milestone:** M7
+- **Depends on:** OBE-148, OBE-149, OBE-150, OBE-151, OBE-152, OBE-153, OBE-154, OBE-155, OBE-156, X-051, SDK-020
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.8, §4.14 and §9.3 (plan key OS-18); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 6, 9 and 11; item 14, proposed; item 17, proposed; item 18, proposed; Annex A of X-051, its version rule); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 10, proposed; item 11, proposed; open question 1); ota/docs/adr/0016-sdk-packaging-and-type-contract.md (point 8); the blocks of SDK-020 and OBE-148 to OBE-156; ota/sdk/README.md §9; ota/sdk/docs/extensions.md §4
+- **Files:** `ota/frontend/docs/build-your-own-frontend.md`, `ota/docs/api-changes.md`, `ota/docs/api-changes-console-and-internal.md`, `ota/sdk/README.md`, `ota/sdk/CHANGELOG.md`, `ota/sdk/docs/extensions.md`
+- **Steps:**
+  1. **Gate:** the sentences that tell an OTA about hidden suppliers and about asking Velexis for the supplier behind an id use counsel's wording. That wording is counsel's answer to (43d); this part does not start before it. The other steps do not wait for it.
+  2. Guide: add the chapter "Supply ids and hidden suppliers" to `build-your-own-frontend.md`. It says that `supplyId` is opaque, can change by rotation, and stays valid when old. It lists what a Velexis source leaves out (the `amadeus` members, the search echo), the content types of `source` with `LCC` and `OTHER`, `recordLocators[].kind`, `Checkout.paymentMethods`, the reasons of the allowed actions and the neutral error texts. The sentences of the gate say that an OTA can ask Velexis for the supplier behind an id.
+  3. The chapter states the limits of plan §9.3: the contract keeps its Amadeus-named members, and a `supplyId` is visible to every browser.
+  4. `api-changes.md` gets a section for the customer API, and `api-changes-console-and-internal.md` one for the console: `supplyLabel`, `supplierTools`, the neutral `ConsoleTenant.supplier`, the supplier log, the `null` members, the refused PNR lookup (OBE-149), the `409` of the retrieve (OBE-152) and the reason `order_not_found` (OBE-151). Each row names its task.
+  5. `ota/sdk/CHANGELOG.md`: the section `1.1.0 (unreleased)` gets the added members and enumeration values, and the changed meanings of `source`, `netPrice` and `recordLocator`. This task adds to that section when it exists (SDK-020 creates it when SDK 1.0.0 was published before SDK-020) and creates it otherwise. The changed meaning of today's extras lists is OBE-185's line in the same section, written in its own pull request. `ota/sdk/README.md` §9 quotes Annex A part 4: its first sentence for the added members and values, which make a minor version, and its second for the changed meanings of part 3, which ship in the minor version 1.1.0 (Proposed (lead), the lead's ruling S16; the wave proposal confirms it). No code and no version field changes here.
+  6. Check `ota/sdk/docs/extensions.md` §4 against the nine tasks: every added member and value has its row.
+- **Acceptance:**
+  - The guide has the chapter with every member of step 2 and both limits. It does not say which supplier serves Velexis supply, and its sentences about suppliers use counsel's wording.
+  - Both api-changes documents list every contract change of OBE-148 to OBE-156 with its task.
+  - The CHANGELOG has a section 1.1.0, and `extensions.md` §4 has a row for every added member and value. No other file changes.
+- **Verify:** `grep -q 'supplyId' ota/frontend/docs/build-your-own-frontend.md && grep -q 'supplyId' ota/docs/api-changes.md && grep -q '^## 1.1.0' ota/sdk/CHANGELOG.md && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/ota-frontend test && pnpm format:check`
+- **Note (2026-11-25):** X-051 is added as a dependency: the CHANGELOG and README §9 follow both sentences of Annex A part 4. SDK-020 is added: step 5 writes into the CHANGELOG section that SDK-020 may create, and the chapter of step 2 builds on its 1.0.0 notes. The gate of step 1 is the harder gate of the lead's ruling G6 on (43d): counsel's wording on any text that tells an OTA about suppliers. The guide lives in `ota/frontend/docs/` (G4: the storefront's documents); the Verify runs the storefront's tests too.
+
+### OAD-026 · Send staff to Velexis support for a Velexis-supplied booking until the case tools exist
+- **Status:** todo
+- **Component:** ota-admin
+- **Milestone:** M7
+- **Depends on:** OAD-025, OBE-148
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 and §9.3 (plan key RC-03); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6, 8 and 22; item 18, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 2; item 8, proposed; open question 3, answered on 2026-11-25 by ADR-0030 items 21 and 22); ota/docs/runbooks/README.md §3; ota/admin/src/app/(console)/bookings/[bookingId]/cancel-dialog.tsx (`CANCEL_STRINGS`, the text of `request_only`); ota/backend/src/bookings/cancellation.service.ts (the staff alert of a cancellation request); the blocks of OAD-025 (the supply helper), OBE-148 (its helper) and OBE-198
+- **Files:** `ota/admin/src/app/(console)/bookings/[bookingId]/cancel-dialog.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/dialogs.test.tsx`, `ota/backend/src/bookings/cancellation.service.ts`, `ota/backend/src/bookings/cancellation.service.test.ts`, `ota/docs/runbooks/README.md`, `ota/docs/runbooks/ticketing-failures.md`, `ota/docs/flows/change-and-cancel.md`
+- **Steps:**
+  1. A booking is Velexis-supplied when its supply source is Velexis's. The OTA admin decides with the supply helper of OAD-025, the backend with the helper of OBE-148. No code tests a supplier's name.
+  2. OTA admin: for a Velexis-supplied booking, the request-only text of the cancel dialog says that staff write to Velexis support with the booking reference, and that the refund follows their answer. It names no terminal, no airline desk and no supplier. For an own source the text is as today.
+  3. OTA backend: the staff alert that a request-only cancellation raises with the event `booking.cancellation_requested` says the same for a Velexis-supplied booking. Only the `reason` handed to the template `staff.manual_review` changes; the template stays.
+  4. Runbooks: §3 of the runbooks README says that for a Velexis-supplied booking level 1 has no supplier terminal and writes to Velexis support, level 2, for every step at the supplier. The ticketing-failures runbook and the flow document follow.
+  5. Each text is marked as interim: the cases of the reconciliation phase (OBE-198, OAD-028) replace it. The dialog test and the service test cover both kinds of source.
+- **Acceptance:**
+  - For a Velexis-supplied booking, the request-only dialog, the staff alert and the runbook send staff to Velexis support. None names a terminal, an airline desk or a supplier.
+  - For a booking on the OTA's own source all three are as today.
+  - No e-mail template and no contract changes. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-admin test dialogs && pnpm --filter @velexis/ota-backend test cancellation && pnpm --filter @velexis/ota-backend test:int bookings console && grep -q 'Velexis support' ota/docs/runbooks/README.md`
+- **Note (2026-11-25):** OBE-148 is added as a dependency: the backend decides with its helper. The backend files (G4: the OTA backend) merge with the dialog, so that the alert and the dialog say the same; the Verify runs the backend's unit and integration tests. The other staff alerts that name Amadeus or its offices for a Velexis-supplied booking (reconcile's lost-answer and booking-queue alerts, cancellation's order-not-found and time-out alerts, the sync's airline-cancelled alert) are not in the plan's row: OBE-198 gives them neutral wording and Velexis-support guidance, as it replaces these interim texts (the lead's ruling).
+
+### OBE-159 · Add the PKFare client: signed JSON calls, host guard, time-outs and a redacted call log
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-057, OBE-111, OBE-146, OBE-107, PBE-079, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.6 and §4.15 (plan key BM6-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5 and 10; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 1; item 7, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed); docs/mvp/conventions.md §7, §8 and §9; docs/mvp/architecture.md §6 (the configuration matrix); the blocks of PBE-079, PBE-083, OBE-146, OBE-149 and X-075; ota/backend/src/supply/adapters/amadeus/amadeus.client.ts (its header); ota/backend/src/supply/registry/supply-host-guard.ts (OBE-146: the order of hosts); ota/backend/src/config.ts (`amadeusBaseUrl`); ota/backend/migrations/tenant/0001_baseline.sql (`supplier_requests`); ota/backend/src/console/supplier-log.repository.ts and console-bookings.repository.ts (`supplierRequests`, `lastOrderRead`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/registry/supply-host-guard.ts`, `ota/backend/src/supply/registry/supply-host-guard.test.ts`, `ota/backend/src/supply/supplier-requests.repository.ts`, `ota/backend/src/supply/supplier-requests.repository.test.ts`, `ota/backend/src/console/supplier-log.repository.ts`, `ota/backend/src/console/console-bookings.repository.ts`, `ota/backend/src/config.ts`, `ota/backend/src/config.test.ts`, `ota/backend/.env.example`, `.env.example`, `deploy/env/ota-backend.env.example`, `docs/mvp/architecture.md`, `packages/logger/src/redact-paths.ts`, `packages/logger/src/redaction.test.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/integration/supply/pkfare-client.int.test.ts`, `packages/testing/src/supply-rows.ts`, `packages/testing/src/supply-rows.test.ts`, `packages/testing/test/integration/supply-rows.int.test.ts`, `ota/backend/test/builders/platform-rows.ts`, `ota/docs/data-model.md`, `ota/backend/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. One client class sends every PKFare call: a JSON POST with the signature in the body. The key of Velexis's supplier account (its ciphertext of PBE-079, read through OBE-146) is decrypted in memory and the signature built at send time; neither is cached, stored or logged. The fields that carry them, as the facts file names them, join `REDACT_PATHS` of `@velexis/logger` with a case in `redaction.test.ts` (conventions §7), unless PBE-083 added them for the platform's balance call.
+  3. Hosts, as today's Amadeus configuration has them (the lead's ruling S6): the optional `PKFARE_BASE_URL_TEST` or `PKFARE_BASE_URL_LIVE`, else the `host` of the source's supplier account (PBE-079), else the constant `PKFARE_OFFICIAL_BASE_URLS` of OBE-146 (`supply-host-guard.ts` of the registry folder), to which this task adds the test host that the facts file states; X-073 adds the production host. With `APP_ENV=production` only the official hosts pass that guard. The client takes its host from the resolver of OBE-146 only, refuses any other and follows no redirect. Each operation has its own time-out, and no write is sent twice.
+  4. The two variables join the API's schema in `config.ts` with the rule of `AMADEUS_BASE_URL_*` (https, or http on the loopback), both `.env.example` files (the fake's address), the deploy template (empty) and the configuration matrix (conventions §8). The pull request names the human step for `/etc/velexis/ota-backend.env`.
+  5. One expand migration with the next free tenant migration number (0006 is reserved by OBE-105) opens `supplier_requests` to `pkfare`: the provider CHECK gains it (added `NOT VALID`, then validated); `amadeus_api` and `amadeus_operation_id` become nullable behind a CHECK for Amadeus rows; a nullable neutral column names the supplier's operation; each change has its `COMMENT ON`. Amadeus rows are written as today, so the code works with schema versions N-1 and N (conventions §9). Update the tests that list the tenant migrations, and data-model §3.
+  6. Each call writes one row through `SupplierRequestsRepository` (OBE-111) and `tenantTx`: the provider `pkfare`, the Velexis use case in `operation`, PKFare's operation in the column of step 5, allow-list copies of the bodies, and the source's supply id once `supplier_requests` has that column (OBE-149). PKFare's codes are text: `error_codes`, which holds Amadeus's numbers, stays empty, and the copy of the answer keeps the code.
+  7. Readers of `amadeus_api` and `amadeus_operation_id` see Amadeus rows only. The search diagnostics (`SearchesRepository.latestSupplierRequest`) and a booking's last order read (`ConsoleBookingsRepository.lastOrderRead`) filter by `amadeus_api` already; the console's supplier log (`SupplierLogRepository.page`) and a booking's recent calls (`ConsoleBookingsRepository.supplierRequests`) add `provider = 'amadeus'`, so no PKFare row reaches a console answer, whose `amadeusApi` the contract requires. Amadeus rows are listed as today. OBE-149 and OBE-159 both narrow `SupplierLogRepository.page`; whichever merges later keeps both filters (`provider = 'amadeus'`, and the OTA's own sources with old rows without `supply_id` listed as today). List the four readers in data-model §3.
+  8. Test rows: `supply-rows.ts` of `@velexis/testing` (X-075) gains Velexis's PKFare account of PBE-079 with its supply source, the wallet's currency (PBE-079's column, which OBE-165 and OBE-177 read) and first `sup_` id, written on the caller's pool as X-075 writes the Amadeus account; the caller passes the key's ciphertext, encrypted as the platform encrypts it. X-075's OTA row builders (`ota/backend/test/builders/platform-rows.ts`) expose it, and an OTA's PKFare connection is X-075's connection on that source. The module's unit and integration tests gain the case; the later PKFare tests and the load script use it.
+  9. Tests: `pkfare-signature-redaction.test.ts` plants a known key, signature and passport number and searches every log line, error and row that the client hands to the repository; `pkfare-client.int.test.ts` runs the client against a loopback server, reads the stored rows and finds none of them in the console's supplier log; `config.test.ts` reads both variables in both templates.
+- **Acceptance:**
+  - `pkfare-signature-redaction` passes: the key, the signature and the document number are in no log line, error or `supplier_requests` row, also in `pkfare-client.int.test.ts`.
+  - On a loopback server the client calls the guard's host only, follows no redirect, aborts a call past its time-out and repeats no write. The host follows the order of step 3, and with `APP_ENV=production` a PKFare host outside `PKFARE_OFFICIAL_BASE_URLS` is refused.
+  - The migration applies to an empty and to a populated schema; a PKFare row without `amadeus_api` is stored, an Amadeus row without it is refused, and no console answer lists a PKFare row.
+  - Both variables are optional: empty in the deploy template, the fake's address in `.env.example`. No test is deleted or weakened.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/logger test && pnpm --filter @velexis/testing test supply-rows && pnpm --filter @velexis/testing test:int test-database supply-rows && pnpm --filter @velexis/ota-backend test supply config supplier-log migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed pkfare-client customers-supplier-log bookings-read`
+- **Note (2026-11-25):** The plan's row names no migration, but `supplier_requests` allows only `amadeus` today; the lead accepted the expand migration. Its provider CHECK stays, as OBE-111 keeps it, and gains `pkfare`; the lead's rule of no CHECK on a supplier list (S1) covers the new `supplier` columns. Added dependencies: OBE-107 (step 1 reads its facts file), PBE-079 (the account's key and `host` of steps 2 and 3, read through OBE-146) and X-075 (the shared row helpers and OTA builders that step 8 extends; they write no PKFare account). OBE-146 owns the guard and the order of hosts (the lead's ruling S6), and the list test of X-071 reads the constant.
+- **Note (2026-11-25):** G4: `packages/logger` (the redaction list), the foundation's root `.env.example`, deploy template and configuration matrix (conventions §8 puts every new variable there in the same pull request), and `packages/db` and `packages/testing` (the generated tenant types, the tests that list the migrations and the PKFare account of `supply-rows.ts`) change with this task; Verify runs their tests and `config.test.ts`, which reads both templates. Whichever of PBE-083 and this task merges later keeps one entry for the signature's field.
+- **Note (2026-11-25):** Size M stays (the lead's ruling S16). If the pull request outgrows M, the expand migration of `supplier_requests` (step 5) and the provider filter on its readers (step 7) move into a task of their own that OBE-159 then depends on.
+
+### OBE-160 · Search PKFare through the engine: pure `prepare`, Shopping with its own deadline, neutral offers
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-159, X-058, OBE-115, OBE-107, OBE-108, OBE-109, OBE-112, OBE-110, OBE-113, X-075
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.2, §4.10 and §9.1 (plan key BM6-03; in §9.1 the row on the advanced search body); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2 and 13; item 16, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 3; item 8, proposed; item 9, proposed; item 10, proposed); the blocks of OBE-108, OBE-113 (step 4: the readers), OBE-115, OBE-116 and OBE-150 (step 4: the echo for a Velexis source); ota/backend/src/supply/interface/; ota/backend/src/supply/adapters/amadeus/ (its `prepare` step and search call); ota/backend/src/shopping/searches.service.ts (`searchResponse`), searches.repository.ts (`offerSummaries`), offers.repository.ts (`searchOfferIds`) and offers.mapper.ts (`searchCriteriaOf`); packages/testing/src/amadeus.ts and packages/testing/README.md ("Amadeus stub")
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/registry/`, `ota/backend/src/supply/supply.module.ts`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/shopping/searches.repository.ts`, `ota/backend/src/shopping/offers.repository.ts`, `ota/backend/src/shopping/offers.mapper.ts`, `ota/backend/src/shopping/offers.mapper.test.ts`, `packages/testing/src/pkfare.ts`, `packages/testing/package.json`, `packages/testing/README.md`, `packages/testing/test/integration/pkfare.int.test.ts`, `ota/backend/test/integration/supply/pkfare-search.int.test.ts`, `ota/docs/flows/search-and-price.md`, `ota/backend/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. The PKFare adapter declares its capabilities and registers for the supplier `pkfare` in the adapter look-up of OBE-112. Search limits: at most 2 journeys, at most 9 seated travellers, the infant rule and the currencies of the facts file.
+  3. `prepare` is pure: no I/O, no clock. It answers a Shopping request, or `skipped` with a reason: more than 2 journeys, more than 9 seated travellers, infants outside the rule, a currency the account does not quote, or a search it cannot serve (the advanced search body). It answers no validation error.
+  4. The search sends Shopping through the client of OBE-159 with its own deadline: a named constant of the adapter, first the proposal of OBE-108; OBE-167 fixes the number. A late answer is aborted (`timed_out`); a failure is `failed`; no offers is `empty`.
+  5. Each offer of the answer becomes one neutral offer with a supplier offer reference and an allow-list copy as its stored payload. An unreadable offer is dropped and counted, never guessed. OBE-161 completes the reader.
+  6. The readers that assume an Amadeus column handle a search or an offer without one (the lead's ruling S12): a search that called no Amadeus source has no `amadeus_request`, and a PKFare offer no `amadeus_offer_id` (both nullable since OBE-113). `SearchesService.searchResponse` gives such a search the criteria echo that OBE-150 words for a Velexis source: `amadeusOperationId` mirrors `mode`, `amadeusQuery` and `amadeusBody` are `null` (`searchCriteriaOf`). OBE-150 and OBE-160 both change `searchCriteriaOf`; whichever merges later keeps both conditions (a Velexis source took part; no Amadeus request was sent) in one branch that answers the same echo. `SearchesRepository.offerSummaries` and `OffersRepository.searchOfferIds`, which map Amadeus offer ids to the upsell links, leave out an offer without one. The pull request lists the other readers of OBE-113's list (`searchById`, `OFFER_COLUMNS`, `reusableUpsell`) and any other that `grep` finds, each with its treatment.
+  7. `@velexis/testing/pkfare` (`packages/testing/src/pkfare.ts`, beside `amadeus.ts`) starts the fake of X-058 in-process on a free port; the package lists `@velexis/pkfare-stub` as a devDependency, as it lists the Amadeus stub (ADR-0022 item 5), and the updated `pnpm-lock.yaml` is committed. Its README section and `pkfare.int.test.ts` follow.
+  8. Tests: unit tests of `prepare` (each skip reason, each limit) and of `searchCriteriaOf` without an Amadeus request; `pkfare-search.int.test.ts` with the fake (`ok`, `empty`, `failed`, `timed_out`, an unreadable offer, a search served by PKFare alone, a search of both sources that keeps the upsell links of its Amadeus offers), with the OTA's sources from the row builders of X-075 and OBE-159.
+- **Acceptance:**
+  - A search of 3 journeys, of 10 seated travellers, outside the infant rule or in a currency the account does not quote gives `skipped` with a stored reason and no PKFare call.
+  - A Shopping answer becomes neutral offers, stored with supplier and supply id; an unreadable offer counts as dropped in `flight_search_sources`.
+  - An answer held past the deadline gives `timed_out`, and the search still answers the other source's offers.
+  - A search served by PKFare alone, the OTA's Amadeus source off, answers its offers, its pages and the criteria echo of step 6 in both scopes, and every answer matches the OTA document.
+  - `search.int.test.ts` and the golden test of OBE-109 pass unchanged; `searches.service.ts` imports nothing from `src/supply/adapters/`.
+- **Verify:** `pnpm --filter @velexis/testing test:int pkfare && pnpm --filter @velexis/ota-backend test supply/adapters/pkfare supply/registry offers.mapper && pnpm --filter @velexis/ota-backend test:int pkfare-search shopping golden-shopping`
+- **Note (2026-11-25):** OBE-107, OBE-108, OBE-109 and OBE-112 are added as dependencies: step 1 reads the facts file, step 4 starts from OBE-108's proposed deadline, step 2 registers in OBE-112's look-up, and the acceptance runs OBE-109's golden test. OBE-110 (the adapter interface and the capability declaration of step 2), OBE-113 (the nullable columns and readers of step 6, and `flight_search_sources`) and X-075 (the row builders of the test's sources) are added too. Step 6 is the lead's ruling S12; it takes OBE-150's form of the echo and needs no dependency on OBE-150.
+- **Note (2026-11-25):** G4: `packages/testing` (the helper `@velexis/testing/pkfare` and its test) merges with the adapter whose tests use it; Verify runs its tests. plan-lint cannot list `pnpm-lock.yaml` in Files, so step 7 names it.
+
+### OBE-161 · Read stored PKFare offers: the complete price reference, carriers, cabins, bags, content type
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-160, OBE-118, OBE-153, OBE-107, X-057, OBE-117, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.8, §4.10, §4.11 and §9.1 (plan key BM6-04; in §9.1 the row on low-cost content); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 12; item 17, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 3; item 12, proposed; open question 1); the blocks of OBE-117, OBE-118 and OBE-153; ota/backend/src/supply/readers/
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/readers/`, `ota/backend/src/supply/interface/`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. If it shows no reliable mark for low-cost content, stop too: the owner decides (plan §9.1).
+  2. The PKFare offer reader is pure and joins the look-up of OBE-118 under `pkfare`. It reads a stored `flight_offers` row of that supplier and refuses any other.
+  3. `supplier_offer_ref` holds the complete price reference: all that PrecisePricing needs to name the offer again, as the facts file lists it.
+  4. The reader fills the neutral offer: per segment the carriers, flight, airports, local times and cabin; the validating carrier; the included checked bags; the prices per traveller type and the total.
+  5. Content type: the reader sets `source` with the Velexis mapping of OBE-153 (`GDS`, `NDC`, `LCC` or `OTHER`; never `LTC`, `PYTON` or `EAC`). The neutral offer gains a low-cost flag, set from the mark of the facts file; an offer with an unclear mark is dropped and counted.
+  6. Tests: table-driven unit tests over the Shopping fixtures of X-057 (full-service, low-cost, bags, mixed cabins, unreadable).
+- **Acceptance:**
+  - A unit test builds the PrecisePricing reference from a stored row alone.
+  - Carriers, cabins and included bags of the fixtures are read as the facts file states them; the like-for-like key of OBE-117 gets every value it compares.
+  - `source` is `GDS`, `NDC`, `LCC` or `OTHER`; only a low-cost offer of the fixtures carries the flag.
+  - The reader refuses a row of another supplier; no existing test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/adapters/pkfare supply/readers && pnpm --filter @velexis/ota-backend test:int pkfare-search shopping`
+- **Note (2026-11-25):** Rests on OADR-0020, question 1: low-cost content stays in the first release until the facts are known, and step 1 stops if they show no reliable mark. The wave proposal names it; the owner's go for the wave accepts it. OBE-107, X-057 and OBE-117 are added as dependencies: step 1 reads the facts file, step 6 the fixtures, and the acceptance uses OBE-117's like-for-like key. OBE-110 is added too: step 5 gives its neutral offer the low-cost flag.
+
+### OBE-162 · Price PKFare offers with PrecisePricing and a single-use price reference
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-161, OBE-119, OBE-120, OBE-107, OBE-159, OBE-109, OBE-110, OBE-123
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.9 and §4.10 (plan key BM6-05; money rule 1); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 8, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 5, proposed); docs/mvp/conventions.md §9; the blocks of OBE-119, OBE-120 and OBE-169
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/readers/`, `ota/backend/src/supply/interface/`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/shopping/priced-offers.mapper.ts`, `ota/backend/src/shopping/priced-offers.repository.ts`, `ota/backend/test/supply/golden/`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/integration/supply/pkfare-pricing.int.test.ts`, `ota/docs/data-model.md`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. First the writer switch that OBE-119 leaves to this task (the lead's ruling S12): every new priced offer, an Amadeus one included, gets a version 2 snapshot. Re-record OBE-109's golden priced-offer rows for the snapshot's version and key alone, with the diff in the pull request.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  3. The adapter's Price call builds the PrecisePricing request from `supplier_offer_ref` and sends it through the client of OBE-159.
+  4. A code table from the facts file classifies the answer into `priced`, `sold_out`, `refused` or `unavailable`; a time-out, a lost answer or an unknown code is `unavailable`. Each carries an error that flights.price lists today (`SOLD_OUT`; `SUPPLIER_ERROR` for `refused`; `SUPPLIER_UNAVAILABLE` or `SUPPLIER_TIMEOUT`). No PKFare code or text leaves the adapter.
+  5. The PKFare priced-offer reader joins the look-up of OBE-119 under `pkfare`. The neutral priced offer holds the prices per traveller, the totals and the low-cost flag; its version 2 snapshot holds an allow-list copy of the answer.
+  6. One expand migration with the next free tenant migration number (0006 is reserved by OBE-105) adds `supplier_valid_until` and `consumed_at` to `priced_offers`, nullable, with `COMMENT ON`. Update the tests that list the tenant migrations, and data-model §3.
+  7. The adapter sets `supplier_valid_until` from the answer. `PricedOffersRepository` gains one atomic step, through `tenantTx`, that sets `consumed_at` only where it is null and the reference still valid. The order task (OBE-169) calls it; a consumed or expired reference is never sent.
+  8. Tests: unit tests of the code table and the atomic step; `pkfare-pricing.int.test.ts` with the fake: the four outcomes, two callers, an expired reference.
+- **Acceptance:**
+  - `flights.price` on a PKFare offer stores a priced offer with supplier, supply id, `supplier_valid_until` and a version 2 snapshot, and answers no PKFare name, code or payload.
+  - A new Amadeus priced offer holds a version 2 snapshot too, and the golden files change only in the snapshot's version and in the reference that names each offer.
+  - A fixture or an injected failure produces each of the four outcomes with its error; an unknown code is `unavailable`.
+  - The reference is consumed at most once: of two callers one gets it; a consumed or expired one is refused.
+  - The migration applies to an empty and to a populated schema; `pricing.int.test.ts` passes unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int test-database && pnpm --filter @velexis/ota-backend test supply priced-offers migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed pkfare-pricing shopping golden-shopping`
+- **Note (2026-11-25):** The plan's row names the two columns and no migration; the lead accepted the expand migration. `pkfare-price-reference-once` (plan §4.10) needs the order request: OBE-169 runs it. Proposed (lead); confirm in the pull request: the outcomes of step 4 use only the errors that `flights.price` lists today, and no contract change comes before the launch. Added dependencies: OBE-107 (step 2 reads its facts file), OBE-159 (step 3 sends through its client), OBE-109 (step 1 re-records its golden files), OBE-110 (its neutral priced offer, step 5) and OBE-123 (the phase D proof compares against the first recording, so this re-recording comes after it).
+- **Note (2026-11-25):** Release order (the lead's rulings S2 and S12): this task ships at least one release after the release that carries OBE-119's reader of both snapshot versions (conventions §9), so a rollback still reads every priced offer. A dependency alone does not make a later release; the pull request names both releases. G4: `packages/db` (the generated tenant types and the tests that list the migrations) and `packages/testing` (its test-database test) change with the migration, so Verify runs their tests.
+
+### OBE-163 · Answer PKFare's traveller requirements in the neutral form of the checkout
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-162, OBE-107, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A35), §4.2 and §4.9 (plan key BM6-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 2; item 9, proposed); ota/docs/flows/checkout-stripe.md §1 and §2; ota/backend/src/checkout/requirements.ts (its header; `requirementsOf`, `requirementsForPricedOffer`, `offerTravelersOf`); ota/backend/src/shopping/priced-offers.mapper.ts (`bookingRequirementsOf`); ota/backend/openapi/velexis-ota-booking-api.openapi.yaml (`PricingBookingRequirements`, `CheckoutRequirements`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/interface/`, `ota/backend/src/checkout/requirements.test.ts`, `ota/backend/test/integration/supply/pkfare-checkout-requirements.int.test.ts`, `ota/docs/flows/checkout-stripe.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. The neutral form exists: `requirementsForPricedOffer` passes the priced offer's `bookingRequirements` (the contract's `PricingBookingRequirements`: contact flags and flags per traveller) and the travellers of its offers (`travelerPricings`) to `requirementsOf`; `bookingRequirementsOf` builds them for Amadeus. `requirementsOf` and the checks of travellers and contacts do not change and test no supplier's name.
+  3. The PKFare priced-offer reader answers the same shape. Per traveller of the offer it sets the flags for what PreciseBooking needs, as the facts file lists it: the date of birth, the gender, an identity document. It sets the contact flags the same way.
+  4. A requirement that the shape cannot express is not dropped: stop and tell the lead. A contract change is not part of this task.
+  5. The traveller's own contacts are checked as today. Which contact is sent to PKFare is the order task's rule (plan A35).
+  6. Tests: cases in `requirements.test.ts` with the requirements that the PKFare reader answers; `pkfare-checkout-requirements.int.test.ts` creates a checkout on a PKFare priced offer with the fake and reads its `requirements`, a traveller with a missing field and a refused value.
+- **Acceptance:**
+  - A checkout on a PKFare priced offer answers `requirements` in the contract's shape, with every field that the facts file lists for PreciseBooking and no PKFare name or member.
+  - A traveller without a required field is reported in `progress.missing`, as for Amadeus.
+  - `requirements.ts` and the contract do not change. The existing cases of `requirements.test.ts` pass unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test requirements supply/adapters/pkfare && pnpm --filter @velexis/ota-backend test:int pkfare-checkout-requirements checkout`
+- **Note (2026-11-25):** OBE-107 is added as a dependency: step 1 reads its facts file. OBE-110 is added too: the reader of step 3 answers the requirements through its neutral priced offer.
+
+### OBE-164 · Read PKFare fare rules through the Penalty API and never sell without readable rules
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-162, OBE-107, OBE-161, X-057, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.8, §4.10 and §4.11 (plan key BM6-07); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 12; item 18, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 3; item 12, proposed); the blocks of OBE-161 and OFE-033; ota/backend/src/shopping/priced-offers.mapper.ts (`FareRulesSource`, `fareRuleSummaryOf`, `fareRuleSetOf`); ota/backend/openapi/velexis-ota-booking-api.openapi.yaml (`FareRuleSet`, `FareRuleSummary`, the error codes of flights.price)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/readers/`, `ota/backend/src/shopping/priced-offers.mapper.ts`, `ota/backend/src/shopping/priced-offers.mapper.test.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/test/integration/supply/pkfare-fare-rules.int.test.ts`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. In its Price call the adapter asks the Penalty API for the offer it just priced and stores the answer as an allow-list copy with the priced offer.
+  3. The PKFare reader maps the copy to the neutral fare rules that `fareRuleSummaryOf` and `fareRuleSetOf` answer (summary, categories and fare components; `raw` stays empty), read through the reader of the priced offer's source. If the shape cannot hold a PKFare rule, stop and tell the lead.
+  4. Not sold without readable rules: when Penalty fails, is late or cannot be read into a summary, Price answers `refused` with `409 SOLD_OUT`, an error that flights.price lists today, and no priced offer is stored.
+  5. Low-cost: a priced offer with the low-cost flag of OBE-161 gets the fixed block "no change, no refund", stored with it: its `conditions` and its fare rules' summary answer `refundable: false` and `changeable: false`. So the price page shows the line before payment (OFE-033), and the booking keeps the block (OBE-181).
+  6. Tests: mapper cases over the Penalty fixtures of X-057; `pkfare-fare-rules.int.test.ts` with the fake (Penalty refused, Penalty late, a low-cost offer).
+- **Acceptance:**
+  - `flights.getFareRules` of a PKFare priced offer answers a summary from the stored Penalty answer, without a supplier call, a supplier name or a `raw` entry.
+  - A PKFare offer without readable rules is never priced: `flights.price` answers `409 SOLD_OUT`, and no `priced_offers` row is written.
+  - A low-cost priced offer answers `conditions.refundable` and `conditions.changeable` as `false`, in both scopes. `pricing.int.test.ts` passes unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test priced-offers supply/adapters/pkfare && pnpm --filter @velexis/ota-backend test:int pkfare-fare-rules shopping`
+- **Note (2026-11-25):** The plan's row says "not sold" and names no outcome. Proposed (lead); confirm in the pull request: the outcome `refused` and its answer `409 SOLD_OUT`, an error that `flights.price` lists today, with no contract change before the launch. OBE-107, OBE-161 and X-057 are added as dependencies: step 1 reads the facts file, step 5 uses OBE-161's low-cost flag, and step 6 the Penalty fixtures. OBE-110 is added too: steps 3 and 5 extend its neutral fare rules and conditions.
+- **Note (2026-11-25):** Rests on OADR-0020, question 1: low-cost content stays in the first release until the facts are known, so step 5 applies. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-165 · Store the expected debit and the cost price on a PKFare priced offer; never return the debit
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-162, OBE-113, OBE-107, OBE-152, OBE-146, PBE-079, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A15), §4.6 and §4.10 (plan key BM6-08); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 5; item 17, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 1 and 2; item 6, proposed); docs/mvp/conventions.md §1 and §9; the blocks of OBE-146, OBE-152, OBE-177 and PBE-079 (the wallet's currency column); ota/backend/test/support/json-walk.ts
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/interface/`, `ota/backend/src/shopping/priced-offers.repository.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/integration/supply/pkfare-expected-debit.int.test.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. The expected debit is the order amount plus PKFare's fee (plan §4.10). The adapter computes it at Price with `decimal.js`, in the wallet's currency: the non-secret currency column of Velexis's supplier account (PBE-079), which OBE-146 returns with the account's granted columns (the lead's ruling S14). It keeps the fee (the plan's "merchant fee") as its own amount. Nothing is converted: an answer in another currency is not priced.
+  3. The cost price is what the OTA pays Velexis: the row's `net_total`, which the markup engine takes as net. Until OBE-192 it equals the supplier's net price.
+  4. One expand migration with the next free tenant migration number (0006 is reserved by OBE-105) adds the expected debit, its currency and the fee to `priced_offers`, nullable, each with its `COMMENT ON`. No CHECK makes them required: during the fan-out the previous release may still store a PKFare priced offer without them (conventions §9). Update the tests that list the tenant migrations and data-model §3.
+  5. `PricedOffersRepository.insert` writes them through `tenantTx` and refuses a priced offer of a source paid from a supplier balance without them. No mapper reads them, so no answer returns them. Console scope shows the cost price as `netPrice` (OBE-152).
+  6. `pkfare-expected-debit.int.test.ts` with the fake searches the answers of `flights.price`, `flights.getPricedOffer` and `checkout.get`, in both scopes, for the known debit and fee (`json-walk.ts`).
+- **Acceptance:**
+  - A PKFare priced offer stores the expected debit in the wallet's currency and the fee: the order amount plus the fee of the fixture, to the minor unit.
+  - A known debit and fee are in no answer of either scope; the only net amount in console scope is the cost price.
+  - The repository refuses a PKFare priced offer without its debit, its currency or its fee (a unit test).
+  - The migration applies to an empty and to a populated schema; no test is deleted or weakened.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int test-database && pnpm --filter @velexis/ota-backend test supply/adapters/pkfare migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed pkfare-expected-debit`
+- **Note (2026-11-25):** The plan's row names no migration; the lead accepted the expand migration of step 4 (expand only), whose columns let the daily limit (OBE-177) add the debits up in the wallet's currency (the lead's ruling S8). Added dependencies: OBE-107 (step 1 reads the facts file), OBE-152 (acceptance 2 needs its console scope), OBE-146 and PBE-079 (step 2 reads the wallet's currency, PBE-079's column, through OBE-146; the lead's ruling S14) and OBE-110 (its neutral priced offer carries the amounts to the repository).
+- **Note (2026-11-25):** G4: `packages/db` (the generated tenant types and the tests that list the migrations) and `packages/testing` (its test-database test) change with the migration, so Verify runs their tests.
+
+### OBE-166 · Run conformance part 1 against the PKFare adapter and prove the merged search with two stubs
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-160, OBE-161, OBE-162, OBE-163, OBE-164, OBE-165, OBE-122, OBE-107, X-058, OBE-146, OBE-113, X-075, OBE-159
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §4.4 and §6 (plan key BM6-09; the exit of P6); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2 and 13); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 1 and 3; item 8, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 1; item 9, proposed); the blocks of OBE-122 and OBE-146
+- **Files:** `ota/backend/test/integration/supply/conformance-pkfare.int.test.ts`, `ota/backend/test/integration/supply/merged-search.int.test.ts`, `ota/backend/test/supply/conformance/`, `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. `conformance-pkfare.int.test.ts` gives the suite of OBE-122 a harness for the PKFare adapter: build the adapter, make the fake of X-058 answer a scenario, read the call-log rows.
+  3. Every case of part 1 runs: capabilities, search, read, price, deadlines, redaction, no supplier name in neutral output. The redaction case plants the fake's key, a signature and a document number. A case is left out only for a capability that the adapter declares missing.
+  4. Where a case fails because the suite assumes Amadeus, change the harness, not the assertion; fix a defect of the adapter in the adapter.
+  5. `merged-search.int.test.ts` runs `flights.search` for one OTA with two sources, the Amadeus stub and the PKFare fake, written with the row builders of X-075 and OBE-159: both answer; PKFare fails; PKFare is held past its deadline; both fail.
+  6. A source that is off gets zero calls: with the per-tenant switch off, the global switch off or a stop set (the levels of OBE-146, written as the migrator role), the fake counts no request.
+- **Acceptance:**
+  - Conformance part 1 passes for the PKFare adapter with the same cases as for Amadeus; each case left out names the missing capability.
+  - A PKFare failure or time-out never fails the merged search: the Amadeus offers are answered, and the PKFare row of `flight_search_sources` says `failed` or `timed_out`.
+  - A source that is off at any level receives zero requests. No existing test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int supply/conformance merged-search`
+- **Note (2026-11-25):** OBE-107, X-058 and OBE-146 are added as dependencies: step 1 reads the facts file, step 2 drives the fake of X-058, and step 6 sets the levels of OBE-146. OBE-113 (the `flight_search_sources` rows of acceptance 2), X-075 and OBE-159 (the row builders of step 5; step 2 also reads the call log of OBE-159's client) are added too.
+
+### OBE-167 · Load-test the merged search and fix the PKFare search deadline as a number in `performance.md`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-166, OBE-107, OBE-108, X-058, OBE-159, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1, §9.2 and §9.6 item 5 (plan key BM6-10); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 19); the blocks of OBE-108 and OBE-123; ota/docs/performance.md §1, §9 and §10; ota/backend/test/load/search-load.mjs (its header) and README.md; tools/perf/booking-load-memory.test.mjs (it imports the load scripts)
+- **Files:** `ota/backend/test/load/search-load.mjs`, `ota/backend/test/load/README.md`, `ota/backend/src/supply/adapters/pkfare/`, `ota/docs/performance.md`, `ota/docs/suppliers/pkfare-facts.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107), the section "Sandbox measurements" (OBE-108); if a fact there differs from this block, stop and tell the lead.
+  2. `search-load.mjs` gains a second supplier side: the fake of X-058 behind a delaying proxy, which the API it starts reaches through `PKFARE_BASE_URL_TEST` (OBE-159), as it reaches the Amadeus stub today. The option `--pkfare-delay-ms <n>` switches the second source on for every tenant of the run, its rows written with the PKFare account that OBE-159 adds to `supply-rows.ts`, and holds each PKFare answer for n ms; the report then shows per source the calls, the outcomes and its share of the merged list.
+  3. Three runs each, back to back on one machine (§10 of performance.md): Amadeus alone; both sources with the PKFare delay at the sandbox's median and 95th percentile; PKFare held past its deadline.
+  4. Fix the PKFare search deadline from the runs: one number, in the adapter's constant and in a new section of performance.md with a §9 row, with its reasoning. Mark it as provisional in the facts file: sandbox times are not production times (plan §9.2).
+  5. The 500 ms budget of `flights.search` counts the server's own time, as today. If it is missed with two sources, stop and tell the lead; do not raise it.
+- **Acceptance:**
+  - performance.md holds the runs with one and with two sources, a §9 row and the PKFare search deadline as a number with its reasoning; the adapter's constant holds the same number.
+  - With PKFare held past its deadline every search still answers the Amadeus offers, and the p95 without the suppliers' delays stays within 500 ms.
+  - Without `--pkfare-delay-ms` the script runs and reports as before, and `booking-load.mjs`, which imports its parts, still loads.
+- **Verify:** `node --check ota/backend/test/load/booking-load.mjs && node --test tools/perf/*.test.mjs && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 150 --pkfare-delay-ms 300 && pnpm --filter @velexis/ota-backend lint`
+- **Note (2026-11-25):** The plan names tools/perf; the search load test is ota/backend/test/load/search-load.mjs (accepted by the lead), so no file of tools/perf changes, but its tests import the load scripts and run in Verify. OBE-107, OBE-108 and X-058 are added as dependencies: step 1 reads the facts file and its measurements, and step 2 runs the fake. OBE-159 and X-075 are added too: step 2 sets OBE-159's variable `PKFARE_BASE_URL_TEST` and writes the PKFare rows with `supply-rows.ts`, to which X-075 moves the script's seeding and OBE-159 adds the PKFare account.
+
+### OBE-168 · Add the tenant table `booking_supplier_orders` with its repository and an isolation test
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-145
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.10 (plan key BM7-01; the three terms and the eight money rules) and §4.11 (BM7-16, later: a second order of the kind `extras`); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 5 to 9, proposed); docs/mvp/conventions.md §9; ota/backend/migrations/README.md; the block of OBE-105 (the eight test files that list the tenant migrations); the block of OBE-198 (the case row that joins the open-case mark)
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/bookings/bookings.module.ts`, `ota/backend/test/integration/supply/supplier-orders.int.test.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. One tenant migration (phase `expand`) with the next free tenant migration number (0006 is reserved by OBE-105) adds `booking_supplier_orders`: one row per supplier order of a booking whose source is paid from a supplier balance. Every column gets its `COMMENT ON`; states and the order's kind are `text` with a CHECK. The `supplier` column has no CHECK on the list of suppliers, like the other `supplier` columns: the registry refuses an unknown supplier.
+  2. The plan names no columns. Store what the money rules of plan §4.10 need: the booking, the supplier and the supply id; the order's kind (only `flight` in this milestone); the supplier's order number, null until known; the order write-ahead and the ticketing write-ahead, each a time; the hold end; the time and amount of the last order pricing; the capture deadline; the expected and the reported debit with their currency; the supplier's last status and read time; the open-case mark (kind, opened, last alert). No name, contact, document number or payload.
+  3. A unique key on the booking and the kind allows one flight order per booking, so rule 2 also holds in the database. A CHECK lets a ticketing write-ahead exist only with an order number.
+  4. `SupplierOrdersRepository` uses `tenantTx` only. Each write-ahead is one atomic step: it sets the time only where it is null and says whether this caller set it.
+  5. One function of the repository sets the open-case mark and records its last alert; its name is proposed in the pull request. OBE-171, OBE-172, OBE-173 and OBE-175 call it and never write those columns themselves. OBE-198 later inserts its case row in the same transaction, inside that function.
+  6. `supplier-orders.int.test.ts` covers the repository's steps, two callers of each write-ahead, the open-case mark with its last alert, and isolation between two tenants.
+  7. Run `pnpm db:codegen`. Update the eight test files that list the tenant migrations, as OBE-105 does, add the row of the migrations README and describe the table in `data-model.md`.
+- **Acceptance:**
+  - The migration applies to an empty schema and to one at the previous version with rows (`tenant-0002.int.test.ts`), and `pnpm db:codegen` leaves no diff.
+  - The isolation test passes: no row of one tenant is read or changed in another tenant's transaction.
+  - Of two concurrent callers exactly one sets each write-ahead, and a second flight order of one booking fails on the unique key. No test is deleted or weakened.
+  - The open-case mark has one writer, the function of step 5. The table stores a row of the fake source as it stores a PKFare row.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed supplier-orders`
+- **Note (2026-11-25):** The order's kind and the unique key on booking and kind are not in the plan's row: proposed in review, so that the later order of the kind `extras` (OBE-213, milestone M8) needs no new key and no new column, only a wider CHECK of the kind. Confirm in the pull request. `packages/db` and `packages/testing` change with the migration, because their tests list the tenant migrations; Verify runs them.
+
+### OBE-169 · Create the PKFare order: one PreciseBooking behind a write-ahead, a code table, a neutral order
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-168, X-064, OBE-128, OBE-163, OBE-127, OBE-159, OBE-162, OBE-107, OBE-124
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A33, A35), §4.9 and §4.10 (plan key BM7-03; money rules 1 and 2; the paragraph "A lost order answer"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 4 and 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 5 and 9, proposed); ota/docs/adr/0002-offer-and-priced-offer-caching.md (point 4; its Revisions line); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 8 and 9, proposed; the list "Notes that wait for a decision"); docs/mvp/conventions.md §8; the blocks of OBE-124, OBE-127, OBE-128, OBE-159, OBE-162, OBE-163 and OBE-168; ota/backend/src/bookings/booking-orchestrator.service.ts (`repriceIfNeeded`, `recordSending`, `sendOrder`, `unknownOutcome`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/interface/`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/config.ts`, `ota/backend/src/config.test.ts`, `.env.example`, `deploy/env/ota-backend.env.example`, `docs/mvp/architecture.md`, `ota/backend/test/integration/supply/pkfare-one-order-per-checkout.int.test.ts`, `ota/backend/test/integration/supply/pkfare-price-reference-once.int.test.ts`, `ota/docs/architecture-booking.md`, `ota/docs/adr/0002-offer-and-priced-offer-caching.md`, `ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. Rule 1: for a source whose adapter asks for it, `repriceIfNeeded` always prices again before the order. The order consumes the new price reference with the atomic step of OBE-162; a consumed or expired reference is never sent.
+  3. Rule 2: `recordSending` commits the order row of OBE-168 with its write-ahead, under the booking's lock, before the request leaves. A booking with a write-ahead never sends PreciseBooking again: not after a restart, a replay or a second tab. The step follows a capability, never a supplier's name.
+  4. The adapter builds PreciseBooking from the consumed reference, the travellers (OBE-163) and our booking reference (OBE-182 later puts a routing part into it), and sends it once through the client of OBE-159. Its contact e-mails and phone numbers are Velexis's (A35), from two configuration entries: Proposed (lead); confirm in the pull request. Add them as conventions §8 says; the pull request names the human step for `/etc/velexis`.
+  5. A code table per PKFare operation, from the facts file, answers `created`, `rejected`, `not_sent` or `unknown`. `not_sent` needs proof that the request never left the process. A time-out, a reset, an unreadable answer or an unknown code is `unknown`.
+  6. `created` gives the neutral order of OBE-127: the order number, the pay-by time and an allow-list snapshot. `unknown` leaves the booking `pending` with the card hold, outside the Amadeus reconciliation job; staff get a neutral alert and nothing is voided (A33). The case "order unknown" is OBE-173's.
+  7. Tests with the fake: `pkfare-one-order-per-checkout` (two tabs, two idempotency keys, a restart after the write-ahead, a lost answer), `pkfare-price-reference-once`, and unit tests of the code table.
+  8. Records, in this pull request: write OADR-0019's waiting note on OADR-0002 point 4 as a dated note under that point, in that record's style (the note under the point and a clause on its Revisions line): for a source whose adapter asks for it, the completion always prices again before the order, and the order consumes the new price reference once (rule 1; OADR-0019 items 8 and 9 and OADR-0020 item 5, proposed, which the owner's go for the wave accepts). Take point 4 out of the OADR-0002 line of OADR-0019's list "Notes that wait for a decision"; the line goes once nothing is left in it.
+- **Acceptance:**
+  - `pkfare-one-order-per-checkout` and `pkfare-price-reference-once` pass: the fake counts at most one PreciseBooking per checkout, and no price reference is sent twice.
+  - A lost answer gives `unknown`: the booking stays `pending` with its hold, and no second request leaves.
+  - No snapshot, call-log row or log line holds the signature, a contact value or a document number. The nine booking integration files pass unchanged; no test is deleted or weakened.
+  - OADR-0002 carries the dated note under point 4, and OADR-0019's list of waiting notes no longer names that point.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/adapters/pkfare booking-orchestrator config && pnpm --filter @velexis/ota-backend test:int pkfare-one-order-per-checkout pkfare-price-reference-once bookings golden-booking`
+- **Note (2026-11-25):** Added dependencies, each a product that a step uses: OBE-107 (the facts file of step 1 and the code table of step 5), OBE-163 (the traveller form), OBE-159 (the client), OBE-162 (the single-use price reference), OBE-127 (the neutral order) and OBE-124 (the golden test `golden-booking` that Verify runs; the lead's ruling S5). The root `.env.example`, `deploy/env/ota-backend.env.example` and the configuration matrix in `docs/mvp/architecture.md` change with the two entries of step 4 (conventions §8); `config.test.ts` reads the env template, and Verify runs it.
+
+### OBE-170 · Check a PKFare order payable with OrderPricing and WalletBalance, and release a refused order
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-169, OBE-142, OBE-165, OBE-136, OBE-168, OBE-107, X-064
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A21, A33), §4.9 and §4.10 (plan key BM7-04; money rule 3; step 4 of the flow); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 4, proposed; item 6, proposed); the blocks of OBE-136, OBE-142, OBE-165 and OBE-168; ota/backend/src/bookings/booking-orchestrator.service.ts (`afterClaim`, `failBooking`, `voidPayment`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/test/integration/supply/pkfare-capture-needs-payable-order.int.test.ts`, `ota/backend/test/integration/supply/check-payable.int.test.ts`, `ota/docs/architecture-booking.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. The adapter's Check payable sends OrderPricing and classifies it with its code table. It compares the amount with the expected debit (OBE-165), with `decimal.js`: a refusal is `refused`, a higher amount `higher_amount`.
+  3. Then it reads WalletBalance, once per completion (A21). A balance below the expected debit is `balance_short`. The balance is never stored, logged or returned. A lost or unreadable answer of either call is `unknown`.
+  4. `payable`: the orchestrator stores on the order row the time and amount of the order pricing, the hold end and the expected debit with its currency, then goes on to the record step and the capture.
+  5. Release path for `refused`, `higher_amount` and `balance_short`: the adapter's Cancel or release sends CancelOrder, through the engine; then the booking is `failed`, the card hold voided, and the answer is the error of a rejected order in neutral words. A release that answers neither `cancelled` nor `order_not_found` takes the path of `unknown`: nothing is voided and staff are alerted.
+  6. Tests: `pkfare-capture-needs-payable-order.int.test.ts` with the fake covers the five outcomes; unit tests cover the comparison. Where the tests of OBE-142 (`booking-orchestrator.service.test.ts`, `check-payable.int.test.ts`) expect the path of `unknown` for the three outcomes, they now expect the release path, in a commit of its own (AGENTS.md §7): the pull request lists each changed expectation with plan §4.9, and the `payable` and `unknown` cases keep their assertions.
+- **Acceptance:**
+  - `pkfare-capture-needs-payable-order` passes: Stripe gets a capture only after `payable`, which needs a successful OrderPricing, an open hold, an amount within the expected debit and a covering balance.
+  - `refused`, `higher_amount` and `balance_short` end with one CancelOrder, a `failed` booking and a voided hold; `unknown` voids nothing.
+  - No answer, log line or stored row holds the wallet balance. In the tests of OBE-142 only the expectations of the three released outcomes change; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/adapters/pkfare booking-orchestrator && pnpm --filter @velexis/ota-backend test:int pkfare-capture-needs-payable-order check-payable bookings`
+- **Note (2026-11-25):** Added dependencies: OBE-107 (step 1 and the code table of step 2), OBE-165 stores the expected debit, OBE-136 adds Cancel or release to the engine, OBE-168 holds the order row. The public error and the failed release of step 5 are not in the plan's row: Proposed (lead); confirm in the pull request.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's scripted OrderPricing, WalletBalance and CancelOrder, on which `pkfare-capture-needs-payable-order.int.test.ts` runs.
+
+### OBE-171 · Enforce the capture deadline: release an uncaptured order, make a racing capture an open case
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-170, OBE-136, OBE-168, OBE-107, X-064
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A32), §4.9 and §4.10 (plan key BM7-05; money rules 4 and 5; assertions 1, 6, 9 and 12 of Annex B); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 4, 7, 8 and 9, proposed; the list "Notes that wait for a decision"); ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md (points 3 and 6; its Revisions line); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (points 1 and 11); ota/backend/src/bookings/booking-orchestrator.service.ts; ota/backend/src/payments/payments.processor.ts (`PAYMENT_JOB`, `safetyNetJob`); ota/backend/src/bookings/cancellation-state.ts
+- **Files:** `ota/backend/src/payments/capture-deadline.ts`, `ota/backend/src/payments/capture-deadline.test.ts`, `ota/backend/src/payments/payments.processor.ts`, `ota/backend/src/payments/payments.processor.test.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/test/integration/supply/pkfare-capture-deadline.int.test.ts`, `ota/docs/flows/checkout-stripe.md`, `ota/docs/architecture.md`, `ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md`, `ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. `capture-deadline.ts`: one pure function, the earlier of the hold end and the last order pricing plus 30 minutes (20 if PKFare allows no second OrderPricing), less 5 minutes (A32); named constants. The orchestrator stores the deadline on the order row at `payable`.
+  3. Every capture path (the orchestrator's `capture`, the job `payment.capture_retry`) reads the deadline and the claim of step 5 under the booking's lock before calling Stripe: after the deadline, or with the claim, nothing is captured. The console's capture is OBE-179's.
+  4. A delayed job on `ota-payments` runs at the deadline, added before the record step's commit with a fixed id per payment, like `safetyNetJob`. Its name joins `PAYMENT_JOB` and `PAYMENT_JOBS`, and the tests that pin them.
+  5. The job claims the booking under its row lock, as a cancellation does (`cancellation_claimed_at`), and commits; then it reads the PaymentIntent from Stripe.
+  6. Not captured: CancelOrder (the engine's Cancel or release), the booking `cancelled`, then `payment.void`; only a successful void queues the e-mail `booking.not_confirmed`.
+  7. A racing capture: if the read shows it, nothing is cancelled or voided; if it lands after the read, the void fails and no e-mail follows. Either way the order row gets the open-case mark through the repository function of OBE-168, and staff get an alert; the job sends no ticketing request.
+  8. `pkfare-capture-deadline.int.test.ts` (the fake, the fake Stripe, the clock): both sides of the deadline, a capture retry after it, the release, a capture in flight before and after the read.
+  9. Records, in this pull request: write OADR-0020's waiting note on OADR-0010 as a dated note under point 6, in that record's style (the note under the point and a clause on its Revisions line): for a source paid from a supplier balance the capture comes before the ticketing request and never after the capture deadline; the deadline job of step 4 on `ota-payments` releases an uncaptured order and voids its hold, and no `payment.void` follows a ticketing write-ahead (OADR-0020 items 4, 7 and 8, proposed, which the owner's go for the wave accepts). Take the OADR-0010 line out of OADR-0020's list "Notes that wait for a decision".
+- **Acceptance:**
+  - `pkfare-capture-deadline` passes: nothing is captured after the deadline; an uncaptured booking ends `cancelled` with one CancelOrder, a void after the status change and, after a successful void, one e-mail.
+  - A capture that lands while the job runs ends with an open case, a staff alert and no `booking.not_confirmed`; if the read shows it, no CancelOrder or void follows.
+  - No transaction is open across a Stripe or supplier call; Amadeus capture paths do not change. No test is deleted or weakened.
+  - OADR-0010 carries the dated note, and OADR-0020's list of waiting notes no longer names OADR-0010.
+- **Verify:** `pnpm --filter @velexis/ota-backend test capture-deadline payments.processor booking-orchestrator && pnpm --filter @velexis/ota-backend test:int pkfare-capture-deadline payments bookings`
+- **Note (2026-11-25):** Added dependencies: OBE-107 (step 1), OBE-136 (Cancel or release) and OBE-168 (the order row and the function that sets the open-case mark). The lead's ruling: the claim of step 5 replaces the plan's "under the booking lock" (OADR-0003 point 1: no transaction open across a Stripe call). The job's name and the e-mail of step 6 are proposed; confirm in the pull request. Step 9 is the waiting note of OADR-0020 on OADR-0010: the deadline job and its void (steps 4 to 7) are this task's change to point 6.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's hold end on its clock, CancelOrder and request counters, on which `pkfare-capture-deadline.int.test.ts` runs.
+
+### OBE-172 · Request PKFare ticketing once: order read, second OrderPricing, write-ahead, debit comparison
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-170, OBE-132, OBE-168, OBE-107, OBE-171, OBE-129, OBE-155, X-064
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6, A31, A32, A35), §4.9 and §4.10 (plan key BM7-06; money rule 5; steps 6 and 7 of the flow); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5; the list "Notes that wait for a decision"); docs/mvp/adr/0011-payments-stripe-and-airline-card.md (§A, the common rules for all modes; its Revisions line); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 1; item 4, proposed; item 5, proposed; item 6, proposed; item 9, proposed; the list "Notes that wait for a decision"); ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md (points 1 and 7; its Revisions line); the blocks of OBE-132, OBE-168 and OBE-171; ota/backend/src/bookings/booking-orchestrator.service.ts (`capture`, `issue`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/interface/`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.test.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/test/integration/supply/pkfare-one-ticketing-request.int.test.ts`, `ota/docs/flows/ticketing-and-documents.md`, `docs/mvp/adr/0011-payments-stripe-and-airline-card.md`, `docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md`, `ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md`, `ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. If it says that PKFare allows no second OrderPricing, step 3 sends none: the 20-minute window of OBE-171 then keeps the order pricing fresh (plan §4.10, rule 5).
+  2. For a source paid from a supplier balance, `issue` asks for ticketing only after a capture of the booking's full total. It runs in the completion request (A31); the job of OBE-173 uses the same function after a late capture.
+  3. The adapter reads OrderDetail first: the order must be payable. When the last order pricing is older than 20 minutes (A32), it sends a second OrderPricing. One that fails or shows a higher amount ends without a Ticketing request: an open case, and nothing more is captured.
+  4. Write-ahead: under the booking's lock, the ticketing write-ahead of the order row is committed before the request leaves. A row with it never sends Ticketing again: not after a restart, a replay or a lost answer.
+  5. One Ticketing request, with Velexis's contacts (A35). The code table answers `accepted`, `rejected`, `balance_refused` or `unknown`; a time-out or an unknown code is `unknown`.
+  6. The debit that the answer reports is stored on the order row and compared with the expected debit. A difference is kept on the row and logged with ids only; its alert is PBE-098's.
+  7. `accepted`: the function of OBE-132 stores the acceptance. `rejected`, `balance_refused` and `unknown`: the open-case mark, a staff alert in neutral words, no re-send, no void, no CancelOrder. Every open case of this task, step 3's included, sets the mark through the repository function of OBE-168. The traveller's texts of an open case are OBE-178's.
+  8. `pkfare-one-ticketing-request.int.test.ts` with the fake: a lost answer, a restart after the write-ahead, two callers at once, no full capture, and a higher second OrderPricing.
+  9. Records, in this pull request: write ADR-0030's waiting note on ADR-0011 as a dated note in that record's style, under the common rules of §A and on its Revisions line. It says that a source other than Amadeus takes Stripe only, and that the traveller's payment is captured in full before the supplier is asked to ticket (A6; OADR-0020 item 4, proposed, which the owner's go for the wave accepts). Take its line out of ADR-0030's list "Notes that wait for a decision". Beside it, write OADR-0020's waiting note on OADR-0003 as a dated note in that record's style, under the points it changes and on its Revisions line: for a source paid from a supplier balance, Check payable and the full capture come before the one ticketing request, each request leaves only after its write-ahead and is never sent again, and the reported debit is compared with the expected one (OADR-0020 items 4 to 6, proposed, which the owner's go for the wave accepts). Take the OADR-0003 line out of OADR-0020's list "Notes that wait for a decision".
+- **Acceptance:**
+  - `pkfare-one-ticketing-request` passes: the fake counts at most one Ticketing request per order, and none without a full capture.
+  - A second OrderPricing that fails or is higher sends no Ticketing request and opens a case; the reported debit is stored and compared with the expected debit.
+  - After a ticketing write-ahead no void is queued and no CancelOrder is sent. `complete-stripe.int.test.ts` and `ticketing.int.test.ts` pass unchanged; no test is deleted or weakened.
+  - ADR-0011 and OADR-0003 carry the dated notes, and the lists of waiting notes of ADR-0030 and OADR-0020 no longer name them.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/adapters/pkfare booking-orchestrator && pnpm --filter @velexis/ota-backend test:int pkfare-one-ticketing-request request-ticketing bookings`
+- **Note (2026-11-25):** Added dependencies: OBE-107 (step 1), OBE-168 (the ticketing write-ahead, the reported debit and the open-case mark are on its order row), OBE-171 (its 20-minute window keeps the order pricing fresh when the facts file allows no second OrderPricing), and OBE-129 and OBE-155 (they build the Stripe-only rule that the note of step 9 records). OBE-171 stays a dependency until OBE-107's facts are written; if they show that PKFare allows a second OrderPricing, the lead drops it before the wave (the lead's ruling S16). The lead's ruling gives ADR-0030's waiting note on ADR-0011 to the task that orders the capture before the ticketing request: this one; OADR-0020's note on OADR-0003 records the same order of steps, so it ships beside it.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's OrderDetail, OrderPricing and Ticketing, a scripted lost answer and the request counters, on which `pkfare-one-ticketing-request.int.test.ts` runs.
+
+### OBE-173 · Add the follow-up job `supply.order_followup`: late ticketing request, polling, stale write-aheads
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-172, OBE-176, OBE-134, OBE-168, OBE-107, OBE-145, X-064
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A31, A33), §4.4, §4.9 and §4.10 (plan key BM7-07; money rule 6; the bullet "Each background job query names the supplier it serves"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 5, proposed; item 8, proposed; item 9, proposed); ota/docs/adr/0014-per-tenant-workers-and-schedulers.md (points 1 and 4); ota/backend/src/jobs/schedulers.ts; ota/backend/src/bookings/ticketing.processor.ts
+- **Files:** `ota/backend/src/jobs/schedulers.ts`, `ota/backend/src/jobs/fan-out.test.ts`, `ota/backend/src/bookings/order-followup.processor.ts`, `ota/backend/src/bookings/order-followup.service.ts`, `ota/backend/src/bookings/order-followup.service.test.ts`, `ota/backend/src/bookings/bookings.module.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/test/integration/supply/pkfare-poll-until-final.int.test.ts`, `ota/docs/architecture.md`, `ota/docs/flows/ticketing-and-documents.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. Take the polling interval and the age of a stale write-ahead from it, as named constants; the plan names neither.
+  2. Add the schedule `supply.order_followup` to `OTA_SCHEDULES`, for `active` and `suspended` tenants. `ScheduleDefinition.milestone` takes `M7`, which OBE-175 adds with the first M7 schedule; add it here if it is not there yet. Its scan reads `booking_supplier_orders` through `tenantTx` and names the supplier it serves; it never selects an Amadeus booking.
+  3. Late capture: a row with a full capture, no ticketing write-ahead and no open case gets the one ticketing request through the function of OBE-172, with all its checks.
+  4. Polling: a row with a ticketing write-ahead, accepted or still without an answer, is read with Read order (OrderDetail) until the supplier's status is final. There is no give-up; the only stop is the emergency stop of plan §4.4 (`disabled`).
+  5. Status mapping: one table in the adapter maps PKFare's order statuses to neutral states (in progress, issued, rejected, cancelled). A final issued status is left to the record step, which OBE-174 adds to this job; until then the row stays as it is. A final rejected status opens a case: the open-case mark and a staff alert.
+  6. Stale write-aheads go to review. An order write-ahead without an outcome gets the open-case mark "order unknown" and, for a Velexis source, the message `supply.case_opened` of OBE-176. A ticketing write-ahead without an outcome gets the open-case mark and an alert, and stays polled. Every mark of this job is set through the repository function of OBE-168. Neither request is sent again.
+  7. `pkfare-poll-until-final.int.test.ts` with the fake and the clock: many scans until a late status change, the stop under `disabled`, one request after a late capture, one case message for a stale order write-ahead, a lost Ticketing answer read until final.
+- **Acceptance:**
+  - `pkfare-poll-until-final` passes: polling goes on until a final status and stops only under `disabled`; after a late capture the fake counts exactly one Ticketing request.
+  - A stale order write-ahead sends no second PreciseBooking, opens a case "order unknown" and publishes `supply.case_opened` once.
+  - After a ticketing write-ahead the job queues no void and sends no CancelOrder. `fan-out.test.ts` lists the schedule; the fence tests of OBE-145 pass unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test order-followup fan-out supply/adapters/pkfare && pnpm --filter @velexis/ota-backend test:int pkfare-poll-until-final job-fence bookings`
+- **Note (2026-11-25):** Added dependencies: OBE-107 (step 1), OBE-134 adds Read order to the engine, OBE-168 holds the order rows that the scan reads and the function that sets the mark, and OBE-145 owns the fence tests that Verify runs. Step 4 also polls a ticketing write-ahead without an answer: rule 6 lets polling stop only at a final status.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's OrderDetail, scripted status changes and lost answers, and the request counters, on which `pkfare-poll-until-final.int.test.ts` runs.
+
+### OBE-174 · Record tickets and the airline's reference from OrderDetail under the booking lock
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-173, OBE-168, OBE-107, X-057, OBE-133, OBE-154, X-064
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.9 and §4.10 (plan key BM7-08; step 8 of the flow; money rule 6); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 4); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 8, proposed); ota/docs/adr/0013-notifications-and-booking-documents.md (points 1, 6 and 8); the blocks of OBE-133, OBE-154 and OBE-173; ota/backend/src/bookings/ticketing.service.ts (`recordIssuedTickets`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/bookings/order-followup.service.ts`, `ota/backend/src/bookings/order-followup.service.test.ts`, `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/test/integration/supply/pkfare-record-tickets.int.test.ts`, `ota/docs/flows/ticketing-and-documents.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. The adapter's OrderDetail reader fills the neutral order: the ticket number per traveller and the airline's reference from `pnrList`. The stored snapshot is an allow-list copy.
+  3. Fall-back: when `pnrList` holds no airline reference, the reader takes the field that the facts file names. With neither, the booking has no airline reference: never the supplier's order number.
+  4. Record step, under the booking's lock and with no supplier call inside the transaction; the follow-up job of OBE-173 hands it each final issued status. With ticket numbers, `recordIssuedTickets` writes the ticket rows, the booking `ticketed`, its events, the e-mail `booking.ticketed` and the document jobs, as for any supplier (OBE-133). The airline's reference is stored as the airline's own record, which the helper of OBE-154 answers as the main locator with the kind `airline`. The order row gets its final status. OBE-174, OBE-178, OBE-179 and OBE-181 change `order-followup.service.ts`; whichever merges later keeps the others' branches (the record step, the case texts, the read at once, the ticketless rule).
+  5. A final issued status without ticket numbers records nothing: the booking is not `ticketed`. The low-cost exception is OBE-181's. A second read of the same final status changes nothing.
+  6. `pkfare-record-tickets.int.test.ts` with the fake: issued with numbers; an empty `pnrList`; issued without numbers; the same status read twice. Unit tests cover the reader over the OrderDetail fixtures.
+- **Acceptance:**
+  - A final issued status with ticket numbers makes the booking `ticketed` exactly once, with one ticket row per traveller and one `booking.ticketed` e-mail.
+  - The airline's reference comes from `pnrList` or the fall-back; no answer, e-mail or document shows the supplier's order number.
+  - A final issued status without ticket numbers leaves the booking not `ticketed`. `ticketing.int.test.ts` passes unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test order-followup ticketing supply/adapters/pkfare && pnpm --filter @velexis/ota-backend test:int pkfare-record-tickets bookings notifications`
+- **Note (2026-11-25):** Added dependencies: OBE-168 (the record step writes the order row's final status through its repository), OBE-107 (step 1 and the fall-back field of step 3), X-057 (the OrderDetail fixtures of step 6), OBE-133 (since it runs the ticketing job through the engine, `recordIssuedTickets` records the tickets of a neutral order) and OBE-154 (its helper answers the airline's record as the main locator, so no answer shows the supplier's order number).
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's OrderDetail and scripted issued statuses, with and without ticket numbers, on which `pkfare-record-tickets.int.test.ts` runs.
+
+### OBE-175 · Add the watchdog `supply.paid_unticketed_watch`: daily alert, oldest case's age in the health checks
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-168
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A32, A34), §4.4 and §4.10 (plan key BM7-09; money rule 7); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 7, proposed; item 9, proposed; the list "Notes that wait for a decision"); ota/docs/adr/0008-ticketing-policy.md (points 4 to 6); ota/backend/src/jobs/schedulers.ts; ota/backend/src/health/queue-age.ts; deploy/scripts/healthcheck.sh (`check_queues`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/jobs/schedulers.ts`, `ota/backend/src/jobs/fan-out.test.ts`, `ota/backend/src/bookings/paid-unticketed-watch.processor.ts`, `ota/backend/src/bookings/paid-unticketed-watch.processor.test.ts`, `ota/backend/src/bookings/bookings.module.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/common/redis/redis.keys.ts`, `ota/backend/src/common/redis/redis.keys.test.ts`, `ota/backend/src/health/health.service.ts`, `ota/backend/src/health/health.service.test.ts`, `ota/backend/test/integration/health/health.int.test.ts`, `ota/backend/test/integration/supply/paid-unticketed-watchdog.int.test.ts`, `deploy/scripts/healthcheck.sh`, `deploy/scripts/test/healthcheck.test.sh`, `ota/docs/architecture.md`, `ota/docs/adr/0008-ticketing-policy.md`, `ota/docs/adr/0020-suppliers-paid-from-a-balance.md`
+- **Steps:**
+  1. Contract first: `HealthReadiness` gains one optional member, on the worker's port only: the age in seconds of the oldest open case, `null` when there is none. Add the change-log row and run `pnpm contracts:generate`. `health.service.test.ts` and `health.int.test.ts` add the member to the worker's answer that they pin; their other assertions stay.
+  2. Add the schedule `supply.paid_unticketed_watch` to `OTA_SCHEDULES` as a scheduler of its own, for `active` and `suspended` tenants. It is the OTA backend's first M7 schedule, so `ScheduleDefinition.milestone` gains `M7` here; OBE-173 adds the next one.
+  3. Per tenant, through `tenantTx`: a booking whose source tickets later and is paid from a supplier balance (A34), with captured money and still not `ticketed` N minutes after the capture, gets the open-case mark on its order row, set through the repository function of OBE-168. N is 30 (A32), a named constant. The watch reads the tenant's rows only, so it also finds the bookings that the emergency stop of plan §4.4 leaves without a ticket.
+  4. Alert: `StaffAlerts`, in neutral words, once per case and UTC day while the case is open; the same function of OBE-168 records the last alert.
+  5. Health: the job keeps the opening time of the tenant's oldest open case in one Redis sorted set of `redis.keys.ts`, by tenant id, with no booking data. The worker's readiness reads the oldest with one command, inside the bounds of the queue report. `healthcheck.sh` gains one check with a threshold variable.
+  6. `paid-unticketed-watchdog.int.test.ts` with the clock: before and after N, the daily repeat, a ticketed or refunded booking, the readiness value. `healthcheck.test.sh` covers the new check.
+  7. Records, in this pull request: write the waiting note of OADR-0020 item 9 on OADR-0008 as a dated note under its point 6, with a **Revisions** line as the other OTA records have one: for a source paid from a supplier balance, a rejected, balance-refused or unknown ticketing answer opens a case without a re-send, in place of the retry schedule of point 4, and this watch alerts daily on captured money without a ticket after N minutes (OADR-0020 item 9, proposed, which the owner's go for the wave accepts). Take item 9 out of the OADR-0008 line of OADR-0020's list "Notes that wait for a decision"; the line goes once its other note (OADR-0019 question 2, OBE-144's) is written too.
+- **Acceptance:**
+  - `paid-unticketed-watchdog` passes: captured money without a ticket after N minutes gives one open-case mark and one alert per day, and nothing before N.
+  - The watch has its own scheduler id and selects by capability; an Amadeus booking is never marked.
+  - The worker's `/health/ready` reports the age of the oldest open case and stays `200`; `healthcheck.sh` fails above the threshold. No test is deleted or weakened.
+  - OADR-0008 carries the dated note, and OADR-0020's list of waiting notes no longer names item 9 for OADR-0008.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test paid-unticketed fan-out health redis.keys && pnpm --filter @velexis/ota-backend test:int paid-unticketed-watchdog health && shellcheck -S style deploy/scripts/healthcheck.sh && bash deploy/scripts/test/healthcheck.test.sh`
+- **Note (2026-11-25):** The lead accepts as proposals the readiness member and the check in `healthcheck.sh`, the reading of "the health checks" in the plan's row. The Redis store and the threshold (H, 24 hours) are proposed; confirm in the pull request. The files in `deploy/scripts` merge with this change, because the on-VM check reads the new member; Verify runs their tests.
+
+### OBE-176 · List open cases in the console and send `supply.case_opened` to the platform
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-175, X-054, OBE-168, OBE-148, OBE-110
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A32), §4.10, §4.12 and §4.13 (plan key BM7-10; the channel "The existing queue to the platform"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 6, 8 and 22); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 7 and 9, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (items 5 and 8, proposed); docs/mvp/conventions.md §5; the blocks of OBE-099, OBE-148 and OBE-198; packages/api-types/src/jobs/tenant-events.ts (`TenantReportEnvelope`); platform/backend/src/provisioning/tenant-events.processor.ts
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/`, `packages/api-types/src/jobs/`, `ota/backend/src/console/open-cases.controller.ts`, `ota/backend/src/console/open-cases.service.ts`, `ota/backend/src/console/console.module.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/bookings/supply-events.producer.ts`, `ota/backend/test/integration/supply/open-cases.int.test.ts`, `platform/backend/src/provisioning/tenant-events.processor.ts`, `platform/backend/src/provisioning/tenant-events.processor.test.ts`, `ota/sdk/src/internal/operations.js`, `ota/sdk/src/namespaces/console.js`, `ota/sdk/test/unit/namespaces-console.test.js`, `ota/sdk/test/contract/methods.generated.ts`, `ota/sdk/test/contract/parity.test.js`, `ota/sdk/docs/extensions.md`, `ota/sdk/README.md`, `ota/sdk/CHANGELOG.md`, `ota/docs/api-changes-console-and-internal.md`
+- **Steps:**
+  1. Contract first, additive: one console operation, proposed `consoleListOpenCases` (`x-scope: console`, `x-milestone: M7`, permission `bookings:read`). An item holds only the booking's id and reference and the case's kind, state, opening time and deadline. Add the change-log row and run `pnpm contracts:generate`.
+  2. SDK, as for OBE-099: `pnpm --filter @velexis/ota-sdk generate`, the proposed method `console.bookings.listOpenCases`, its line in `extensions.md`, and the method counts of the parity test and the README.
+  3. Query, through `tenantTx`: the order rows with an open-case mark in the request's environment. Kinds: paid and not ticketed; order unknown. The deadline is H hours (24, A32) after the capture, or after the opening for an order unknown.
+  4. Message `supply.case_opened` in `packages/api-types/src/jobs/supply-events.ts`, which this task creates if X-066 has not merged (else it adds its message there), registered in `validate.ts` and exported from `index.ts`: tenant, environment, booking id, supply id, kind, opening time and deadline, on the report envelope (`jobId` null), with `additionalProperties: false`. The producer publishes it on `platform-tenant-events` after the commit that opens a case, with a fixed job id per case, for a Velexis source only, as the helper of OBE-148 answers. This task wires the watchdog (OBE-175); OBE-173 and OBE-178 call the producer.
+  5. Platform: the processor fails an unknown name today. It now validates this message and completes it without an effect, logged with ids only, until PBE-092 consumes it.
+  6. Tests: `jobs.test.ts` (the schema, the pinned list); `open-cases.int.test.ts` (per environment, the permission, a walk for supplier words, one message per case, none for a fake own source); the processor's test.
+- **Acceptance:**
+  - `consoleListOpenCases` lists the environment's open cases; a walk of its answers finds no supplier name, order number or code.
+  - Each case of a Velexis source publishes `supply.case_opened` once; a case on an OTA's own source publishes none. The platform completes the message without an effect.
+  - The route-parity and SDK parity tests pass. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/api-types build && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test route-parity && pnpm --filter @velexis/ota-backend test:int open-cases && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/platform-backend test tenant-events && pnpm --filter @velexis/platform-backend test:int provisioning`
+- **Note (2026-11-25):** Added dependencies: OBE-168 (the query reads its order rows) and OBE-148 (its helper tells whether the booking's source is Velexis's). `platform/backend` and `ota/sdk` change in this pull request, as the platform fails an unknown message and a new operation brings its SDK method (conventions §5); Verify runs both. `packages/api-types/src/jobs/` (the message schema of step 4) changes with its producer (G4); Verify builds and tests it. The lead accepts the platform step and the operation's name as proposals; confirm in the pull request. OBE-198 later moves the query of `consoleListOpenCases` to its case table and adds the case kinds of plan §4.12.
+- **Note (2026-11-25):** OBE-176 and X-066 both create or extend `supply-events.ts`, `supply-events.producer.ts` and the dispatch of `tenant-events.processor.ts`; whichever merges later keeps both messages in one `supply-events.ts`, one producer module and both dispatch branches (the lead's ruling S17).
+- **Note (2026-11-25):** OBE-110 is added as a producer (the lead's ruling S5): its fake adapter serves the fake own source of step 6, for which `open-cases.int.test.ts` shows that a case publishes no `supply.case_opened`.
+
+### OAD-027 · Show the open-cases list in the OTA admin with state and deadline, without supplier details
+- **Status:** todo
+- **Component:** ota-admin
+- **Milestone:** M7
+- **Depends on:** OBE-176
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.10 and §4.12 (plan key BM7-11; money rule 7); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 18, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 9, proposed); ota/admin/docs/routes.md; ota/admin/src/components/console-nav.tsx; ota/admin/src/app/(console)/bookings/page.tsx; the blocks of OBE-176 and OAD-026
+- **Files:** `ota/admin/src/app/(console)/open-cases/page.tsx`, `ota/admin/src/app/(console)/open-cases/page.test.tsx`, `ota/admin/src/components/console-nav.tsx`, `ota/admin/src/components/components.test.tsx`, `ota/admin/docs/routes.md`, `ota/admin/README.md`, `tools/e2e/specs/ota-admin/a11y-headers.e2e.ts`
+- **Steps:**
+  1. Add the route `/open-cases`: a server component that calls the SDK method of OBE-176 with the staff session, in the environment of the request, as the bookings list does.
+  2. Add the menu entry "Open cases" under Operations in `console-nav.tsx`, shown with the permission `bookings:read`. It does not depend on `supplierTools`.
+  3. The table shows the booking's reference as a link to its page, the kind of the case in neutral words, the state, when the case opened and its deadline. The most urgent case stands first. An overdue deadline is marked with text, not with colour alone. An empty list has its own text.
+  4. No supplier details: the page shows only what the API answers. It adds no supplier name, order number, code or link to a supplier tool. Its help text sends staff to Velexis support, as OAD-026 does.
+  5. Tests: `page.test.tsx` covers the rows, an overdue case, the empty list, an API error and a user without the permission; the menu test covers the entry. Add the page to the pages that `a11y-headers.e2e.ts` visits, and to `routes.md` and the README.
+- **Acceptance:**
+  - `/open-cases` lists every open case of the environment with kind, state, opening time and deadline, the most urgent first, each with a link to its booking.
+  - For an OTA on Velexis supply, the page and its menu entry show no supplier name, order number or supplier code.
+  - A user without `bookings:read` sees neither the entry nor the page; axe reports no serious or critical violation.
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/a11y-headers.e2e.ts`
+- **Note (2026-11-25):** G4: `tools/e2e/specs/ota-admin/a11y-headers.e2e.ts` is this app's journey; Verify runs it.
+
+### OBE-177 · Refuse a completion before the capture on a sales stop, the open-case cap or the daily limit
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** PBE-082, X-066, OBE-165, OBE-146, OBE-168, PBE-079, OBE-144, X-064
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A6, A32), §4.6, §4.10 and §9.4 (plan key BM7-12; money rule 8; the line "Daily limit per OTA"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5 and 23); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 7 and 10, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed; question 1); the blocks of PBE-079, PBE-082, X-066, OBE-144, OBE-146 and OBE-168; ota/backend/src/tenancy/platform-cache.ts (the key `tenant:<id>`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/bookings/completion-limits.ts`, `ota/backend/src/bookings/completion-limits.test.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/tenancy/platform-read.repository.ts`, `ota/backend/src/tenancy/platform-read.repository.test.ts`, `ota/backend/src/tenancy/platform-read.types.ts`, `ota/backend/src/tenancy/platform-cache.ts`, `ota/backend/src/tenancy/platform-cache.test.ts`, `ota/backend/test/integration/supply/balance-refusal-stops-sales.int.test.ts`, `ota/docs/flows/checkout-stripe.md`
+- **Steps:**
+  1. **Gate** (step 5, the daily limit): the meaning of 0 is the owner's answer to (44a); this part does not start before it. The other steps can start.
+  2. Contract first, no new operation: `checkout.complete` refuses with a code it lists today, `422 UNPROCESSABLE`, with one neutral `details.reason` that names no supplier, balance or limit: the value of OBE-144, the same for a sales stop, the open-case cap and the daily limit, so that an answer never tells a stop, a cap, a limit or a policy apart (Proposed (lead), the lead's ruling S16). Change the description and the change log, then run `pnpm contracts:generate`.
+  3. One check in `completion-limits.ts` runs in `checkout.complete` before the claim, for a source paid from a supplier balance. When it refuses, nothing is captured and no order is sent.
+  4. Sales stop: the stop flag of X-066 in Redis, or the source's stop in the registry (OBE-146). Cap: K open cases of the kind "paid and not ticketed" on the source, counted from the tenant's order rows; K is 3 (A32), a named constant. Proposed (lead): for the first release the count stays inside the tenant; the count per supply source on the platform is PBE-107 (milestone M8).
+  5. Daily limit: the value of PBE-082, a column of `platform.tenants`, read with the cached tenant row (`PlatformCache.tenantById`, key `tenant:<id>`), which the `tenant` event of a change drops. `PlatformTenant`, `toPlatformTenant` and `parseTenant` gain the member; an entry cached without it is a miss and is read again. Proposed (lead), from the ruling on PBE-082: an amount in minor units of the currency of Velexis's PKFare wallet, which is the supplier account's currency (PBE-079, read with the account through OBE-146); the UTC calendar day; the sum of the expected debits (OBE-165) of the OTA's orders whose payment was requested that day, plus this one.
+  6. `balance-refusal-stops-sales.int.test.ts` with the fake: one balance refusal; K open cases; the limit below, at and above its value, and a new value after its `tenant` event; a refused checkout stays open; a booking is still polled under a stop. The test asserts the same `details.reason`, OBE-144's, for the stop, the cap and the limit.
+- **Acceptance:**
+  - `balance-refusal-stops-sales` passes: after one balance refusal, or with K open cases, the next completion is refused; Stripe gets no capture and the fake no PreciseBooking.
+  - A completion that would pass the OTA's daily limit is refused before the capture, with 0 meaning what the owner answered to (44a); a new limit applies once its `tenant` event has dropped the cached row.
+  - The refusal carries OBE-144's `details.reason` for each of the three causes and names no supplier, balance or limit value, and the checkout stays open. The OTA backend writes no platform table; no test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test completion-limits booking-orchestrator platform-read platform-cache && pnpm --filter @velexis/ota-backend test:int balance-refusal-stops-sales bookings tenancy`
+- **Note (2026-11-25):** The owner's words (ADR-0030 item 23): "Keep limit to 0. It should be configurable from Platform Admin's OTA management." Added dependencies: OBE-146 (the registry's stop and Velexis's supplier account), OBE-168 (the order rows of steps 4 and 5), PBE-079 (the wallet's currency, in which the limit counts) and OBE-144 (the neutral refusal of step 2). The lead asks the owner (44a) when the wave of this task is proposed, and moves step 5 into a task of its own only if the answer has not come when the other steps are ready.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's wallet, whose short balance makes Ticketing answer the refusal, and its PreciseBooking counter, on which `balance-refusal-stops-sales.int.test.ts` runs.
+
+### OBE-178 · Send `booking.ticketing_problem`, word the staff alerts and use the held-back confirmation
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-143, OBE-172, OBE-187, OBE-171, OBE-173, OBE-175, OBE-156, OBE-176, OFE-033, OBE-174, X-064
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A32, A34), §4.10 and §4.13 (plan key BM7-13; the bullet "The traveller is told the truth"; the line on alerts to OTA staff); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 7, 9 and 11, proposed); ota/docs/adr/0013-notifications-and-booking-documents.md (points 1, 4 and 5); the blocks of OBE-143, OBE-156, OBE-171 to OBE-176, OBE-187 and OFE-033; ota/backend/src/bookings/staff-alerts.ts
+- **Files:** `ota/backend/src/bookings/case-texts.ts`, `ota/backend/src/bookings/case-texts.test.ts`, `ota/backend/src/bookings/order-recorder.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/order-followup.service.ts`, `ota/backend/src/bookings/paid-unticketed-watch.processor.ts`, `ota/backend/src/payments/payments.processor.ts`, `ota/backend/src/bookings/staff-alerts.ts`, `ota/backend/test/integration/supply/pkfare-traveller-texts.int.test.ts`, `ota/docs/flows/ticketing-and-documents.md`
+- **Steps:**
+  1. Held-back confirmation in use: the completion of a source that tickets later sets the recorder's option of OBE-143. Where Request ticketing answers `accepted`, the recorder's second entry queues `booking.confirmed` and writes the confirmation event, once.
+  2. `case-texts.ts` holds one function that every place calls when it opens a case of captured money without a ticket: OBE-171 (a racing capture at the deadline), OBE-172 (ticketing rejected, refused or unanswered; a failed or higher second OrderPricing), OBE-173 (a final rejected status, a stale ticketing write-ahead) and OBE-175 (the watchdog). Once per booking it queues `booking.ticketing_problem` (OBE-187) and the staff alert, sets the ticketing status `failed` with no next attempt (OFE-033's problem state), and for a Velexis source publishes `supply.case_opened` with the producer of OBE-176. It writes no column of the open-case mark: each place sets the mark through the repository function of OBE-168. OBE-174, OBE-178, OBE-179 and OBE-181 change `order-followup.service.ts`; whichever merges later keeps the others' branches (the record step, the case texts, the read at once, the ticketless rule).
+  3. The e-mail promises tickets or a full refund within H hours of the capture. H is 24 (A32), a named constant; the deadline is a template variable.
+  4. Never "not charged" after a capture: `booking.not_confirmed` is never queued for a booking with captured money. The page text of an open case is the problem sentence of OBE-156.
+  5. Staff alert reasons: one table, a neutral reason per case (ticketing rejected, ticketing unanswered, a capture at the deadline, an order unknown); a balance refusal reads as a rejected ticketing. Each says what staff do next and names no supplier, code, balance or order number.
+  6. `pkfare-traveller-texts.int.test.ts` walks the flow on the fake and reads every e-mail, event and page text in each state, with a case opened at each place of step 2.
+- **Acceptance:**
+  - `pkfare-traveller-texts` passes: before ticketing is accepted the traveller reads "We are finalising your booking" and gets no confirmation e-mail; after it, exactly one.
+  - A case opened at any place of step 2 sends `booking.ticketing_problem` once, with the deadline, and no text after a capture says "not charged".
+  - No staff alert of these cases holds a supplier's name, a code, a balance or an order number. `booking-emails.int.test.ts` passes unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test case-texts order-recorder booking-orchestrator && pnpm --filter @velexis/ota-backend test:int pkfare-traveller-texts notifications bookings`
+- **Note (2026-11-25):** Added dependencies: OBE-171, OBE-173 and OBE-175 open the cases that step 2 wires; OBE-156 gives the page's problem sentence; OBE-176 gives the producer of `supply.case_opened`; OFE-033 shows the problem state that step 2 sets; OBE-174 gives the follow-up job's record step, beside whose final-status branches step 2 wires the case texts (the lead's ruling S5). The ticketing status and the case message of step 2 are proposed in review, so that the storefront shows the problem state and the platform gets every case (PBE-092); confirm in the pull request.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's scripted refusals, lost answers, status changes and hold end, with which `pkfare-traveller-texts.int.test.ts` opens a case at each place of step 2.
+
+### OBE-179 · Guard console capture, refund, close-review and refresh for a booking paid from a supplier balance
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-173, OBE-137, OBE-171, OBE-168, X-064
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.10, §4.12 and Annex B (plan key BM7-14; money rules 3, 5 and 6; the paragraph "A lost order answer"; assertion 1 of the failure matrix); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 4 and 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 6, proposed; item 8, proposed; item 13, proposed); the blocks of OBE-137, OBE-171 and OBE-173; ota/backend/src/console/console-payments.service.ts, review-closure.service.ts and console-bookings.service.ts (their headers)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/console/console-payments.service.ts`, `ota/backend/src/console/console-payments.service.test.ts`, `ota/backend/src/console/review-closure.service.ts`, `ota/backend/src/console/review-closure.service.test.ts`, `ota/backend/src/console/console-booking-actions.service.ts`, `ota/backend/src/console/console-booking-actions.service.test.ts`, `ota/backend/src/console/console-bookings.service.ts`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/bookings/order-followup.service.ts`, `ota/backend/test/integration/supply/console-guards.int.test.ts`, `ota/docs/flows/console-operations.md`
+- **Steps:**
+  1. Contract first, no new operation: each refusal uses a code that its operation lists today, with a neutral `details.reason`. `ConsoleBookingActions` answers the action false with a true reason. Change the descriptions and the change log, then run `pnpm contracts:generate`.
+  2. Capture (`consoleCapturePayment`; `capture` and `captureForIssue`): past the capture deadline of OBE-171 it is refused. Before it, only the booking's full total is captured, under the same check as the job paths.
+  3. Refund (`consoleRefundPayment`): refused from the ticketing write-ahead until the supplier's status is final. The refusal while a case is open is OBE-199's.
+  4. Close-review (`consoleCloseBookingReview`): refused for a booking whose source is paid from a supplier balance; the capability decides, never a supplier's name. The reconciliation role decides an unknown order (plan §4.10). OBE-198 refuses the same operation while a case "order unknown" is open for a Velexis-supplied booking, with the same neutral `details.reason`, so that an answer never tells PKFare from Amadeus; whichever of OBE-179 and OBE-198 merges first adds the value, and the other reuses it (the lead's ruling S18).
+  5. Refresh (`consoleResyncBooking` and the reads with `refresh=true` in `console-bookings.service.ts`): it runs the follow-up's read of that booking (OBE-173) at once, through the engine. It sends no write to the supplier. While the order number is unknown it answers the stored booking. OBE-174, OBE-178, OBE-179 and OBE-181 change `order-followup.service.ts`; whichever merges later keeps the others' branches (the record step, the case texts, the read at once, the ticketless rule).
+  6. `console-guards.int.test.ts` with a booking of the fake PKFare source in each state.
+- **Acceptance:**
+  - A console capture past the deadline is refused, and Stripe gets no request.
+  - A console refund between the ticketing write-ahead and a final status is refused; after a final status it works as today.
+  - Close-review is refused for a Velexis-supplied PKFare booking, and a refresh sends no Ticketing and no CancelOrder. `payments.int.test.ts` and `review-closure.int.test.ts` of the console pass unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test console && pnpm --filter @velexis/ota-backend test:int console-guards console`
+- **Note (2026-11-25):** Added dependencies: OBE-171 stores the capture deadline, OBE-168 holds the order row whose write-ahead and status the guards read. The plan's row spells out close-review only; steps 2, 3 and 5 follow money rules 3, 5 and 6. Rests on ADR-0030, question (44d): the lead recommends that an OTA's own PKFare account moves after the launch (milestone M8), so this task builds no close-review branch for an own PKFare source. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's orders in each state, OrderDetail for the refresh and the request counters, on which `console-guards.int.test.ts` runs.
+
+### OBE-180 · Sell PKFare bags and seats with the order: catalogue, limits, order request, expected debit
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-169, OBE-130, OBE-185, OBE-165, OBE-107, X-057, X-064
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A20, A30, A35), §4.2 and §4.11 (plan key BM7-15; the extras table); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 12); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 3; item 12, proposed; question 2); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 6; item 9, proposed); the blocks of OBE-130, OBE-165 and OBE-185; ota/backend/src/checkout/ancillaries.service.ts (`quote`); ota/backend/src/bookings/booking-orchestrator.service.ts (`repriceWithExtras`)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/src/supply/interface/`, `ota/backend/src/checkout/ancillaries.service.ts`, `ota/backend/src/checkout/ancillaries.service.test.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/shopping/priced-offers.repository.ts`, `ota/backend/test/integration/supply/pkfare-extras.int.test.ts`, `ota/docs/flows/checkout-stripe.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. Capability: the PKFare adapter declares extras with the order, bags and seats, and none after booking (A30).
+  3. Catalogue: the adapter's catalogue method of OBE-130 calls AncillaryPricing for the priced offer and reads the answer into the neutral catalogue. The API shows it in `extras` (OBE-185). An empty catalogue skips the step.
+  4. Selection limits: `checkout.setAncillaries` checks a selection against the catalogue's limits when it is stored (A35) and refuses with a code that the operation lists today.
+  5. Order: the adapter puts the selected bags and seats into the one PreciseBooking of OBE-169. There is no second order and no second request.
+  6. Re-price: the price with selections runs through the engine before the order. An extra that is gone or dearer takes today's path: `409 PRICE_CHANGED`, and never a booking without the extras that the traveller chose.
+  7. Expected debit: the amount of the extras joins the expected debit of OBE-165, in the wallet's currency as OBE-165 prices it, so that Check payable covers the whole amount. A Velexis price rule never adjusts extras (A20).
+  8. Tests: unit tests of the readers over the AncillaryPricing fixtures; `pkfare-extras.int.test.ts` with the fake (a bag and a seat in the one order and in the expected debit, a refused selection, an extra gone at the re-price).
+- **Acceptance:**
+  - A PKFare priced offer with extras answers them in `extras`; one without them skips the step.
+  - The fake receives one PreciseBooking that holds the chosen bags and seats, and the expected debit includes their amount.
+  - A selection beyond the limits is refused when it is stored. `ancillaries.int.test.ts` and `extras-engine.int.test.ts` pass unchanged; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/adapters/pkfare ancillaries && pnpm --filter @velexis/ota-backend test:int pkfare-extras checkout extras-engine`
+- **Note (2026-11-25):** Added dependencies: OBE-107 (step 1); X-057 (the AncillaryPricing fixtures of step 8); OBE-185, because the contract's `AncillaryOption` requires an `amadeus` member, so a PKFare extra reaches a client only through `extras`; OBE-165, whose expected debit step 7 extends. Rests on OADR-0020, question 2: the lead recommends paid bags after ticketing later (A30), so step 2 declares none after booking. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's PreciseBooking and its request counter, on which `pkfare-extras.int.test.ts` runs.
+
+### OBE-181 · Complete a low-cost booking without ticket numbers only when it is flagged; close its cancel action
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-174, OBE-161, OBE-164, OBE-107, OBE-154, OBE-186, X-064
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A9), §4.8, §4.11 and §9.1 (plan key BM7-18; the bullets on low-cost content; the row on decision 12); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 12; item 17, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 3; items 8 and 12, proposed; question 1); docs/mvp/conventions.md §9; the blocks of OBE-154, OBE-161, OBE-164, OBE-168, OBE-174 and OBE-186; ota/backend/src/bookings/allowed-actions.ts
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/bookings/order-followup.service.ts`, `ota/backend/src/bookings/booking-orchestrator.service.ts`, `ota/backend/src/bookings/allowed-actions.ts`, `ota/backend/src/bookings/allowed-actions.test.ts`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/test/integration/supply/ticketless-only-when-flagged.int.test.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. If it shows no reliable low-cost mark, or not whether such orders get ticket numbers, stop too: the owner decides (plan §9.1).
+  2. At the claim the booking stores the low-cost flag of its priced offer (OBE-161) and keeps the block "no change, no refund" (OBE-164). A tenant migration (phase `expand`, the next free number) adds the flag to `bookings`, nullable, with its `COMMENT ON`; the tests that list the tenant migrations follow, as in OBE-168.
+  3. Completion rule, in OBE-174's record step: a booking becomes `ticketed` without an e-ticket number only when it is flagged, on the final issued status and with the airline's reference; no ticket row is written, and the record step queues OBE-186's `booking.confirmed_ticketless` in place of `booking.ticketed`. A flagged booking without the reference is polled further. OBE-174, OBE-178, OBE-179 and OBE-181 change `order-followup.service.ts`; whichever merges later keeps the others' branches (the record step, the case texts, the read at once, the ticketless rule).
+  4. The airline's reference is stored as the airline's own record: the booking's main locator with the kind `airline`, as the helper of OBE-154 answers it.
+  5. A flagged booking answers `canCancel: false` in both scopes: in customer scope with today's `ticketed_non_refundable`, which the storefront already explains. Console scope has no such reason: contract first and additive, `ConsoleBookingActions.reasons` gains the proposed `non_refundable`; add the change-log row and run `pnpm contracts:generate`.
+  6. `ticketless-only-when-flagged.int.test.ts` with the fake: flagged with and without the reference; unflagged and issued without numbers. A flagged booking made `ticketed` answers `ticketless: true` and gets `booking.confirmed_ticketless` once. `allowed-actions.test.ts` gains the reason.
+- **Acceptance:**
+  - `ticketless-only-when-flagged` passes: only a flagged booking, on the final issued status and with the airline's reference, becomes `ticketed` without ticket rows.
+  - A flagged booking keeps "no change, no refund", answers `ticketless: true` and `canCancel: false` with the reason of its scope, and gets `booking.confirmed_ticketless` once; the wording is OBE-186's.
+  - The migration applies to an empty schema and to one at the previous version with rows. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test allowed-actions order-followup migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed ticketless-only-when-flagged bookings`
+- **Note (2026-11-25):** Added dependencies: OBE-164 stores the block "no change, no refund"; OBE-107 (step 1); OBE-154 (its helper answers the airline's record as the main locator of step 4); OBE-186 (its `ticketless` member, its wording and `booking.confirmed_ticketless` are what a flagged booking answers and receives; the lead's ruling S5). The migration and the console value are Proposed (lead); confirm in the pull request. `packages/db` and `packages/testing` change with the migration, because their tests list the tenant migrations; Verify runs them. Rests on OADR-0020, question 1: low-cost content stays in the first release until the facts are known. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-25):** X-064 is added as a producer (the lead's ruling S5): the PKFare fake's OrderDetail and scripted issued statuses, with and without ticket numbers, on which `ticketless-only-when-flagged.int.test.ts` runs.
+
+### OBE-182 · Add the supplier notification endpoint: routed by our reference, a read trigger only, rate limited
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-173, OBE-139, X-054, OBE-107, X-057, OBE-169
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.10 and §9.2 (plan key BM7-20; the bullet "PKFare's notifications are not authenticated"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 4); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 8, proposed); ota/docs/adr/0010-stripe-gateway-and-payment-webhooks.md (point 4); docs/mvp/conventions.md §8; docs/mvp/deployment-single-vm.md §6 (the web application firewall); the blocks of OBE-139, OBE-169 and X-057; ota/backend/src/payments/webhooks/stripe-velexis-webhook.controller.ts; ota/backend/src/common/http/rate-limits.ts; deploy/caddy/waf/exclusions.conf (its rules for an exclusion); deploy/caddy/test/caddy-smoke.sh (its header)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/`, `ota/backend/src/bookings/supply-notifications.controller.ts`, `ota/backend/src/bookings/bookings.module.ts`, `ota/backend/src/common/http/rate-limits.ts`, `ota/backend/src/common/http/rate-limits.test.ts`, `ota/backend/src/config.ts`, `ota/backend/src/config.test.ts`, `.env.example`, `deploy/env/ota-backend.env.example`, `docs/mvp/architecture.md`, `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/test/integration/supply/supply-notifications.int.test.ts`, `deploy/caddy/waf/exclusions.conf`, `deploy/caddy/test/caddy-smoke.sh`, `ota/docs/api-changes-console-and-internal.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. If it shows no field for our reference, or one too short to hold the tenant's id with the booking reference, stop and ask.
+  2. Contract first: one operation under `/webhooks/` with `x-scope: internal`, `x-internal: true` and `x-milestone: M7`, no credential and a raw body, as the Stripe receivers have. Its path and name hold no supplier's name. Add the change-log row and run `pnpm contracts:generate`.
+  3. Routing: the message names our reference, which OBE-169's builder sends with PreciseBooking. This task makes the builder put the tenant's id into it as its routing part (Proposed (lead); confirm in the pull request). The part leads to the tenant without a stored look-up, so a Redis restart loses no route, and it names no OTA; Redis may cache. The endpoint finds the tenant by that part and the booking by the reference through `tenantTx`, using nothing else of the message.
+  4. Read trigger only: the adapter's notification method (OBE-139) reads the body; its only effect is one read of that booking, queued for OBE-173's job with a fixed id. The body changes nothing and is not stored.
+  5. Rate limit: a named limit in `rate-limits.ts`, per source address and per booking. Above it, or for an unknown reference, the answer is the same acknowledgement with no job; logs hold counts and ids only.
+  6. Web application firewall (Proposed (lead), a security choice): the route keeps the blocking Core Rule Set. `exclusions.conf` gets only the narrow exclusions by rule id that PKFare's recorded notifications (X-057) need, each with its reason in the file's form. `caddy-smoke.sh` checks that a recorded notification passes the route and that a request with an attack pattern there is still refused. The route never trusts the body (step 4).
+  7. The endpoint is optional for the pilot: one configuration entry switches it on (conventions §8), and it answers `404` while off. The pull request names the human step for `/etc/velexis`.
+  8. `supply-notifications.int.test.ts` with X-057's notification fixtures: a message that claims a ticket, an unknown reference, a flood, the switch, Redis emptied first.
+- **Acceptance:**
+  - A notification leads to at most one read of its booking and no other write, whatever it claims (`notification-triggers-read-only`).
+  - After Redis is emptied, a webhook for an open order still reaches its tenant.
+  - An unknown reference and a message above the rate limit get the same answer and no job.
+  - A recorded PKFare notification passes the firewall on the route, and a request with an attack pattern there is refused.
+  - While switched off, the route answers `404`; the route-parity test passes. No log line or row holds the body; no test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/api-types build && pnpm --filter @velexis/ota-backend test rate-limits config route-parity supply/adapters/pkfare && pnpm --filter @velexis/ota-backend test:int supply-notifications pkfare-one-order-per-checkout && shellcheck -S style deploy/caddy/test/caddy-smoke.sh && bash deploy/caddy/build/build-caddy.sh /tmp/caddy-build && bash deploy/caddy/test/caddy-smoke.sh`
+- **Note (2026-11-25):** Added dependencies: X-054 (the route is a new contract operation with `x-milestone: M7`), OBE-107 (step 1), X-057 (the recorded notifications of steps 6 and 8) and OBE-169 (the builder of our reference that step 3 changes). The lead's ruling: the route to the tenant survives a Redis restart, and Redis only caches. Files outside the OTA backend: the firewall's exclusions and the smoke check ship with the route that they let through, and the switch of step 7 joins the env templates and the configuration matrix (conventions §8); Verify runs `caddy-smoke.sh`, and `config.test.ts` reads the env template.
+
+### OBE-183 · Prove the PKFare money path with the failure matrix `pkfare-failure-matrix.int.test.ts`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-169, OBE-170, OBE-171, OBE-172, OBE-173, OBE-174, OBE-175, OBE-176, OAD-027, OBE-177, OBE-178, OBE-179, X-064
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.9, §4.10, §9.1 and Annex B (plan key BM7-21; the fourteen assertions below the P7 table; the bullet "Proof"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 4 and 5); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (items 4 to 11, proposed); docs/mvp/adr/0015-testing-strategy.md; the block of X-064 (scripts and counters); ota/backend/test/helpers/fake-stripe.ts
+- **Files:** `ota/backend/test/integration/supply/pkfare-failure-matrix.int.test.ts`, `ota/backend/test/supply/`, `ota/backend/README.md`
+- **Steps:**
+  1. Harness: the file drives `checkout.complete` and the jobs against the fake of X-064, the fake Stripe and the clock. A process stop is a fault that a test double raises at a named point between two steps of plan §4.9; then the test replays the same idempotency key and runs the jobs. No fault switch is added under `ota/backend/src`.
+  2. Captures, assertions 1, 2 and 5: no capture outside the OrderPricing window or past the hold, also from the console; no Ticketing request without a full capture; the captured amount equals the booking total and the selling total of the pricing used, and never exceeds the authorised amount.
+  3. Single writes, assertions 3, 4 and 11: at most one Ticketing request per order and one PreciseBooking per checkout, for any idempotency key, any number of tabs, a lost answer or a restart; a stop between every two steps, with the same key replayed after each, sends no second write to PKFare.
+  4. States and texts, assertions 6, 7 and 9: no void once a Ticketing request was sent, and a void only after the booking left `confirmed`; never `ticketed` without ticket numbers, except by plan §4.11; no "confirmed" e-mail before ticketing was accepted, and no "not charged" text after a capture.
+  5. Cases, assertions 8, 10, 12 and 13: captured money without a ticket has a staff alert and a row in the open-cases list; the reported debit is compared with the expected debit; a deadline handled while a capture is in flight ends with an alert; after one balance refusal the next completion is refused before the capture.
+  6. Fence, assertion 14: the Amadeus stub counts no request during the file, and the Amadeus booking tests are unchanged.
+  7. Each test names its assertion number, in the plan's words. This task changes no file under `ota/backend/src`: a failing assertion becomes a new task for the code of its rule (AGENTS.md §4), and no assertion is weakened.
+- **Acceptance:**
+  - `pkfare-failure-matrix.int.test.ts` passes with all fourteen assertions of Annex B, each as at least one named test.
+  - Assertion 11 covers every pair of neighbouring steps: the fake's counters show no second PreciseBooking, Ticketing or CancelOrder.
+  - The Amadeus stub receives no request, no existing test file changes, and the tests of the eight money rules still pass.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int pkfare- balance-refusal-stops-sales paid-unticketed-watchdog bookings payments`
+- **Note (2026-11-25):** X-064 is added as a dependency: the harness drives the scripts and reads the counters of its fake.
+
+### OBE-184 · Run conformance part 2 against the PKFare adapter and prove `pkfare-snapshot-redaction`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-174, OBE-140, OBE-166, X-064, X-057
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.2 and §4.15 (plan key BM7-22; the line "Proof"; the bullet "PKFare's signature is built at send time"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1 and 4); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 2; item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 5, proposed); the blocks of OBE-140 (the harness and part 2), OBE-166 (part 1 for this adapter) and X-064
+- **Files:** `ota/backend/test/integration/supply/conformance-pkfare.int.test.ts`, `ota/backend/test/integration/supply/pkfare-snapshot-redaction.int.test.ts`, `ota/backend/test/supply/conformance/`, `ota/backend/src/supply/adapters/pkfare/`, `ota/backend/README.md`
+- **Steps:**
+  1. `conformance-pkfare.int.test.ts` runs part 2 of the harness beside part 1, with the fake of X-064. A case runs only for a capability that the adapter declares; no case is copied.
+  2. Covered: the create outcomes with `create-order-lost-answer`; ticketing later (`accepted`, and no second request); Read order; Cancel or release; the notification, when the adapter declares it. The adapter declares no Find order, so those cases are skipped by capability and a lost answer stays `unknown`.
+  3. `pkfare-snapshot-redaction`: book once on the fake with known values (a passport number, a contact e-mail and phone, the key and the signature). Then search `bookings.order_snapshot`, the booking's order row and every `supplier_requests` row of the booking. None holds a known value.
+  4. The same test proves the allow-list: a field that the test adds to a fixture's answer is absent from the snapshot and from the call log.
+  5. A gap is fixed in the adapter's allow-list, never by loosening the suite. Describe the PKFare run in the README.
+- **Acceptance:**
+  - Part 2 of the conformance suite passes against the PKFare adapter with its fake, beside part 1.
+  - `pkfare-snapshot-redaction` passes on `bookings.order_snapshot` and on the call log: no document number, contact value, key or signature, and no field outside the allow-list.
+  - The suite's cases are those of OBE-140. No existing test changes; no test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int supply/conformance pkfare-snapshot-redaction`
+- **Note (2026-11-25):** Added dependencies: OBE-166 creates `conformance-pkfare.int.test.ts` with part 1, X-064 gives the fake its order side, and X-057's fixtures are the answers that step 4 extends.
+
+### OBE-185 · Add the neutral extras list `extras` with `ExtraOption` and let the storefront read it
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-130, X-051, OBE-148, X-055, OBE-157, OBE-158, OBE-110
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.7, §4.8 and §4.11 (plan key OS-19; the bullet "Extras"; the extras table); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 6 and 12; item 17, proposed; item 18, proposed; Annex A of X-051, part 3); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 3; item 12, proposed; question 2); ota/backend/openapi/README.md §3 and §4; ota/backend/src/common/http/pending-operations.ts (the deferred `getBookingAncillaries` and `addBookingAncillaries`); the blocks of OBE-130, OBE-148, OBE-150, OBE-157 and X-055; ota/backend/test/support/json-walk.ts (the allowance of OBE-157); ota/frontend/src/components/ancillary-picker.js; ota/frontend/src/pages/checkout.js (step 4 of its header)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/checkout/ancillaries.service.ts`, `ota/backend/src/checkout/ancillaries.service.test.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/bookings/`, `ota/backend/test/integration/` (the tests of step 6), `ota/backend/test/integration/supply/neutral-extras.int.test.ts`, `ota/backend/test/support/json-walk.ts`, `ota/frontend/src/pages/checkout.js`, `ota/frontend/src/components/ancillary-picker.js`, `ota/frontend/src/components/stepper.js`, `ota/frontend/test/checkout-page.test.js`, `ota/frontend/docs/pages.md`, `ota/sdk/docs/extensions.md`, `ota/sdk/CHANGELOG.md`, `ota/docs/api-changes.md`
+- **Steps:**
+  1. Contract first, additive: the schema `ExtraOption`, without an `amadeus` member: an id, a kind (bag, seat, other), a label, the travellers and segments it is for, its price, and what a selection needs (a quantity limit, a seat number). `AncillaryCatalogue.extras` and `BookingAncillaryOptions.extras` are optional lists of it. Today's lists stay, required as now; their descriptions say that they are empty for a Velexis source. Add the change-log row and run `pnpm contracts:generate`.
+  2. Backend: the mappers fill `AncillaryCatalogue.extras` of `flights.getAncillaries` for every supplier from the neutral catalogue of the engine (OBE-130). An `ExtraOption` names no supplier. `bookings.getAncillaries` and `bookings.addAncillaries` stay deferred: paid bags after ticketing are OBE-213 (milestone M8).
+  3. By source, through the helper of OBE-148 (Proposed (lead); confirm in the pull request): for an OTA's own Amadeus source, today's lists keep their options with the required `amadeus` mapping, and `extras` holds the same options. For a Velexis source, Amadeus included, today's lists are empty, `seatsSupported` is false, and `extras` holds the options. No code tests a supplier's name. For a client this changes the meaning of today's lists (README §4): the descriptions use the words of Annex A, part 3, and ADR-0030 item 17, proposed, approves the change; the change-log row names it.
+  4. Selections: `checkout.setAncillaries` takes the id of an `ExtraOption` as `optionId`. Today's requests keep working.
+  5. Storefront: `ancillary-picker.js` and `checkout.js` read `extras`. Without the member or with an empty list, the extras step and its stepper entry are skipped.
+  6. Tests, by ruling T: a test whose subject is the `amadeus` mapping of today's lists moves to the own-connection OTA of X-055 with its assertions. A booking-flow test on a Velexis tenant changes only its expectation of today's lists, each change listed in the pull request with its contract line. New tests cover a Velexis source: mapper tests for both kinds of source, `neutral-extras.int.test.ts` with the stub and the fake adapter, and the checkout page test with a list, an empty list and no member.
+  7. Leak walks: remove from `json-walk.ts` the allowance by schema path for the `amadeus` mapping of today's extras options, which OBE-157 and OBE-158 added and which names this task. Both walks pass without it.
+  8. Describe the member in `api-changes.md`, `extensions.md` and `pages.md`. In `ota/sdk/CHANGELOG.md`, the section `1.1.0 (unreleased)` gets the member `extras` and the changed meaning of today's lists, in the words of Annex A, part 3; this task creates the section if SDK-020 and SDK-021 have not.
+- **Acceptance:**
+  - `flights.getAncillaries` answers `extras` for every supplier. For an own Amadeus source today's lists are unchanged and hold the same options; for a Velexis source they are empty. `BookingAncillaryOptions` has `extras` in the contract.
+  - A selection by the id of an `ExtraOption` is priced and booked as the same option is today.
+  - The storefront builds its extras step from `extras` and skips it when there are none; `checkout-stripe.e2e.ts` still books an extra.
+  - `customer-leak-walk` and `console-leak-walk` pass without the allowance. The moved tests keep every assertion; no test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test ancillaries && pnpm --filter @velexis/ota-backend test:int checkout shopping bookings payments m2 m3 neutral-extras customer-leak-walk console-leak-walk && pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-sdk test && E2E_WITH_OTA=1 E2E_STRIPE=1 pnpm test:e2e -- --project=storefront-stripe specs/storefront/checkout-stripe.e2e.ts`, with the Stripe test keys that tools/e2e/README.md lists for the `storefront-stripe` project
+- **Note (2026-11-25):** Added dependencies: X-051 (its Annex A, part 3, words the changed meaning of today's extras lists that step 3 quotes; the lead's ruling S16), OBE-148 (its helper decides by source in step 3), X-055 (the own-connection OTA of step 6), OBE-157 and OBE-158 (the allowance that step 7 removes), and OBE-110 (the fake adapter of step 6; the lead's ruling S5). The storefront files merge with this change: the extras step must read `extras` when the API first answers it; Verify runs their tests. Only `storefront-stripe` runs `checkout-stripe.e2e.ts`, a `@stripe` spec. `ota/sdk/docs/extensions.md` records the member with the contract change; Verify runs the SDK's tests. Rests on OADR-0020, question 2: the lead recommends paid bags after ticketing later (A30), so no handler fills `BookingAncillaryOptions.extras` before OBE-213. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-186 · Add ticketless bookings: `BookingTicketing.ticketless`, wording and `booking.confirmed_ticketless`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-051, OBE-154, OBE-143
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.8, §4.10 and §4.11 (plan key OS-20; the bullets "No ticket number" and "Texts"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (item 12; Annex A of X-051); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 3; item 11, proposed; item 12, proposed); ota/docs/adr/0013-notifications-and-booking-documents.md (points 3, 4, 6 and 8); ota/backend/src/notifications/templates/registry.ts; ota/backend/src/bookings/order-recorder.ts (`ticketingMessageOf`); the blocks of OBE-143, OBE-154, OBE-156 and OFE-033
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/bookings/bookings.mapper.ts`, `ota/backend/src/bookings/bookings.mapper.test.ts`, `ota/backend/src/bookings/order-recorder.ts`, `ota/backend/src/bookings/ticketing.service.ts`, `ota/backend/src/documents/renderers/`, `ota/backend/src/documents/documents.processor.ts`, `ota/backend/src/notifications/templates/`, `ota/backend/test/contract/console-settings.contract.test.ts`, `ota/admin/src/app/(console)/settings/content-rules.ts`, `ota/frontend/src/lib/i18n.js`, `ota/frontend/src/pages/confirmation.js`, `ota/frontend/src/pages/booking.js`, `ota/frontend/src/pages/bookings.js`, `ota/frontend/test/`, `ota/sdk/docs/extensions.md`, `ota/docs/api-changes.md`, `ota/docs/adr/0013-notifications-and-booking-documents.md`
+- **Steps:**
+  1. Contract first, additive: `BookingTicketing.ticketless`, an optional boolean, true for a booking that is complete without e-ticket numbers. The descriptions of the `ticketed` status, of the tickets and of the documents get wider: such a booking has no ticket rows and no e-ticket receipt. `NotificationTemplateKey` gains `booking.confirmed_ticketless`. Add the change-log row and run `pnpm contracts:generate`.
+  2. Mapper: `ticketless` is true for a `ticketed` booking without ticket rows. `ticketingMessageOf` gets a sentence for it that names the airline's reference, the main locator of OBE-154's helper, as what the traveller uses. OBE-143 and OBE-156 change `ticketingMessageOf` too: whichever of the three merges last keeps every change.
+  3. Documents: the itinerary of a ticketless booking shows the airline's reference (the same main locator) and no ticket numbers. No e-ticket receipt is rendered or promised for it.
+  4. The key: a registry entry with its allow-list and sample data, and the three default template files. The record step that makes a booking `ticketed` queues it in place of `booking.ticketed` when it writes no ticket row. The pinned lists follow: `registry.test.ts`, `console-settings.contract.test.ts` and the OTA admin's `content-rules.ts`. Add a dated note under point 4 of OADR-0013.
+  5. Storefront: keys in `i18n.js` for a ticketless booking and for the "finalising" state, on the confirmation, booking and my-bookings pages. The pages read the state from the API's fields only. If these cannot tell "finalising" from a confirmed booking that waits for tickets, stop and tell the lead: a new contract member is not part of this task.
+  6. Tests: the mapper, both renderers, the templates and the three page tests. No booking is ticketless before OBE-181; the tests build one from rows.
+- **Acceptance:**
+  - A `ticketed` booking without ticket rows answers `ticketless: true`, gets `booking.confirmed_ticketless` once, an itinerary without ticket numbers and no receipt.
+  - A booking with tickets answers and renders as today: `booking-emails.int.test.ts` and `render.int.test.ts` pass unchanged.
+  - The three storefront pages show the ticketless wording and the "finalising" state, with no supplier's name. Every pinned list of template keys holds the new key; no test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test bookings.mapper renderers templates console-settings && pnpm --filter @velexis/ota-backend test:int notifications documents settings && pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** OBE-154 is added as a dependency: its helper gives the airline's reference that steps 2 and 3 show. OBE-143 is added as a producer (the lead's ruling S5): it gives the "finalising" state and its sentence, which step 5 words on the storefront's pages. The files in `ota/admin` and `ota/frontend` merge with this change: the OTA admin's list of template keys and the storefront's pages must know the new key and member when the API first answers them; Verify runs their tests. `ota/sdk/docs/extensions.md` records the member with the contract change; Verify runs the SDK's tests.
+
+### OBE-187 · Add the template key `booking.ticketing_problem`: registry, default templates, preview data
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OFE-033
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A32), §4.8 and §4.10 (plan key OS-21; the bullet "Texts"; the bullet "The traveller is told the truth"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 11, proposed); ota/docs/adr/0013-notifications-and-booking-documents.md (points 3 and 4); ota/backend/src/notifications/templates/registry.ts (its header); the block of OBE-178
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/notifications/templates/`, `ota/backend/test/contract/console-settings.contract.test.ts`, `ota/backend/test/integration/settings/templates.int.test.ts`, `ota/admin/src/app/(console)/settings/content-rules.ts`, `ota/docs/adr/0013-notifications-and-booking-documents.md`, `ota/docs/api-changes-console-and-internal.md`
+- **Steps:**
+  1. Contract first, additive: `NotificationTemplateKey` gains `booking.ticketing_problem`. Its description says: sent to the traveller when a paid booking has no ticket yet and the travel agency's team is working on it. Add the change-log row and run `pnpm contracts:generate`.
+  2. Registry: add the key to `TEMPLATE_KEYS` after the other traveller keys, with the audience traveller. Its allow-list is the booking variables and the deadline of the case; it holds no supplier variable. Add sample data for the console preview.
+  3. Default templates, three files `booking.ticketing_problem.{subject,html,txt}.hbs`. The text is true: the payment was taken; the tickets are not issued yet; the team is working on it; the traveller gets the tickets or a full refund by the deadline. It never says "not charged" and names no supplier.
+  4. The pinned lists follow: `registry.test.ts`, `templates.test.ts`, `console-settings.contract.test.ts`, `templates.int.test.ts`, and the label and description in the OTA admin's `content-rules.ts`.
+  5. No data migration: a tenant without a row of the key uses the code default (OADR-0013 point 3), and the provisioning seed copies it for a new tenant. Add a dated note under point 4 of OADR-0013.
+  6. This task sends nothing. The rules that send the key are OBE-178's.
+- **Acceptance:**
+  - The contract, the registry, the seed and the OTA admin's list hold `booking.ticketing_problem`; `templates.test.ts` compiles its default in strict mode and renders it with the sample data.
+  - The console previews the key and saves an edited template of it; a variable outside the allow-list is refused.
+  - The default text holds no supplier's name and no "not charged". No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test templates console-settings && pnpm --filter @velexis/ota-backend test:int settings notifications provisioning && pnpm --filter @velexis/ota-admin test`
+- **Note (2026-11-25):** The OTA admin's `content-rules.ts` merges with this change: its list of keys must hold every key that the API answers; Verify runs its tests.
+
+### OBE-188 · Open `SupplierIssue.provider` and add the text member `providerCode`, shown for own accounts only
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-169, OBE-151, X-051
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A27), §4.7 and §4.8 (plan key OS-22); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 6; item 18, proposed; Annex A of X-051); ota/backend/openapi/README.md §3 and §4; packages/errors/src/envelope.ts (`copySupplierIssue`); the blocks of OBE-151 and OBE-169
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/errors/src/envelope.ts`, `packages/errors/src/envelope.test.ts`, `ota/backend/src/supply/adapters/pkfare/`, `ota/sdk/docs/extensions.md`, `ota/docs/api-changes.md`
+- **Steps:**
+  1. Contract first: `SupplierIssue.provider` stays a required string and loses its closed list of one value. Its description says that the value names the supplier of the OTA's own account and that new values may appear. Add `providerCode`, an optional string: the supplier's own code as text, for a supplier whose codes are no integers. `code` stays as it is. Add the change-log row and run `pnpm contracts:generate`.
+  2. `copySupplierIssue` in `packages/errors` copies `provider` as given, where it writes the literal `amadeus` today, and `providerCode` when it is a string.
+  3. Shown for own accounts only: the rule of OBE-151 stays. An adapter attaches `error.supplier` only for a call on the OTA's own source, and customer scope never shows it. The PKFare adapter's code tables (OBE-169) therefore attach none in this milestone.
+  4. Tests: `envelope.test.ts` covers both members and a `providerCode` that is no string; the PKFare adapter's test shows no `error.supplier` for a Velexis source. Note the change in `extensions.md` and `api-changes.md`.
+- **Acceptance:**
+  - The contract's `SupplierIssue` takes any `provider` string and an optional text `providerCode`; an Amadeus error answers as today.
+  - `copySupplierIssue` keeps both members and drops a `providerCode` that is no string.
+  - For a Velexis source no answer of either scope holds `error.supplier`. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/api-types build && pnpm --filter @velexis/errors build && pnpm --filter @velexis/errors test && pnpm --filter @velexis/ota-backend test supply/adapters/pkfare error.filter && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** Added dependencies: OBE-151 keeps `error.supplier` for an own source, the rule that step 3 relies on; X-051's Annex A words the open `provider` values of step 1. `packages/errors` merges with the contract change, so that `copySupplierIssue` passes the new member; Verify builds and tests it. `ota/sdk/docs/extensions.md` records the members with the contract change; Verify runs the SDK's tests. Rests on ADR-0030, question (44d): the lead recommends that an OTA's own PKFare account moves after the launch (milestone M8), so no PKFare error reaches `error.supplier` in this milestone. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-189 · Add the supply rule model and its matcher in `supply/rules`: data only, unknown fields refused
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-114
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A2, A20) and §4.3 (plan key E8-01); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 20); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 4; item 11, proposed; item 12, proposed); ota/backend/src/pricing/rule-matcher.ts (`parseRuleScope`, `isActiveAt`, `compareRules`); ota/backend/src/pricing/pricing.types.ts (`SCOPE_LIST_FIELDS`); ota/backend/src/supply/engine/ (the hook inputs)
+- **Files:** `ota/backend/src/supply/rules/`, `ota/backend/src/pricing/rule-matcher.ts`, `ota/backend/src/pricing/rule-matcher.test.ts`, `ota/backend/README.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. Create `ota/backend/src/supply/rules/`: types, fixed lists, a parser and a matcher, pure and without a supplier's name.
+  2. A rule is data: a hook (`pre-action`, `post-action` or `post-merge`), conditions, one effect, a priority, an active window and a version. The effects are the fixed list of plan §4.3: exclude a source, block a carrier, adjust the price, prefer a source, set a share, set a deadline. A table in code says which effect fits which hook.
+  3. Conditions reuse the markup scope parser: the list fields of `parseRuleScope` with its "any of" matching, without its net bounds; plus the supply sources a rule names (the plan's supply ids), a range of travel dates and a range of days before departure.
+  4. The parser refuses, with a reason: an unknown field, hook or effect, a second effect, an effect that does not fit its hook, a number outside its bounds in code. A refused rule is skipped and reported, never applied more broadly than written.
+  5. Every value is a code of a fixed list, a bounded number, a decimal amount with its currency, a date or an id. No code, script, expression, template or URL is stored, and the module evaluates no stored text.
+  6. The matcher answers the rules that match the facts of a search or of an offer, its source among them, in order: inside their window, by priority, then id.
+- **Acceptance:**
+  - `rules-are-data-only` passes: the parser gets a URL, a template, an expression and a script in every field and refuses each; an unknown field is refused with a reason.
+  - A rule has exactly one effect; an effect that its hook may not have is refused (no price change at post-merge).
+  - Sources, travel dates and days before departure match at their bounds; the existing cases of `rule-matcher.test.ts` pass unchanged.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/rules pricing`
+- **Note (2026-11-25):** Rests on ADR-0030, question (44c): the hooks keep the names "pre-action", "post-action" and "post-merge" until the owner answers, and rules store them as data. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OBE-190 · Select suppliers by rule at pre-action and record `skipped` with the rule id
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** PBE-088, OBE-115, OBE-109, OBE-114, OBE-189, OBE-113, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.1 and §4.3 (plan key E8-04); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 20); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 4; item 11, proposed; item 13, proposed; item 14, proposed); the blocks of OBE-113, OBE-114, OBE-189 and PBE-088; ota/backend/src/supply/engine/ (the hook policy, the pre-action input)
+- **Files:** `ota/backend/src/supply/rules/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/supply.module.ts`, `ota/backend/src/shopping/searches.repository.ts`, `ota/backend/test/integration/supply/rules-selection.int.test.ts`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. The handler "supplier selection" is code in `supply/rules`, registered first among the pre-action handlers of Search in the engine of OBE-114 (the fixed order of plan §4.3), and for no other action.
+  2. Input: the neutral search (origins, destinations, travel dates, the airlines it names) and the sources that the registry would call. The rules come from the reader of PBE-088 for the tenant and environment: before the launch only Velexis's rules exist.
+  3. For each source it takes the rules with the effect "exclude a source" that match the search and name the source, or no source. The first by priority removes the source from the fan-out.
+  4. Ownership: a Velexis rule removes Velexis sources only, never a source of the OTA's own account. No rule adds a source: the engine refuses it.
+  5. A removed source gets no adapter call. Its `flight_search_sources` row (OBE-113) says `skipped` and names the rule's id and version in its skip reason.
+  6. A rule read that fails makes the hook fail, and the search fails closed (`hook-failure-fails-closed`); the log names no rule content.
+  7. Tests: unit tests of the handler; `rules-selection.int.test.ts` writes its rules and the platform rows of its sources as the migrator role, through the helpers of X-075 where they exist; a source of an OTA's own account is among them.
+- **Acceptance:**
+  - A matching rule removes its source from a search: zero adapter calls, and `flight_search_sources` holds `skipped` with the rule's id and version.
+  - Rules match by origin, destination, travel dates and airline, in priority order; a rule that is off, outside its window, of the other environment or for another OTA changes nothing.
+  - A Velexis rule never removes a source of the OTA's own account. Without rules the golden test of OBE-109 passes.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/rules supply/engine && pnpm --filter @velexis/ota-backend test:int rules-selection golden-shopping`
+- **Note (2026-11-25):** Without the plan's dependency on E8-02: an OTA's own rules are milestone M8 (OBE-207). The rule's id and version in the skip reason are accepted by the lead. Added dependencies: OBE-115 builds the fan-out that the handler changes, OBE-114 and OBE-189 give the engine and the rule model, OBE-113 the `flight_search_sources` row of step 5, X-075 the helpers of step 7, and the acceptance runs OBE-109's golden test.
+
+### OBE-191 · Apply carrier rules at post-action: every carrier is on until a rule blocks it
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-190, OBE-120, OBE-109, OBE-114, OBE-189, OBE-110, X-075
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A9), §4.3 and §4.11 (plan key E8-05); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 20); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 4; item 11, proposed; item 13, proposed); the blocks of OBE-189 and OBE-190; ota/backend/src/supply/engine/ (the post-action input)
+- **Files:** `ota/backend/src/supply/rules/`, `ota/backend/src/supply/engine/`, `ota/backend/test/integration/supply/rules-carriers.int.test.ts`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. The handler "carrier rules" is code in `supply/rules`, registered second, at post-action of Search and Price in the engine of OBE-114. Default: without a rule every carrier is on.
+  2. On Search it runs once per supplier result. A rule with the effect "block a carrier" that matches an offer (its carriers as the matcher of OBE-189 compares them, its source, route and dates) drops the offer: it is not stored and counts as dropped for its source.
+  3. On Price a matching rule drops the priced offer: the action answers `refused` with `409 SOLD_OUT`, an error that flights.price lists today, and nothing is stored as priced. So a carrier blocked after the search is not sold.
+  4. The handler changes no flight, price or traveller and registers for no money or servicing action: a booking of a blocked carrier is still ticketed and serviced.
+  5. Ownership as in OBE-190: a Velexis rule applies to Velexis sources only.
+  6. Tests: unit tests with the fake adapter; `rules-carriers.int.test.ts` with two sources, whose platform rows it writes as the migrator role, through the helpers of X-075 where they exist.
+- **Acceptance:**
+  - Without a rule no offer is dropped: the golden test of OBE-109 passes.
+  - A rule that blocks a carrier removes its offers of the named sources from a search, counted as dropped; a priced offer of that carrier is refused at Price with `409 SOLD_OUT`.
+  - The handler runs on Search and Price only (a unit test on the engine's hook policy).
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/rules supply/engine && pnpm --filter @velexis/ota-backend test:int rules-carriers golden-shopping`
+- **Note (2026-11-25):** The plan's row names no outcome at Price. Proposed (lead); confirm in the pull request: the outcome `refused` and its answer `409 SOLD_OUT`, an error that `flights.price` lists today, with no contract change before the launch. Added dependencies: OBE-120 sends Price through the engine, OBE-114 and OBE-189 give the hook policy and the matcher, OBE-110 the fake adapter and X-075 the helpers of step 6, and the acceptance runs OBE-109's golden test.
+
+### OBE-192 · Apply Velexis price rules per supply source and store the adjustment as its own component
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-190, OBE-152, OBE-120, OBE-109, OBE-114, OBE-189, OBE-165, OBE-121, OBE-110, X-075
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A15, A20), §4.3 and §4.7 (plan key E8-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 20; item 17, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 11, proposed; item 13, proposed); ota/docs/adr/0005-markup-and-fee-engine.md (points 2, 4 to 6 and 8); docs/mvp/conventions.md §9; ota/backend/src/shopping/upsell.service.ts (`store`); the blocks of OBE-121, OBE-152 and OBE-165
+- **Files:** `ota/backend/src/supply/rules/`, `ota/backend/src/supply/engine/`, `ota/backend/src/supply/interface/`, `ota/backend/src/shopping/searches.service.ts`, `ota/backend/src/shopping/upsell.service.ts`, `ota/backend/src/shopping/priced-offers.service.ts`, `ota/backend/src/shopping/searches.repository.ts`, `ota/backend/src/shopping/offers.repository.ts`, `ota/backend/src/shopping/priced-offers.repository.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/integration/supply/supply-net-leak.int.test.ts`, `ota/docs/data-model.md`, `ota/docs/adr/0005-markup-and-fee-engine.md`, `ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md`
+- **Steps:**
+  1. The handler "price rules" is code in `supply/rules`, registered third, at post-action of Search, Price and Upsell in the engine of OBE-114. An upsell runs the hooks of the Price row and fails closed when a hook fails, as Price does (OBE-121; the lead's ruling S14): its post-action adjusts the fare of the offers it stores, and nothing more. For each offer of a Velexis source it takes the first matching rule with the effect "adjust the price" (priority, then id) that names the offer's source or no source.
+  2. The rule turns the supplier's net price into the OTA's cost price (plan A15): cost price = net price + adjustment, a percentage or a fixed amount in the offer's currency, half-up to the minor unit, no conversion (OADR-0005 points 4 to 6). It adjusts the fare, not extras (A20). `net_total` holds the cost price, so both selling CHECKs hold: the services of search, upsell and price give it to the markup engine as net and write the adjustment, and `priceOffer` does not change.
+  3. One expand migration with the next free tenant migration number (0006 is reserved by OBE-105) adds the adjustment as its own amount to `flight_offers` and `priced_offers`, and the pinned rules (id and version of each rule applied) to `priced_offers`. Without a rule nothing writes them, so the code works with schema versions N-1 and N (conventions §9). Update the tests that list the tenant migrations.
+  4. A priced offer keeps its adjustment and its rule versions: reading it never computes again, also after a rule changed. The handler runs on no money action, and the expected debit of OBE-165 stays the supplier's amount.
+  5. `supply-net-leak.int.test.ts`: with a rule on a Velexis source, written with the helpers of X-075, search the answers of search, upsell, price, checkout and the console's offer operations, in both scopes, for the known supplier net amount, the adjustment and the rule's id (`json-walk.ts`).
+  6. Add a dated note under point 2 of OADR-0005, a dated note on the hook policy of Upsell to OADR-0019 (Proposed (lead), the lead's ruling S14), and the columns to data-model §3.
+- **Acceptance:**
+  - `supply-net-leak` passes: for a Velexis source no answer of either scope holds the supplier's net price, the adjustment or a rule's id; console `netPrice` is the cost price.
+  - The adjustment is stored as its own amount on the offer and the priced offer; cost price = net price + adjustment to the minor unit; the expected debit of a PKFare priced offer does not change.
+  - A priced offer pins the id and version of each rule applied; a later rule change does not change it.
+  - An offer that `flights.upsell` stores for a Velexis source carries the adjustment as a search result does; `offer-upsell.int.test.ts` passes unchanged.
+  - Without a rule nothing changes: the golden test of OBE-109 passes. No test is deleted or weakened.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int test-database && pnpm --filter @velexis/ota-backend test supply/rules migration-0002 upsell priced-offers && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed supply-net-leak golden-shopping shopping`
+- **Note (2026-11-25):** Proposed (lead); confirm in the pull request: price rules do not stack, and the first matching rule by priority, then rule id, applies. Added dependencies: OBE-120 sends Price through the engine, OBE-114 and OBE-189 give the engine and the model, OBE-110 the neutral offer that carries the adjustment, X-075 the helpers of step 5, and the acceptance checks OBE-165's debit and runs OBE-109's golden test. OBE-121 is added: the upsell runs the hooks of the Price row (the lead's ruling S14, Proposed (lead)), and without the handler there an upsold offer of a Velexis source would answer the supplier's net as console `netPrice` (A15).
+- **Note (2026-11-25):** G4: `packages/db` (the generated tenant types and the tests that list the migrations) and `packages/testing` (its test-database test) change with the migration, so Verify runs their tests.
+
+### OBE-193 · Let stored rules set the shares, the deadlines, the preferred source and the minimum saving
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-190, OBE-117, OBE-109, OBE-114, OBE-116, OBE-189, PBE-088, OBE-110, OBE-115, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §3 (A17, A18), §4.3 and §7 (plan key E8-07; in §7 the row "Rules for shares, deadlines, preferred source"); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 20); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 3; item 8, proposed; item 11, proposed); the blocks of OBE-116, OBE-117 and OBE-189; ota/backend/src/supply/engine/
+- **Files:** `ota/backend/src/supply/rules/`, `ota/backend/src/supply/engine/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/rules-merge.int.test.ts`, `ota/docs/flows/search-and-price.md`
+- **Steps:**
+  1. The settings object of OBE-116 and OBE-117 (shares, preferred source, minimum saving) and each source's search deadline keep their defaults in code. Stored rules now set them per search: the effects "set a share", "set a deadline" and "prefer a source", the last with its minimum saving.
+  2. A resolver in `supply/rules` takes the neutral search and the rules of PBE-088 and answers the settings of this search: per setting the first matching rule by priority, else the default.
+  3. Deadline: resolved at pre-action, before the fan-out. It stays inside the model's bounds (OBE-189).
+  4. Shares: applied by the merge at post-merge, over the sources that answered; an unused share passes on, as today. Preferred source and minimum saving: applied by the removal of duplicates, before the shares (the order of plan §4.3).
+  5. No rule changes a price at post-merge, and none adds a source: the engine of OBE-114 refuses both.
+  6. Tests: unit tests of the resolver with the fake adapter (each effect, no rule, a rule outside its window); `rules-merge.int.test.ts` with two sources, whose platform rows it writes as the migrator role, through the helpers of X-075 where they exist.
+- **Acceptance:**
+  - With a rule, a search uses the rule's share per source, deadline, preferred source and minimum saving; without one it uses the defaults, and the golden test of OBE-109 passes.
+  - A source held past a rule's deadline gets `timed_out` at that deadline.
+  - With a preferred source and a minimum saving from a rule, the other source's like-for-like offer wins only when it is cheaper by at least that saving.
+  - The merged list never exceeds the limit, and no price changes at post-merge.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/rules supply/engine && pnpm --filter @velexis/ota-backend test:int rules-merge golden-shopping`
+- **Note (2026-11-25):** Added dependencies: OBE-116 holds the settings object, OBE-115 the deadline per source that step 3 sets, OBE-110 the fake adapter, OBE-189 the bounds, PBE-088 the rules, OBE-114 the engine that refuses what step 5 names, X-075 the helpers of step 6, and the acceptance runs OBE-109's golden test.
+
+### OBE-194 · Prove the rules: `rule-ownership`, the three hook tests with stored rules, the cost of rules
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-191, OBE-192, OBE-193, OBE-114, PBE-088, PBE-089, X-075
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.3, §4.15 and §6 (plan key E8-08; the exit of P8); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13, 19 and 20); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 4; item 13, proposed; item 14, proposed); the blocks of OBE-114 (its four tests) and OBE-123; ota/docs/performance.md §9 and §10; tools/perf/booking-load-memory.test.mjs (it imports the load scripts)
+- **Files:** `ota/backend/test/integration/supply/rule-ownership.int.test.ts`, `ota/backend/test/integration/supply/hooks-with-stored-rules.int.test.ts`, `ota/backend/test/load/search-load.mjs`, `ota/backend/test/load/README.md`, `ota/docs/performance.md`
+- **Steps:**
+  1. `rule-ownership.int.test.ts` proves the direction built before the launch: no OTA answer returns Velexis's rules, and no Velexis rule is applied to another owner. It writes its rules into the table of PBE-089 as the migrator role and the OTA's sources with the helpers of X-075.
+  2. Its cases: a rule for OTA A changes nothing for OTA B; no rule applies to a source of an OTA's own account; a rule's id, conditions, effect and amounts are in no answer of either scope.
+  3. The other direction (an OTA's own rules never touch a Velexis source) is milestone M8 (OBE-207): name it in the file as pending, without a skipped test.
+  4. `hooks-with-stored-rules.int.test.ts` repeats the three hook tests of OBE-114 with stored rules and the real handlers: `money-hooks-cannot-mutate` (no amount, supplier or traveller of a money action changes), `hook-failure-fails-closed` (a rule read that fails fails Search, Price and the upsell of OBE-192) and `hook-failure-never-blocks-servicing` (the same failure stops no servicing action; it is logged as one error event `supply.hook_failed` with the hook, the action and the source and no payload, and no `StaffAlerts` entry is written; the lead's ruling S12).
+  5. Cost of rules: `search-load.mjs` gains the option `--rules <n>`, which writes n rules before the run. Run with 0, 10 and 100 rules, three runs each, as §10 of performance.md did, and record a new section with a §9 row. If the 500 ms budget is missed with rules, stop and tell the lead.
+- **Acceptance:**
+  - `rule-ownership` passes in the direction of step 1.
+  - `money-hooks-cannot-mutate`, `hook-failure-fails-closed` and `hook-failure-never-blocks-servicing` pass with stored rules and the real handlers; a hook that fails on a servicing action writes one `supply.hook_failed` event and no `StaffAlerts` entry.
+  - performance.md holds the runs with 0, 10 and 100 rules and a §9 row; the p95 of `flights.search` stays within 500 ms.
+  - Without `--rules` the script runs as before. No existing test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int rule-ownership hooks-with-stored-rules && node --check ota/backend/test/load/booking-load.mjs && node --test tools/perf/*.test.mjs && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 150 --rules 100`
+- **Note (2026-11-25):** The direction for an OTA's own rules is milestone M8 (OBE-207). The plan names tools/perf; the load test is ota/backend/test/load/search-load.mjs (accepted by the lead), and the tests of tools/perf import the load scripts, so Verify runs them. OBE-114 is added as a dependency: step 4 repeats its tests. PBE-089 (the table that step 1 writes), PBE-088 (the read whose answers step 2 searches) and X-075 (the helpers of step 1) are added too.
+
+### OBE-195 · Add the supply fact outbox: a fact with every change of a supplier order, published in order
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-067, OBE-168, OBE-173, OBE-147, OBE-146, OBE-133, OBE-136, OBE-171, OBE-174, OBE-125, OBE-128, OBE-132, OBE-169, OBE-170, X-055
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.13 (plan key RC-07; A38 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 7, 8 and 22); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 1; item 5, proposed; item 6, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 2); docs/mvp/adr/0003-six-components-two-nestjs-backends.md (integration rules 2, 5 and 6); docs/mvp/adr/0009-background-jobs-bullmq.md (items 3, 5, 6 and 10); ota/docs/adr/0014-per-tenant-workers-and-schedulers.md; ota/backend/migrations/README.md; the blocks of X-067, OBE-105 (the eight test files that list the tenant migrations), OBE-125, OBE-146, OBE-168, OBE-173 and X-055; ota/backend/src/jobs/schedulers.ts (`OTA_SCHEDULES`, `ScheduleDefinition`); ota/backend/src/provisioning/tenant-events.producer.ts
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/supply/facts/`, `ota/backend/src/bookings/` (the transactions that change a supplier order), `ota/backend/src/payments/` (the capture), `ota/backend/src/console/console-payments.service.ts`, `ota/backend/src/jobs/schedulers.ts`, `ota/backend/src/jobs/fan-out.test.ts`, `ota/backend/src/worker.module.ts`, `ota/backend/test/integration/supply/fact-outbox.int.test.ts`, `ota/docs/data-model.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. One tenant migration with the next free tenant migration number (0006 is reserved by OBE-105): the outbox table (per fact: booking, supplier order, sequence, the payload of `supply.booking_fact`, time written, time published) and the sequence per supplier order. Update the eight test files that list the tenant migrations, as OBE-105 does.
+  2. Writer: one function takes the open `tenantTx` transaction, raises the order's sequence and inserts the fact, never outside the transaction of its change.
+  3. It runs where a supplier order is created (OBE-128, OBE-169), paid (the captures of the payments module and the console), ticketed (OBE-132, OBE-133, OBE-174), cancelled or released (OBE-136, OBE-170, OBE-171). The outcome step of OBE-200 writes `reimbursed` with it.
+  4. It reads the booking's source through the registry of OBE-146 and writes nothing for an OTA's own account. A Velexis-supplied Amadeus booking writes facts too (A38), keyed by `bookings.supplier_order_ref` (OBE-125), which OBE-147 also fills for old Amadeus bookings. A booking without a supply id, a row that the job of OBE-147 could not map, writes no fact: nothing is guessed. An amount that a source lacks stays null.
+  5. Publisher: a schedule in `OTA_SCHEDULES` for `active` and `suspended` tenants validates the unpublished facts in sequence order with `validateJob`, adds each to `platform-tenant-events` with a fixed job id of tenant, supplier order and sequence, then marks it published. Its `milestone` is `M7`, which OBE-173 or OBE-175 adds to `ScheduleDefinition`, whichever merges first.
+  6. Daily re-send: the latest fact of every order that is not final goes out again, with a fixed job id per order, sequence and day.
+  7. Tests: unit tests of the writer and the publisher, the schedules in `fan-out.test.ts`, and `fact-outbox.int.test.ts` with `own-source-sends-no-fact` (a booking of the own-connection OTA of X-055) and the isolation test. Describe the tables in `data-model.md` and the schedules in OTA architecture §6.
+- **Acceptance:**
+  - `own-source-sends-no-fact`: a booking on the OTA's own account writes no outbox row and publishes nothing.
+  - A committed change has exactly one fact with the next sequence. A change that rolls back has none.
+  - A publisher run that stops after the add and before the mark adds the same job id again, so the queue holds each fact once.
+  - The isolation test passes: no fact of one tenant is read or published in another tenant's run.
+  - No fact holds a traveller's name, contact or document number, a key or a signature. `pnpm db:codegen` leaves no diff.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test facts fan-out migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed fact-outbox bookings payments console`
+- **Note (2026-11-25):** Added dependencies, each a producer this task uses: OBE-147 (new bookings carry their supply id; its job fills old ones and the `supplier_order_ref` of old Amadeus bookings), OBE-146 (whose account a source is), OBE-125 (`bookings.supplier_order_ref`), X-055 (the own-connection OTA of the test), and OBE-128, OBE-169, OBE-132, OBE-133, OBE-174, OBE-136, OBE-170 and OBE-171, whose transactions get their fact here.
+
+### OBE-196 · Add the support caller and the handoff redeem to the OTA backend, fenced to the tag `Support`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-054
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.13, the table of the three channels (plan key RC-09; A36 and A37 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 8 and 22); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 2; item 4, proposed; item 5, proposed; "Notes that wait for a decision"); ota/docs/adr/0009-caller-and-tenant-resolution.md (rules 1 and 2; points 3, 7 and 8); ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (points 2 to 4 and 8); ota/backend/src/tenancy/caller-resolver.ts; ota/backend/src/identity/staff/staff-sessions.ts (`redeemPortalToken`); ota/backend/migrations/tenant/0001_baseline.sql (`staff_actions_actor_ck`); docs/mvp/architecture.md §6
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `ota/backend/src/config.ts`, `ota/backend/src/config.test.ts`, `ota/backend/src/tenancy/caller-resolver.ts`, `ota/backend/src/common/auth/caller.guard.ts`, `ota/backend/src/common/auth/caller.guard.test.ts`, `ota/backend/src/common/auth/scope.guard.ts`, `ota/backend/src/support/`, `ota/backend/src/app.module.ts`, `ota/backend/src/common/redis/redis.keys.ts`, `ota/backend/src/common/redis/redis.keys.test.ts`, `ota/backend/src/console/staff-actions.writer.ts`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/test/helpers/api-env.ts`, `ota/backend/test/integration/support/support-caller-route-fence.int.test.ts`, `.env.example`, `ota/backend/.env.example`, `deploy/env/ota-backend.env.example`, `deploy/env/platform-admin.env.example`, `deploy/scripts/provision-vm.sh`, `deploy/scripts/check-vm.sh`, `deploy/caddy/Caddyfile`, `deploy/caddy/test/caddy-smoke.sh`, `ota/sdk/docs/extensions.md`, `ota/docs/api-changes-console-and-internal.md`, `ota/docs/architecture.md`, `ota/docs/data-model.md`, `ota/docs/adr/0009-caller-and-tenant-resolution.md`, `ota/docs/adr/0011-console-access-staff-sessions-and-environments.md`, `docs/mvp/architecture.md`
+- **Steps:**
+  1. Contract first: the tag `Support`, whose operations carry `x-internal: true`, a scope value of their own and `x-milestone: M7`, and get no SDK method. The first redeems a handoff. `ConsoleActor.type` gains `platform_staff`. Add the change-log row and the tag in `api-changes-console-and-internal.md`, and run `pnpm contracts:generate`.
+  2. Config: `PLATFORM_ADMIN_SERVICE_KEY`, with the rules of `OTA_ADMIN_SERVICE_KEY` and a different value.
+  3. `CallerResolver` knows the caller kind `support`: the key in `X-Api-Key`, compared in constant time, on a loopback connection without `X-Forwarded-For` and `X-Forwarded-Host`. Through Caddy the key is not recognised, and the attempt is logged without the value. As for the service caller, the end-user IP and user agent headers are required (OADR-0009 point 8), so audit rows hold the role holder's.
+  4. Fence: a `support` caller reaches the operations of the tag `Support` only, and no other caller reaches them. Their routes lie under a path that Caddy answers with 404, which `caddy-smoke.sh` asserts.
+  5. Redeem: take the handoff with `GETDEL` from `support:handoff:<sha256 hex of the token>` (Proposed (lead), the lead's ruling S17), built by a `shared` builder in `redis.keys.ts` that `redis.keys.test.ts` lists; PBE-093 writes it for 60 s, with tenant, environment, booking, staff account, reason and request id, and its builder gives the same key. Answer a token bound to tenant, environment and booking. Every support call checks the three and `staffdeny:acct:<accountId>`.
+  6. Tenant migration with the next free tenant migration number (0006 is reserved by OBE-105): the CHECKs on `staff_actions.actor_type` and `staff_actions_actor_ck` allow `platform_staff` with the platform account's id by value, added `NOT VALID`, then validated (conventions §9). Update the eight test files that list the tenant migrations, as OBE-105 does. The redeem writes one row with the reason, through `tenantTx`.
+  7. Records: a dummy value in the root `.env.example` and `ota/backend/.env.example`, the key in both deploy env templates and in `provision-vm.sh`, the same-value check in `check-vm.sh`, the configuration matrix (`docs/mvp/architecture.md` §6), the row of the handoff key in "Redis keys shared between the backends" (`docs/mvp/architecture.md` §4; whichever of this task and PBE-093 merges first writes it, the other checks that it is there), OTA architecture §3.1 and §7, and the dated notes under OADR-0009 and OADR-0011 that PADR-0021 lists as waiting. The pull request names the human step: add the key to `/etc/velexis/ota-backend.env` and `/etc/velexis/platform-admin.env`, one value, before the next deploy.
+- **Acceptance:**
+  - `support-caller-route-fence`: a support caller reaches every `Support` operation and no other. No other caller reaches a `Support` operation.
+  - With forwarded headers the key is no support caller, and the support path answers 404 through Caddy.
+  - A handoff redeems once. A token used for another tenant, environment or booking is refused.
+  - The redeem writes one `staff_actions` row with the actor `platform_staff`. No key and no token is logged or stored.
+  - No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm db:migrate && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test contract caller config redis.keys && pnpm --filter @velexis/ota-backend test:int support tenancy migrations provisioning dev-seed && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/platform-admin test config && shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh && bash deploy/scripts/test/check-vm.test.sh && bash deploy/caddy/test/caddy-smoke.sh`
+- **Note (2026-11-25):** The plan names no path or scope value: propose them in the pull request and record them in the two notes. Deploy files, the platform admin's env template (read by its `config.test.ts`) and the SDK's `extensions.md` (G4) merge with the caller kind; Verify runs their tests.
+
+### OBE-197 · Add the support reads: booking view, fresh supplier read, call log and queue snapshots, each audited
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-196, OBE-134, OBE-138, X-054, X-055
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.13 and §4.7 (plan key RC-11; A7 and A37 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 8, 21 and 22; item 18, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 2; item 4, proposed; item 5, proposed); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 8, proposed; item 10, proposed); ota/docs/adr/0011-console-access-staff-sessions-and-environments.md (point 8); the blocks of OBE-196, OBE-134, OBE-138 and X-055; ota/backend/src/console/console-bookings.mapper.ts; ota/backend/src/console/supplier-log.repository.ts; ota/backend/src/console/queue-snapshots.repository.ts (`latest`); ota/backend/test/contract/redaction-coverage.contract.test.ts
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `ota/backend/src/support/`, `ota/backend/src/console/supplier-log.repository.ts`, `ota/backend/src/console/queue-snapshots.repository.ts`, `ota/backend/test/integration/support/support-view-redaction.int.test.ts`, `ota/backend/test/integration/support/support-own-source-404.int.test.ts`, `ota/backend/test/integration/support/support-caller-route-fence.int.test.ts`, `ota/docs/api-changes-console-and-internal.md`, `ota/docs/architecture.md`
+- **Steps:**
+  1. Contract first: add four operations to the tag `Support` (`x-internal: true`, `x-milestone: M7`): the booking view, the fresh supplier read, the call log of the booking and the queue snapshots. Each needs the token of OBE-196. Their schemas are an allow-list of their own, not the console's booking. Add the change-log row, run `pnpm contracts:generate` and bind the routes.
+  2. Booking view: reference, status, supply id, the supplier and its order number, flights, travellers' names, ticket numbers, deadlines, and the amounts and status of the payments. No document number, no contact and no card detail.
+  3. Fresh supplier read: one Read order through the engine (OBE-134). It answers the supplier's status, codes and deadlines, and changes no booking.
+  4. Call log: the booking's rows of the supplier call log with their stored, redacted bodies, passed through the allow-list again.
+  5. Queue snapshots: the latest stored snapshots (`queue-snapshots.repository.ts`) of the queues of the Velexis office that serves the token's tenant and environment. `queues.poll` keeps storing them for an OTA on Velexis's connection (OBE-138). Never an OTA's own office.
+  6. Own source: for a booking on the OTA's own account every operation answers `404 NOT_FOUND`, as for an unknown booking, and calls no supplier.
+  7. Audit: every read writes one `staff_actions` row with the actor `platform_staff`, the action and the reason of the handoff, through `tenantTx`. The OTA sees it among the booking's staff actions.
+  8. Tests: the two named tests, `support-own-source-404` with a booking of the own-connection OTA of X-055, and the four operations in `support-caller-route-fence`.
+- **Acceptance:**
+  - `support-view-redaction`: for a booking seeded with a known document number, e-mail address, phone number and test card number, no answer of the four operations and no audit row holds one of them.
+  - `support-own-source-404`: all four operations answer `404` for a booking on an own source, and the supplier stub receives no call.
+  - Each successful read writes exactly one `staff_actions` row. A failed supplier read writes it with the outcome `failed`.
+  - A token of another booking, tenant or environment is refused on each operation.
+  - No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test contract support && pnpm --filter @velexis/ota-backend test:int support`
+- **Note (2026-11-25):** The plan's row names "status, codes, deadlines" only; the members of step 2 are this block's reading of plan §4.13. X-054 is added (G1): the four operations carry `x-milestone: M7`. X-055 is added: its helper gives the test OTA with its own Amadeus connection.
+
+### OBE-198 · Open cases in the OTA backend for cancel requests, schedule changes and lost order answers
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-176, OBE-136, OBE-156, OBE-107, OBE-173, OAD-026, OBE-168, OBE-148, X-055, OBE-135
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 and §4.10, the paragraph on a lost order answer (plan key RC-12; A8, A33 and A39 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 8 and 22; item 18, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 8, proposed; item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 9, proposed; item 11, proposed; item 13, proposed); ota/backend/migrations/README.md; the blocks of OBE-168 (the open-case mark and the one function that sets it), OBE-173, OBE-176, OBE-136, OBE-156, OAD-026, OBE-148 (its helper), OBE-135 (`ReconcileService.search` and the review at the deadline), OBE-105 (the eight test files that list the tenant migrations) and X-055; ota/backend/src/bookings/cancellation-mode.ts (`request_only`); the staff alerts of ota/backend/src/bookings/reconcile.service.ts (`reconcile_not_found`, `reconcile_manual_review` and the one of an airline-card order), cancellation.service.ts (an order not found, `cancellation_unknown`) and booking-sync.service.ts (`airlineCancellationReason`); ota/backend/src/console/review-closure.service.ts (`check`, `lockInReview`, `notInReview`) and console-bookings.mapper.ts (`reviewClosureRefusalOf`, `consoleActionsOf`), with the block of OBE-179 (its close-review refusal); ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts (`REVIEW_OVERRIDES`) and sections.tsx (`CONSOLE_REASONS`); tools/e2e/specs/ota-admin/reconciliation-review.e2e.ts; ota/docs/runbooks/supplier-timeout-and-reconciliation.md §4.3
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/src/supply/`, `ota/backend/src/bookings/cancellation.service.ts`, `ota/backend/src/bookings/cancellation.service.test.ts`, `ota/backend/src/bookings/booking-sync.service.ts`, `ota/backend/src/bookings/booking-sync.service.test.ts`, `ota/backend/src/bookings/reconcile.service.ts`, `ota/backend/src/bookings/reconcile.service.test.ts`, `ota/backend/src/bookings/staff-alerts.ts`, `ota/backend/src/bookings/supplier-orders.repository.ts`, `ota/backend/src/console/open-cases.service.ts`, `ota/backend/src/console/review-closure.service.ts`, `ota/backend/src/console/review-closure.service.test.ts`, `ota/backend/src/console/console-bookings.mapper.ts`, `ota/backend/src/console/console-bookings.mapper.test.ts`, `ota/backend/src/console/console-bookings.service.ts`, `ota/backend/src/console/console-bookings.repository.ts`, `ota/backend/test/integration/console/review-closure.int.test.ts`, `ota/backend/test/integration/bookings/reconcile.int.test.ts`, `ota/backend/test/integration/bookings/cancel.int.test.ts`, `ota/backend/test/integration/bookings/sync.int.test.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `packages/api-types/src/jobs/`, `ota/backend/test/integration/supply/cases.int.test.ts`, `ota/docs/data-model.md`, `ota/docs/flows/change-and-cancel.md`, `ota/docs/runbooks/README.md`, `ota/docs/runbooks/supplier-timeout-and-reconciliation.md`, `ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/actions.test.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/sections.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/page.test.tsx`, `tools/e2e/specs/ota-admin/reconciliation-review.e2e.ts`, `tools/e2e/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. Contract first, additive: where the items of `consoleListOpenCases` (OBE-176) list their kinds or states as fixed values, add those of steps 4 and 6, with the change-log row, and run `pnpm contracts:generate`. No operation is added.
+  3. Only a booking on a Velexis source opens a case, as the producer of OBE-176 decides; an own source keeps today's behaviour.
+  4. Openers: a cancellation in the mode `request_only`; a schedule change that the sync finds and that needs an answer; a lost order answer, for which OBE-173 sets the open-case mark "order unknown", without an order number. For a Velexis-supplied Amadeus booking (the helper of OBE-148), reconcile's manual review at its deadline (`reconcile_outcome = manual_review`, the event `booking.reconcile_manual_review`) also opens the case "order unknown", without an order number, through the case repository of step 5: `booking_supplier_orders` has no row for an Amadeus booking, so no mark is set. The not-found path (`reconcile_outcome = not_found`) opens no case and keeps its failure, its void and the neutral alert of step 9 (the lead's ruling S16).
+  5. Store: the mark that OBE-176 lists is on `booking_supplier_orders` (OBE-168), which has rows only for a source paid from a supplier balance and holds no state. One tenant migration with the next free tenant migration number (0006 is reserved by OBE-105) adds the case table `booking_cases`: booking, kind, state, deadline, quote, traveller's choice, outcome and amounts, who acted and when, a version. OBE-168's one function of `supplier-orders.repository.ts` that sets the mark, which OBE-171, OBE-172, OBE-173 and OBE-175 call, also inserts the case row, in the same transaction. An opener that sets no mark inserts its row through the same case repository. `consoleListOpenCases` then reads the table. Update the eight test files that list the tenant migrations, as OBE-105 does.
+  6. States: open, quoted, confirmed by the OTA (for a schedule change: the traveller's choice recorded), submitted, outcome recorded; the other kinds go from open to the outcome. Each change is one conditional update under the booking's lock.
+  7. Each opening sends one `supply.case_opened` with the producer of OBE-176; a kind that the schema lacks is added in `packages/api-types`, additively (X-067 adds it instead if it merges first).
+  8. Case texts: the traveller reads that the OTA is working on the request and by when an answer comes; the staff alert says what staff must do. No text names a supplier, and they replace the interim texts of OAD-026. The deadlines are named constants with the proposals of A39 until the owner sets them (plan §8).
+  9. Other staff alerts, for a Velexis-supplied booking only, decided with the helper of OBE-148 (the lead's ruling S14): reconcile's lost-answer and booking-queue alerts, cancellation's order-not-found and time-out alerts, and the sync's airline-cancelled alert name Amadeus or its offices today. They get neutral words and send staff to Velexis support with the booking reference, as OAD-026's texts do. For an own source they stay as they are.
+  10. One decider (the lead's ruling S18; Proposed (lead)): while the case "order unknown" is open for a Velexis-supplied booking, the reconciliation role decides alone (plan §4.10, A33). Contract first, in the row of step 2: the descriptions of `consoleCloseBookingReview`, of its `409` (`ConsoleReviewClosureConflict`) and of `ConsoleBookingActions.canCloseReview`, and the added value of `reasons`. The closure answers `409 CONFLICT` with one neutral `details.reason` and changes nothing, at its first check before any supplier call and again under the lock (`check` and `lockInReview` of `review-closure.service.ts`); `canCloseReview` is false with the same reason (`reviewClosureRefusalOf`). Once the case is closed, the closure works as before. The value names no supplier, source or payment model, and OBE-179's close-review refusal for a source paid from a supplier balance uses it too, so the answer never tells the two causes apart: whichever of the two tasks merges first adds it; the later one reuses it and keeps both guards. The OTA admin offers no closure, as it reads `canCloseReview`, but today it shows an unknown reason as its bare value (`CONSOLE_REASONS` of `sections.tsx`) and an unmapped refusal as a generic "reload and try again" (`REVIEW_OVERRIDES` of `actions.ts`): both get neutral words that fit both causes and send staff to Velexis support, as OAD-026's texts do.
+  11. Tests: unit tests of the openers, the states and each text of steps 8 and 9 for both kinds of source, and `cases.int.test.ts`. `reconcile.int.test.ts`, which already drives a booking to its deadline, gains the cases of step 4's reconcile opener: for a Velexis-supplied Amadeus booking the manual review at the deadline opens one case and a second run none, and the not-found path opens none. A test that pins one of today's texts on a tenant with Velexis's connection moves to the own-connection OTA of X-055 with its assertions unchanged, and the neutral text gets a new case (ruling T, classes 1 and 3). The same holds for step 10: the closures of `review-closure.int.test.ts` reach the review on Velexis's connection, so they move to the own-connection OTA (X-055's helper), and `reconciliation-review.e2e.ts` runs on an OTA made with X-055's end-to-end helper, assertions and axe checks unchanged; new cases on Velexis's connection show both outcomes refused while the case is open (nothing changed, no supplier call, `canCloseReview` false) and the closure as before once the case's outcome is recorded through the case repository (a fixture). Unit tests of `reviewClosureRefusalOf`, of both checks and of the OTA admin's words (`actions.test.ts`, `page.test.tsx`). Update the flow document, `data-model.md`, §3 of the runbooks README, §4.3 of the reconciliation runbook (Velexis support decides such a booking) and the journey's arrangement in `tools/e2e/README.md`.
+- **Acceptance:**
+  - For a Velexis-supplied booking each opener opens exactly one case and sends one `supply.case_opened`; the same event again opens none.
+  - For a Velexis-supplied Amadeus booking, reconcile's manual review at its deadline opens one case "order unknown"; the not-found path opens none and keeps its failure and its void.
+  - Every open-case mark has its case row, and `consoleListOpenCases` lists each open case once.
+  - For an own source nothing opens a case and every alert reads as today; today's cancellation, reconcile and sync tests keep their assertions.
+  - A state change out of order is refused. The migration applies to an empty and to a populated schema.
+  - While the case "order unknown" is open for a Velexis-supplied booking, `consoleCloseBookingReview` refuses both outcomes with the one neutral reason, changes nothing and calls no supplier, and `canCloseReview` is false with that reason; once the case is closed the closure works as before. Today's closure tests and `reconciliation-review.e2e.ts` pass with their assertions on an own connection.
+  - No traveller text or staff alert of a case, and no alert of step 9 for a Velexis-supplied booking, holds a supplier's name or code, an office id or an order number. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test contract cases cancellation booking-sync reconcile open-cases review-closure console-bookings && pnpm --filter @velexis/ota-backend test:int cases open-cases bookings migrations provisioning dev-seed review-closure && pnpm --filter @velexis/ota-admin test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/reconciliation-review.e2e.ts`
+- **Note (2026-11-25):** The case table, its states and its insert in OBE-168's function (steps 5 and 6) are Proposed (lead); confirm in the pull request: the plan names no table and no states (the lead's ruling S15). No task reads PKFare's schedule changes (plan §9.6 item 4); the case opens from the sync's read. Before the launch PKFare's own e-mails and notices are read by hand: the operations pack of X-072 names who reads the Velexis mailbox, how a notice becomes a case of this task and how staff tell the OTA in neutral words (the lead's ruling S11). Added dependencies: OBE-107 (step 1), OBE-173 (its "order unknown" mark), OAD-026 (its interim texts), OBE-168 (the function that sets the mark), OBE-148 (the helper of steps 4 and 9), X-055 (the own-connection OTA and the end-to-end helper of step 11) and OBE-135 (it rewrites `ReconcileService.search`, the review at the deadline and the queue alert in `reconcile.service.ts`, which steps 4 and 9 change). G4: `packages/api-types/src/jobs/` gains the case kinds with their producer (step 7); Verify runs its tests.
+- **Note (2026-11-25):** G4 (the lead's ruling S18): the OTA admin changes only if the refusal needs words, and the code shows that it does (step 10). The OTA admin's `actions.ts` and `sections.tsx` with their tests, and the review journey of the end-to-end suite (`tools/e2e`), merge with the refusal, so that no merge leaves a page without words or a journey that the refusal breaks; Verify runs both. OBE-179 stays out of Depends on: the two tasks may run in parallel, and the meeting sentence of step 10 joins their refusals.
+
+### OBE-199 · Add the console side of a case: confirm a quote, record the traveller's choice, refuse refunds
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-198, OBE-179, X-054, OBE-176
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 (plan key RC-13); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 8 and 22; item 18, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 8, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 13, proposed); the blocks of OBE-198, OBE-179 and OBE-176; ota/backend/src/console/console-payments.service.ts (`refundRefusal`); ota/backend/src/console/console-bookings.controller.ts; ota/docs/api-changes-console-and-internal.md §3; ota/sdk/src/namespaces/console.js
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `ota/backend/src/supply/`, `ota/backend/src/console/console-bookings.controller.ts`, `ota/backend/src/console/console-payments.service.ts`, `ota/backend/src/console/console-payments.service.test.ts`, `ota/backend/test/integration/supply/refund-refused-while-case-open.int.test.ts`, `ota/sdk/src/internal/operations.js`, `ota/sdk/src/namespaces/console.js`, `ota/sdk/src/console.js`, `ota/sdk/test/unit/namespaces-console.test.js`, `ota/sdk/test/contract/methods.generated.ts`, `ota/sdk/test/contract/parity.test.js`, `ota/sdk/docs/extensions.md`, `ota/sdk/README.md`, `ota/sdk/CHANGELOG.md`, `ota/docs/api-changes-console-and-internal.md`, `ota/docs/flows/change-and-cancel.md`
+- **Steps:**
+  1. Contract first, additive: two console operations with `x-milestone: M7`. One confirms the quote of a case; one records the traveller's choice on a schedule change. The plan names neither: follow the names of the operation of OBE-176. `ConsoleBookingDetails` gains the booking's case, and the items of `consoleListOpenCases` gain the quote, the outcome and a refund proposal (member names proposed). `consoleRefundPayment` (`console.payments.refund`) documents the reason `case_open`. Add the change-log row, run `pnpm contracts:generate` and add the two SDK methods.
+  2. Confirm a quote: only in the state quoted. It stores who confirmed and when, moves the case to confirmed and writes one `staff_actions` row. It takes the version and the idempotency key that the other console writes take. The plan names no permission: use `bookings:cancel`, the permission of `consoleCancelBooking`.
+  3. Traveller's choice: OTA staff record what the traveller wants after a schedule change. The case stores it with who recorded it, and one `staff_actions` row is written.
+  4. Refund: from the opening of a case until its outcome is recorded, `consoleRefundPayment` refuses every payment of the booking with `details.reason: case_open` and a code that the operation lists today, as the refusals of OBE-179 do, before any call to Stripe.
+  5. Refund proposal: once the outcome is recorded, the case answers what the OTA may refund to the traveller. It is a proposal: OTA staff start the refund with the existing operation.
+  6. Tests: unit tests of the state rules and of `refundRefusal`, and `refund-refused-while-case-open`.
+- **Acceptance:**
+  - `refund-refused-while-case-open`: with a case open the refund is refused with the reason `case_open`, and the Stripe double receives no request. After the outcome is recorded the same refund succeeds.
+  - A quote is confirmed once and only in the state quoted. A second confirmation and a stale version are refused.
+  - Each of the two writes stores who did it and adds one `staff_actions` row.
+  - The SDK's parity and contract tests pass with the two new methods. The change is additive: no member is removed or renamed.
+  - For a Velexis source no new answer names a supplier. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated ota/sdk/src/internal/operations.js ota/sdk/test/contract/methods.generated.ts && pnpm --filter @velexis/ota-backend test contract cases console-payments && pnpm --filter @velexis/ota-backend test:int refund-refused-while-case-open console/payments && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/ota-sdk test:contract`
+- **Note (2026-11-25):** SDK (G4): the two console operations get their SDK methods in the same change, as every console operation does, so Verify runs the SDK's tests. OBE-176 is added as a dependency: step 1 extends the items of its `consoleListOpenCases`.
+
+### OBE-200 · Add the support actions on a case: quote, submitted, outcome, order number or no order, note
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-197, OBE-199, X-054, OBE-195, OBE-196, OBE-198, OBE-135
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12, §4.13 and §4.10, the paragraph on a lost order answer (plan key RC-14; A33 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 8 and 22); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 5, proposed; item 8, proposed; item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 13, proposed); the blocks of OBE-135 (Find order), OBE-195, OBE-196, OBE-197, OBE-198 and OBE-199; ota/backend/src/bookings/reconcile.service.ts (`readFoundOrderInput`, `recordFoundOrder`, `failNotFoundBooking`: the found and not-found decisions' writes) and ota/backend/src/console/review-closure.service.ts (`recordOrderFound`, `recordNotBooked`: their other caller); ota/backend/src/bookings/booking-sync.service.ts (the record step); packages/logger/src/card-number.ts (`holdsCardNumber`)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `packages/api-types/src/generated/operations.ts`, `ota/backend/src/support/`, `ota/backend/src/supply/`, `ota/backend/test/integration/support/case-submit-needs-confirmation.int.test.ts`, `ota/backend/test/integration/support/case-outcome-needs-fresh-read.int.test.ts`, `ota/backend/test/integration/support/case-order-unknown.int.test.ts`, `ota/backend/test/integration/support/support-no-payment-operations.int.test.ts`, `ota/backend/test/integration/support/support-caller-route-fence.int.test.ts`, `ota/docs/api-changes-console-and-internal.md`, `ota/docs/flows/change-and-cancel.md`
+- **Steps:**
+  1. Contract first: add five operations to the tag `Support` (`x-internal: true`, `x-milestone: M7`): record a quote, mark submitted, record the outcome, record the order number or "no order" for "order unknown", and add a note. The tag gets no capture, refund or void operation. Add the change-log row, run `pnpm contracts:generate`, bind the routes and add them to `support-caller-route-fence`.
+  2. One write per case step: one conditional state change with its amounts, one `staff_actions` row with the actor `platform_staff` and at most one staff alert, in one `tenantTx` transaction under the booking's lock. The same idempotency key replays the stored answer.
+  3. Quote: store what the supplier would return, and alert OTA staff to confirm it.
+  4. Mark submitted: refused unless OTA staff confirmed the quote, or for a schedule change recorded the traveller's choice. The supplier may cancel the order as soon as it accepts a refund request (plan §4.12).
+  5. Outcome: first read the order through the engine; without a successful read, record nothing. The sync's record step moves the booking; the caller sends no status. The waiting request ends, the amounts are stored, and OTA staff get an alert with the refund proposal. Money that comes back is written as the fact `reimbursed` with the writer of OBE-195, in the same transaction.
+  6. Order unknown (Proposed (lead), the lead's ruling S18; the lead confirms it when this task's wave is proposed). With an order number for an Amadeus source, the engine reads the order by that number with no transaction open (Find order of OBE-135, which accepts only an order that carries this booking's remark), and the found decision's write records it and confirms the booking, as reconcile does today: `recordFoundOrder` of `reconcile.service.ts`, reused unchanged as `ReviewClosureService.recordOrderFound` uses it, with the role as its actor, in the step's one transaction, the checkout locked before the booking (OADR-0003 point 11). The booking becomes `confirmed` (or `ticketed` when the order came back issued) with `reconcile_outcome = found`, its checkout `completed`, and the money follows as after reconcile's own find. Where the source cannot record an order found that way, as its capabilities say (PKFare, until A33 is confirmed), the engine reads the order and releases it; then, as with "no order", the booking fails and its hold is voided. "No order" fails the booking and voids the payment hold for every source (for an Amadeus source the not-found decision's write, `failNotFoundBooking`, then `payment.void` after the commit; an airline-card payment fails instead, as in the console's not-booked closure). Nothing else fails such a booking (A33).
+  7. Note: free text for OTA staff. A text that holds a card number is refused (`holdsCardNumber`).
+- **Acceptance:**
+  - `case-submit-needs-confirmation`: marking submitted before the OTA's confirmation is refused and changes nothing.
+  - `case-outcome-needs-fresh-read`: with a failed supplier read the outcome is refused; with a successful one the booking has the status that the record step derives.
+  - `support-no-payment-operations`: the tag has no capture, refund or void, and a support caller is refused on every payment route.
+  - `case-order-unknown`: on an Amadeus source an order number whose order carries this booking's remark is recorded through `recordFoundOrder` and the booking is confirmed, with no release, no void and no Flight Create Orders; one whose order lacks the remark is refused and changes nothing. On a source that cannot record an order (the PKFare fake) the fake receives one release and no other write, the booking fails and the hold is voided once. "No order" fails the booking and voids the hold once on both sources.
+  - An outcome that returns money writes one fact `reimbursed`; a replayed step adds no state change and no `staff_actions` row. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm --filter @velexis/ota-backend test contract support cases && pnpm --filter @velexis/ota-backend test:int support supply`
+- **Note (2026-11-25):** The role sends the request to the supplier outside the product; the adapter's void and refund requests are milestone M8. X-054 is added (G1): the five operations carry `x-milestone: M7`. OBE-195 is added: the outcome writes the fact `reimbursed` with its writer. OBE-196 and OBE-198 are added: each step writes the actor `platform_staff` of OBE-196 and changes the case table of OBE-198.
+- **Note (2026-11-25):** OBE-135 is added as a producer (the lead's ruling S5): Find order by a record locator with the proof by the remark, behind which step 6 reads an Amadeus order by the role's number before the found decision's write.
+
+### OAD-028 · Show cases in the OTA admin: the list, a case panel on the booking page and the refund proposal
+- **Status:** todo
+- **Component:** ota-admin
+- **Milestone:** M7
+- **Depends on:** OBE-199, OAD-027, OAD-026, OBE-196, OBE-198
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 and §4.7 (plan key RC-23; A37 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 6, 8 and 22; item 18, proposed); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 4, proposed; item 8, proposed; item 9, proposed); ota/docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md; the blocks of OBE-196, OBE-198, OBE-199, OAD-026 and OAD-027; ota/admin/docs/routes.md (the booking page; the row of `/audit` under what is not built); ota/admin/src/app/(console)/bookings/[bookingId]/sections.tsx (`actorText`, the tab "Staff actions"); action-rules.ts; payment-dialogs.tsx
+- **Files:** `ota/admin/src/app/(console)/bookings/[bookingId]/case-panel.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/sections.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/page.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/actions.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/actions.test.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/action-rules.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/action-rules.test.ts`, `ota/admin/src/app/(console)/bookings/[bookingId]/payment-dialogs.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/cancel-dialog.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/dialogs.test.tsx`, `ota/admin/src/app/(console)/bookings/[bookingId]/page.test.tsx`, `ota/admin/src/app/(console)/open-cases/page.tsx`, `ota/admin/src/app/(console)/open-cases/page.test.tsx`, `ota/admin/docs/routes.md`, `ota/admin/README.md`
+- **Steps:**
+  1. Open-cases list of OAD-027: it also shows the cancel and the schedule-change cases, with kind, state and deadline, in neutral words. For a Velexis source it shows no supplier detail.
+  2. Case panel on the booking page: the kind, the state, the deadline, the quote and the outcome of the booking's case. "Confirm the quote" says that the request then goes out and cannot be taken back. For a schedule change, "Record the traveller's choice". Each action needs its permission and is offered only when the API allows it. The client component gets plain values, never the booking.
+  3. Refund: while a case is open no Refund dialog is offered, and the Payments tab says why. A refusal with the reason `case_open` shows the same text: a refund is possible once Velexis support has recorded the outcome.
+  4. Refund proposal: after the outcome the panel shows the proposal and opens the existing Refund dialog with the amount prefilled. Staff still decide and confirm.
+  5. Audit: the OTA admin has no tenant-wide audit list (routes.md). The plan's "audit list" is read as the tab "Staff actions" of the booking page (Proposed (lead)). There an action of the actor type `platform_staff` (OBE-196) shows "Velexis support" as its actor, with the action and the reason.
+  6. The request-only text of the cancel dialog replaces the interim text of OAD-026: the request opens a case.
+  7. Tests in the page's test files. Update `routes.md` and the README.
+- **Acceptance:**
+  - The list shows cancel and schedule-change cases with state and deadline. For a Velexis source no text of the list or the panel names a supplier.
+  - "Confirm the quote" is offered only in the state quoted and with the permission. A refusal stays in its dialog.
+  - With a case open no Refund button is rendered and the `case_open` text is shown. After the outcome the proposal opens the Refund dialog with its amount.
+  - An action of the actor type `platform_staff` renders as "Velexis support" in the tab "Staff actions".
+  - No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build`
+- **Note (2026-11-25):** OAD-026 and OBE-196 are added as dependencies: step 6 replaces the interim text of OAD-026, and step 5 renders the actor type `platform_staff` that OBE-196 adds to the contract. OBE-198 is added: the list and the panel show its cases.
+
+### OBE-201 · Run the final load and soak test with two sources and record the go or no-go numbers
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-167, X-065, X-064, OBE-129, OBE-155
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15 and §6, the exit of P10 (plan key G10-03); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 19); ota/docs/performance.md §1, §6 and §11; ota/backend/test/load/README.md ("Local and test only"); ota/backend/test/helpers/fake-stripe.ts; ota/backend/src/payments/stripe/stripe-client.factory.ts (the endpoint override refused in production); docs/mvp/architecture.md §3; the blocks of OBE-167, X-064, OBE-129 and OBE-155
+- **Files:** `ota/backend/test/load/booking-load.mjs`, `ota/backend/test/load/search-load.mjs`, `ota/backend/test/load/README.md`, `tools/perf/booking-load-memory.test.mjs`, `ota/docs/performance.md`
+- **Steps:**
+  1. `booking-load.mjs` gains the second source: Velexis's PKFare source on the fake `tools/pkfare-stub`, beside the Amadeus stub, behind the delaying proxy of OBE-167. A new option `--pkfare-share <percent>` sets the share of bookings that take a PKFare offer. The worker runs the follow-up jobs.
+  2. Payment: a PKFare source takes Stripe only (OBE-129, OBE-155), the run reaches no real Stripe (the load README), and the built API refuses a Stripe endpoint override with `APP_ENV=production`. So the PKFare bookings pay by card against a fake Stripe on the loopback that answers PaymentIntents as `fake-stripe.ts` does; the run starts it and points the API's Stripe client at it from its own preload. Amadeus bookings keep the airline card. No file under `src` changes; if the preload cannot do it without such a change, stop and ask the lead.
+  3. Load run: 30 minutes of mixed traffic on the built API and worker, with merged searches and PKFare bookings that reach `ticketed` by polling. Soak run: three hours with the same options, with the memory table, the slopes and the verdict of §11.
+  4. Record both runs in a new section of `performance.md` with a §9 row, as its §1 asks.
+  5. The section ends with one table of budgets: the search times with two sources against the deadline of OBE-167, the completion times, the memory of API and worker against the VM's budget, Redis's memory and the age of the follow-up queue. Each row has the budget, the measured value and a go or no-go verdict.
+  6. A missed budget becomes a task proposed to the lead, or a named risk for the go-live runbook (OBE-206). No budget is changed to fit a run.
+- **Acceptance:**
+  - Both runs finish on the built stack with two sources, and `performance.md` records them with machine and load.
+  - Every row of the budget table has a measured value and a verdict.
+  - Every PKFare booking of a run reaches a final status; the fake counts one PreciseBooking per checkout and one Ticketing request per order. No request of a run leaves the loopback.
+- **Verify:** `node --check ota/backend/test/load/booking-load.mjs && node --check ota/backend/test/load/search-load.mjs && node --test tools/perf/*.test.mjs && node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 180 --pkfare-share 50`
+- **Note (2026-11-25):** The plan names tools/perf; the load tests are in ota/backend/test/load. Today the run pays every booking by airline card, which a PKFare source refuses. Proposed (lead); confirm in the pull request (the lead's ruling S9): the PKFare bookings of a run pay through a loopback fake Stripe wired from the run's own preload, and the task stops if a change under `src/` would be needed. The option's name is this block's proposal. Added dependencies: X-064, whose fake serves the run's PKFare orders, and OBE-129 and OBE-155, which refuse the airline card for such a source and offer its checkout Stripe only.
+
+### OBE-202 · Update the PCI pack for supplier sources: scope, data flow and a provider row without card data
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-129, OBE-159, OBE-155, OBE-127, OBE-128
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15, the bullet "No card data goes to a supplier" (plan key G10-06); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 5 and 19); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 4, proposed); docs/mvp/adr/0027-pci-scope-and-vm-controls.md (item 1); ota/docs/pci/README.md §2 and §5; the blocks of OBE-127, OBE-128, OBE-129, OBE-155 and OBE-159
+- **Files:** `ota/docs/pci/README.md`, `ota/docs/pci/data-flow.md`, `ota/docs/pci/responsibility-matrix.md`
+- **Steps:**
+  1. `data-flow.md`: the airline-card completion is dispatched by the booking's source (OBE-129). The card reaches the Amadeus adapter only. A source without the airline-card method refuses the completion before a card leaves the controller. Update the diagram, the rows of §2 and the references of §3 to the files that the engine tasks moved; OBE-127 and OBE-128 re-placed the references whose code left its file (the recorder's redaction, the airline-card body), and this task reads them again (the lead's ruling S16).
+  2. `responsibility-matrix.md` §3: add a row for PKFare. It says what PKFare does for a Velexis-supplied booking, that it receives no card data, and that such a source takes Stripe only. Its evidence is the refusal test of OBE-129: an airline-card completion of a checkout whose source lacks the method answers `403 FEATURE_DISABLED` before any supplier call.
+  3. README §2: the scope text names the new outbound connection to PKFare and says that it carries no card data. **Human step:** the developer confirms the scope (12.5.2, after a significant change) and dates the row of the table. An agent never fills that row.
+  4. Check the whole pack (the lead's ruling S16): run `node tools/ci/check-pci-refs.mjs` once the engine tasks have merged. Move a reference whose line changed with `node tools/ci/fix-pci-refs.mjs`, and read each moved line.
+- **Acceptance:**
+  - `responsibility-matrix.md` §3 has a PKFare row that says "no card data" and names the test that proves it.
+  - `data-flow.md` shows the card going to the Amadeus adapter only, and says that any other source refuses the airline-card completion.
+  - `node tools/ci/check-pci-refs.mjs` ends with `0 problems`, and the scope row of README §2 carries no date written by an agent.
+- **Verify:** `node tools/ci/check-pci-refs.mjs && grep -q PKFare ota/docs/pci/responsibility-matrix.md && grep -q PKFare ota/docs/pci/data-flow.md`
+- **Note (2026-11-25):** Added dependencies: OBE-159, whose client is the outbound connection to PKFare that README §2 names, and OBE-155, which offers the checkout of such a source Stripe only; OBE-127 and OBE-128, which move the code that `data-flow.md` cites (the recorder's redaction; `airlineCardOrderBody` and `redactedAirlineCardOrderBody` into the Amadeus adapter's entry) and re-place those references, so step 1 builds on them (the lead's ruling S5).
+
+### OBE-203 · Run the security review of the OTA supply modules and fix or track its findings
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-065, OBE-194, X-068, OBE-177, OBE-182, OBE-183, OBE-184, OBE-188, OBE-195
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.15, §4.3 and §4.13 (plan key G10-07); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 1, 13 and 19); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (items 11 to 14, proposed); ota/docs/security-review.md §2, §4 and §8; docs/mvp/conventions.md §12; the blocks of OBE-182, OBE-195, OBE-196 and OBE-200
+- **Files:** `ota/docs/security-review.md`, `ota/backend/test/integration/m6/auth-matrix.int.test.ts`, `ota/backend/test/integration/m6/rate-limits.int.test.ts`, `ota/backend/test/contract/redaction-coverage.contract.test.ts`, `ota/backend/src/supply/`, `ota/backend/src/support/`
+- **Steps:**
+  1. Add a dated section for the supply work to `ota/docs/security-review.md`, by its §8. Scope: the engine, the hooks and rules, the adapters, the notification endpoint and the support interface.
+  2. Extend the tests of the M6 review to every operation added in M7: the auth matrix, the rate limits and the redaction coverage.
+  3. Engine, hooks and rules: a rule is data only; no rule crosses ownership; a hook on a money action changes nothing; a failing hook fails closed where it may refuse, and on a servicing action it is logged as `supply.hook_failed` and never reaches `StaffAlerts` (the lead's ruling S12).
+  4. Adapters: the host comes from the guard only; no redirect is followed; a signature is never stored or logged; stored bodies are allow-list copies; no write is sent twice.
+  5. Notification endpoint: unauthenticated input only triggers a read and is rate limited. The WAF keeps its blocking rules on the route, with only the exclusions by rule id of OBE-182, and the routing part of our reference carries no OTA name (the lead's ruling S15). Support interface: loopback only, a one-time handoff, a token bound to tenant, environment and booking, every call audited, no payment operation. Fact outbox: no traveller field leaves the tenant.
+  6. Also check `tenantTx` on every new query, that no platform table is written, the dependency audit, and the second-agent review of each money pull request of M7.
+  7. Findings: a high finding is fixed here with a test. Any other is fixed or gets a task proposed to the lead.
+- **Acceptance:**
+  - The review section covers the five module groups of the plan's row, each with what was checked and the result.
+  - The auth matrix, the rate-limit test and the redaction coverage include every operation added in M7, and pass.
+  - No high finding is open; `pnpm audit --prod` shows no high or critical issue. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test redaction-coverage supply support && pnpm --filter @velexis/ota-backend test:int m6 supply support && pnpm audit --prod`
+- **Note (2026-11-25):** The plan's row depends on "P7, P8 and P9 merged". X-065, OBE-194 and X-068 do not cover six OTA tasks of P7 and P9 whose code the review reads: OBE-177, OBE-182, OBE-183, OBE-184, OBE-188 and OBE-195. They are added.
+
+### OBE-204 · Export order number, airline reference and ticket numbers per booking for PKFare's certification
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** OBE-174, OBE-107, OBE-168
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §8, the row "PKFare certification file", and §6, precondition 2 (plan key G10-09); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 10 and 19); ota/backend/src/cli.ts (the command registry); ota/backend/src/secrets/rewrap.command.ts and ota/backend/test/integration/secrets/rewrap.int.test.ts (the model); ota/backend/README.md §5; the blocks of OBE-168 and OBE-174
+- **Files:** `ota/backend/src/supply/certification-export.command.ts`, `ota/backend/src/supply/certification-export.command.test.ts`, `ota/backend/test/integration/supply/certification-export.int.test.ts`, `ota/backend/src/cli.ts`, `ota/backend/src/cli.test.ts`, `ota/backend/README.md`, `ota/docs/suppliers/pkfare-certification.md`, `ota/docs/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  2. Add the command `supply:certification-export` to the registry of `cli.ts`. It takes a tenant and a list of booking references, serves the `test` environment only and refuses `live`.
+  3. For each booking it reads, through `tenantTx`, the supplier order row and the tickets, and prints one CSV line: our booking reference, the supplier's order number, the airline's reference and the ticket numbers. It writes nothing. The output holds no traveller name, contact, document number or price.
+  4. `pkfare-certification.md` is the record: how to run the export, one table row per workbook scenario, and PKFare's confirmation with its date. The table starts empty. **Human step:** the developer gets the scenarios of PKFare's workbook (an outside step of plan §8), books them in the sandbox and fills the table.
+  5. Tests: unit tests of the command; `cli.test.ts` lists it; `certification-export.int.test.ts` exports a ticketed booking with its supplier order row, refuses `live` and changes no row. Add the command to README §5, and the record to the document index.
+- **Acceptance:**
+  - The command prints, per booking, the order number, the airline reference and the ticket numbers, and nothing else of the booking.
+  - It reads through `tenantTx`, changes no row and refuses the `live` environment (`certification-export.int.test.ts`).
+  - `pkfare-certification.md` exists with an empty scenario table. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test cli certification-export && pnpm --filter @velexis/ota-backend test:int certification-export && test -f ota/docs/suppliers/pkfare-certification.md`
+- **Note (2026-11-25):** The command's name, the CSV form and the limit to `test` are this block's reading: the plan names the export and the record only, and the certification is booked in PKFare's sandbox. Added dependencies: OBE-107, whose facts file step 1 reads, and OBE-168, whose supplier order rows the command reads.
+
+### OBE-205 · Write the supplier pilot plan and record: one OTA, the test environment, scenarios, exit criteria
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-071, X-072, OBE-107
+- **Size:** S
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §6 (P10: the four steps of going live) and §8 (plan key G10-10); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 10 and 19); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 9, proposed); ota/docs/runbooks/airline-card-go-live.md (the form); the blocks of X-065, X-068, X-071 and X-072
+- **Files:** `ota/docs/runbooks/supplier-pilot.md`, `ota/docs/runbooks/README.md`
+- **Steps:**
+  1. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. It says which scenarios PKFare's sandbox can produce.
+  2. Plan: one OTA, named by the product owner, in its `test` environment on the VM, against PKFare's test host (X-071). The text names each switch that keeps PKFare off for every other OTA and for `live`, and who sets it.
+  3. Before the start: the egress line is installed, Velexis's PKFare test account is verified, and the alert drill of X-072 is done.
+  4. Scenarios, as far as the sandbox produces them: a merged search, a full-service booking to its tickets, a low-cost booking, a booking with extras, an order released at the capture deadline, an open case, a switch off and on, and one case worked through both admins.
+  5. Daily check list: the open cases, the alerts, the supplier call log, the ledger's daily check, the refused outbound connections and the pilot OTA's remarks.
+  6. Exit criteria, each with its evidence: every scenario has a result; no open case is unexplained; the pilot OTA's staff saw no supplier name; the daily checks were equal on the number of days that the product owner sets.
+  7. Record: empty tables for scenarios, daily checks, findings and sign-off. **Human step:** the developer and the product owner run the pilot and fill them.
+- **Acceptance:**
+  - `supplier-pilot.md` names one OTA, the test environment, the scenarios, the daily check list and the exit criteria, each criterion with its evidence.
+  - It names the switches that keep PKFare off for every other OTA and in `live`.
+  - The record tables are empty, the runbook index links the file, and it holds no key and no personal data.
+- **Verify:** `test -f ota/docs/runbooks/supplier-pilot.md && grep -q supplier-pilot.md ota/docs/runbooks/README.md`
+- **Note (2026-11-25):** OBE-107 is added as a dependency: step 1 reads its facts file.
+
+### OBE-206 · Write the supplier go-live runbook: eight preconditions with sign-off, co-test, caps and the switch
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M7
+- **Depends on:** X-069, X-070, OBE-201, X-071, X-072, OBE-202, OBE-203, PBE-101, OBE-204, OBE-205, X-074, OBE-107, PAD-018, PAD-019, OBE-177
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §6 (P10 and its eight preconditions) and §8 (plan key G10-11); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 2, 5, 10, 19, 22 and 23; open questions 3 and (44a)); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 13, proposed; item 17; question 1); ota/docs/runbooks/airline-card-go-live.md (the model: preconditions, turning on, turning off, sign-off); the blocks of X-073, X-074, PBE-082, PAD-018, PAD-019 and OBE-177
+- **Files:** `ota/docs/runbooks/supplier-go-live.md`, `ota/docs/runbooks/README.md`
+- **Steps:**
+  1. **Gate** (step 7, the caps): the meaning of 0 is the owner's answer to (44a); this part does not start before it. The other steps can start.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead.
+  3. Write `supplier-go-live.md` with the sections of the model, from the current state to the sign-off. PKFare is off in production today, and agents never run the runbook.
+  4. Preconditions: the eight of plan §6, in its order and words, one row each with a check and its evidence. The evidence comes from the tasks this one depends on: the proofs (X-069, X-070, OBE-201), the reviews and the PCI pack (OBE-203, PBE-101, OBE-202), the certification record (OBE-204), the pilot record (OBE-205), the alert drill (X-072) and the after-sales gate (X-074); precondition 7 names the line of X-073. The facts file, the roadmap and the owner give the rest.
+  5. Order: certification, the pilot, the co-test, live for one OTA (plan §6). Preconditions 1 to 7 come before the co-test, and X-073 merges only when 1 to 6 are signed.
+  6. Co-test and turning on: a funded wallet above the floor; the OTA's Stripe mode is one that the owner named for the first live weeks (ADR-0030 question 3); the global switch and the one OTA's switch, set in the platform admin with a reason; one real round-trip ticket; then expected debit, reported debit and PKFare's statement are compared.
+  7. Caps, each with the place where it is set: the wallet floor (the change form of the Velexis account, PAD-018); the OTA's daily limit (the tenant page, PAD-019, a column of `platform.tenants` that OBE-177 reads from the cached tenant row, the lead's ruling S8); and the cap K of open cases (a named constant that OBE-177 counts inside the tenant for the first release, Proposed (lead) in the lead's ruling S15; the count per source over every OTA is PBE-107, after the launch). The meaning of 0 is the owner's answer to (44a); this part does not start before it.
+  8. Turning off: one step in the platform admin, at once and without a review. The text says what stays served.
+- **Acceptance:**
+  - The runbook has the eight preconditions of plan §6 in order, each with a check and an evidence link, and an empty sign-off row for each.
+  - It says that preconditions 1 to 7 come before the co-test, and that X-073 waits for 1 to 6.
+  - Turning off is one step without a review. The runbook holds no key and no personal data.
+- **Verify:** `test -f ota/docs/runbooks/supplier-go-live.md && grep -c '^| P[1-8] ' ota/docs/runbooks/supplier-go-live.md && grep -q supplier-go-live.md ota/docs/runbooks/README.md`
+- **Note (2026-11-25):** Added dependencies: OBE-107, whose facts file step 2 reads, and PAD-018, PAD-019 and OBE-177, where the switches and caps of steps 6 and 7 are set and enforced.
+- **Note (2026-11-25):** Rests on ADR-0030, question (44a) (PADR-0020 item 17): the caps step names what 0 means only after the owner's answer; the lead asks the owner when the wave is proposed.
+- **Note (2026-11-25):** Rests on ADR-0030, question 3 (PADR-0020, question 1: the Stripe modes of (43c), still open): the lead recommends that the owner names the Stripe modes allowed with Velexis supply for the first live weeks. The wave proposal names it; the owner's go for the wave accepts it.
+
+## M8 — Own supplier accounts (after the launch)
+
+The release after the launch: an OTA's own supplier accounts beside Velexis supply, an OTA's own rules, and the work that the [multi-supplier plan](../../../docs/mvp/plans/multi-supplier-plan.md) called "Later". The owner decided on 2026-11-25 that the Amadeus tools come back with this release ([ADR-0030](../../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 21). No M8 task starts before the launch.
+
+| Phase | Tasks in this file |
+|---|---|
+| After the launch | OBE-207, OBE-208, OAD-029, OBE-209, OBE-210, OBE-211, OBE-212, OBE-213, OBE-214, OBE-215, OBE-216 |
+
+### OBE-207 · Add the tenant table `supply_rules` for an OTA's own rules and apply them to its own sources
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-189, PBE-102, PBE-103, PBE-089, OBE-190, OBE-191, OBE-192, OBE-193, OBE-194
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.3 (plan key E8-02); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 21; open question (44c)); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 5; item 13, proposed; question 1); docs/mvp/conventions.md §9; ota/backend/migrations/README.md; the blocks of OBE-189, PBE-089, OBE-190 to OBE-194
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/supply/rules/`, `ota/backend/test/integration/supply/tenant-rules.int.test.ts`, `ota/backend/test/integration/supply/rule-ownership.int.test.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. Write the table into `data-model.md` first, then one tenant migration with the next free tenant migration number (0006 is reserved by OBE-105): `supply_rules`, with the columns of the platform's rules table of PBE-089 (environment, hook, conditions, effect, priority, active window, version, state) and no list of OTAs. As in PBE-089, a rule keeps its sources by their own ids (PBE-078), never by a supply id, so a rotated id (PBE-080) changes nothing it matches. Update the tests that list the tenant migrations (the lead's ruling S3).
+  2. The repository works through `tenantTx` and validates with the rule model of OBE-189: data only, unknown fields refused. A change keeps the earlier version.
+  3. Ownership: every source of a rule is one of the OTA's own sources in the rule's environment. A rule that names a Velexis source or another OTA's source is refused.
+  4. The handlers of OBE-190 to OBE-193 also read the OTA's rules and apply an OTA rule to that OTA's own sources only, never to a Velexis source; Velexis's rules keep applying to Velexis sources only.
+  5. `rule-ownership.int.test.ts` gains the direction that OBE-194 named as pending: an OTA's own rule never touches a Velexis source or another OTA. `tenant-rules.int.test.ts` covers the repository, the ownership check and isolation between two tenants.
+- **Acceptance:**
+  - The migration applies to an empty and to a populated tenant schema, and one tenant never reads another's rules.
+  - `rule-ownership` passes in both directions. An OTA rule changes the search of its own source only.
+  - The rule tests of OBE-190 to OBE-193 pass unchanged. No test is deleted or weakened.
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test supply/rules migration-0002 && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed tenant-rules rule-ownership rules-selection rules-carriers rules-merge supply-net-leak`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. Step 4 is the lead's ruling: no other M8 task makes the handlers read these rules. Rests on OADR-0019, question 1 (markup in two places): as drafted in plan 4.3, an OTA's rule may adjust the price of its own offers; the lead made no other recommendation. The wave proposal names it; the owner's go for the wave accepts it. Rests on ADR-0030, question (44c): the hooks keep the names "pre-action", "post-action" and "post-merge" until the owner answers, and a rule stores its hook as data. The wave proposal names it; the owner's go for the wave accepts it. Added dependencies: PBE-089, whose columns the table takes, and OBE-190 to OBE-194, whose handlers and test this task extends.
+
+### OBE-208 · Add the console operations for an OTA's own supply rules and their SDK methods
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-207, X-054
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.3 (plan key ED8-03; A27 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 21); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 13, proposed; question 1); docs/mvp/adr/0006-contract-first-openapi.md; ota/backend/src/settings/markup-rules.controller.ts (the model); ota/sdk/test/contract/parity.test.js
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/`, `ota/backend/src/supply/rules/`, `ota/backend/test/integration/supply/console-supply-rules.int.test.ts`, `ota/sdk/src/namespaces/console.js`, `ota/sdk/src/console.js`, `ota/sdk/src/internal/operations.js`, `ota/sdk/test/contract/methods.generated.ts`, `ota/sdk/test/unit/namespaces-console.test.js`, `ota/sdk/docs/extensions.md`, `ota/sdk/CHANGELOG.md`
+- **Steps:**
+  1. Contract first, additive: four console operations for the OTA's own rules (list, create, change, switch off) with `x-milestone: M8`. Each answers `403 FEATURE_DISABLED` when the OTA has no own supplier account. Add the change-log row and run `pnpm contracts:generate`.
+  2. The handlers use the repository of OBE-207. They take and answer current supply ids, as the operations of PBE-089 do (the lead's ruling S14). A change keeps the earlier version, and each write stores a `staff_actions` row through `tenantTx`. A rule that names a Velexis source is refused.
+  3. Add the SDK methods to the console namespace, with their unit tests, and list them in `extensions.md` and the CHANGELOG.
+- **Acceptance:**
+  - Without an own supplier account all four operations answer `403 FEATURE_DISABLED`. With one they work, and a rule that names a Velexis source is refused.
+  - The route-parity test and the SDK's parity test pass with the new operations and methods. No test is deleted or weakened.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated ota/sdk/src/internal/operations.js ota/sdk/test/contract/methods.generated.ts && pnpm --filter @velexis/ota-backend test route-parity && pnpm --filter @velexis/ota-backend test:int console-supply-rules && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. The operation names are proposals (plan A27). The SDK files (ota-sdk) merge with the operations: the SDK's parity test fails while the document has an operation without its method. Rests on OADR-0019, question 1 (markup in two places), as OBE-207 does for the effect that adjusts a price. The wave proposal names it; the owner's go for the wave accepts it. Rests on ADR-0030, question (44c): the operations take the hook under the names "pre-action", "post-action" and "post-merge" until the owner answers. The wave proposal names it; the owner's go for the wave accepts it.
+
+### OAD-029 · Add the supply rules screen to the OTA admin, shown only with an own supplier account
+- **Status:** todo
+- **Component:** ota-admin
+- **Milestone:** M8
+- **Depends on:** OBE-208, OAD-024
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.3 (plan key ED8-04; A14 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 13 and 21; open question (44c)); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 13, proposed; question 1); ota/admin/src/app/(console)/settings/markups/ (the model of a rule screen); the blocks of OBE-208, PAD-021 and OAD-024
+- **Files:** `ota/admin/src/app/(console)/settings/supply-rules/`, `ota/admin/src/components/console-nav.tsx`, `ota/admin/docs/routes.md`, `tools/e2e/specs/ota-admin/a11y-headers.e2e.ts`
+- **Steps:**
+  1. Add the route under Settings: a list of the OTA's rules, a form (hook, conditions, one effect, priority, active window), the versions and the switch. It uses the SDK methods of OBE-208 on the server.
+  2. Only with an own supplier account: without one the menu has no entry and the route shows "not available", as the hidden tool screens of OAD-024 do.
+  3. The form offers the OTA's own sources only, and the fixed lists of conditions and effects. It sends no free text.
+  4. Unit tests in both states. Add the pages to `a11y-headers.e2e.ts` and to `routes.md`.
+- **Acceptance:**
+  - With an own supplier account an owner or admin lists, creates, changes and switches off a rule. Without one the route says "not available".
+  - No Velexis source and no Velexis rule is shown. axe finds no serious or critical violation on the new pages.
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/a11y-headers.e2e.ts`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. OAD-024 is added as a dependency: step 2 reuses its "not available" state and changes the same `console-nav.tsx`. Rests on ADR-0030, question (44c): the form names the hooks "pre-action", "post-action" and "post-merge" until the owner answers. The wave proposal names it; the owner's go for the wave accepts it. Rests on OADR-0019, question 1 (markup in two places), as OBE-207 does: the form offers the effect that adjusts a price, as drafted in plan 4.3. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-25):** G4: `tools/e2e/specs/ota-admin/a11y-headers.e2e.ts` is this app's journey; Verify runs it.
+
+### OBE-209 · Add the void request to the PKFare adapter: VoidRequest, `permitVoid`, `lastVoidTime`, polling
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-139, OBE-206, OBE-107, X-056, X-057, X-064, OBE-184
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12, §4.15 (the row "Fixtures") and §9.4 (plan key RC-28); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 7 and 21); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 13, proposed); the blocks of OBE-139, OBE-173 and OBE-184; the blocks of X-056 (the recorder), X-057 (the fixtures and their manifest) and X-064 (the fake's order side)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `tools/pkfare-stub/src/`, `tools/pkfare-stub/test/`, `tools/pkfare-stub/fixtures/`, `tools/pkfare-stub/fixtures/manifest.json`, `ota/docs/suppliers/pkfare-facts.md`, `ota/backend/test/integration/supply/pkfare-void-request.int.test.ts`
+- **Steps:**
+  1. **Gate:** recorded answers of VoidRequest are in the branch, for an order that allows a void and for one that does not; the fake invents no PKFare answer (X-058, X-064). First add the operation's allow-list to the recorder of X-056 (`tools/pkfare-stub/src/scrub.ts`, with its test). **Human step:** the developer then records VoidRequest in PKFare's sandbox with `pnpm pkfare:record`, as for X-057, and hands over the scrubbed files. No agent holds the credentials. If the sandbox cannot produce an answer, stop and tell the lead.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. The new fixtures join the manifest of X-057 with the ids of the facts that they show, and those facts become `observed`.
+  3. The adapter declares the capability "void by request" and implements the Service request operation of OBE-139 for a void. It reads `permitVoid` and `lastVoidTime` of the order; when they do not allow a void, it answers `refused` and sends nothing.
+  4. One VoidRequest goes out behind a write-ahead and answers `submitted`. The result comes by polling: `completed` or `refused`.
+  5. The fake answers VoidRequest from the new fixtures, with scripted answers. Nothing calls the operation yet: OBE-211 does.
+- **Acceptance:**
+  - The service request cases of the conformance suite pass for the PKFare adapter.
+  - The fake counts one VoidRequest per void, also after a lost answer or a restart, and none when a void is not allowed.
+  - `fixtures-scan` and `manifest` pass with the new fixtures, and each fact that they show is `observed`.
+- **Verify:** `pnpm --filter @velexis/pkfare-stub test && pnpm --filter @velexis/ota-backend test:int supply/conformance pkfare-void-request`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. The fixture set of X-057 holds no VoidRequest and the fake answers only from fixtures, so step 1 is a recording run (the lead's ruling G11). The fake, its fixtures and the facts file (`tools/pkfare-stub`, a foundation tool, and an OTA document) merge with the adapter (the lead's ruling G4); Verify runs the fake's tests. Added dependencies: OBE-107, whose facts file step 2 reads; X-056 and X-057, whose recorder and manifest the new fixtures use; X-064, whose order side the fake extends; OBE-184, whose conformance run takes the new cases.
+
+### OBE-210 · Add the refund quote and request to the PKFare adapter, with the result by polling
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-139, OBE-206, OBE-107, X-056, X-057, X-064, OBE-184
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12, §4.15 (the row "Fixtures") and §9.4 (plan key RC-29); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 7 and 21); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 9, proposed); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 13, proposed); the blocks of OBE-139, OBE-173 and OBE-184; the blocks of X-056 (the recorder), X-057 (the fixtures and their manifest) and X-064 (the fake's order side)
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `tools/pkfare-stub/src/`, `tools/pkfare-stub/test/`, `tools/pkfare-stub/fixtures/`, `tools/pkfare-stub/fixtures/manifest.json`, `ota/docs/suppliers/pkfare-facts.md`, `ota/backend/test/integration/supply/pkfare-refund-request.int.test.ts`
+- **Steps:**
+  1. **Gate:** recorded answers of RefundPricing, CheckRefundPricing and RefundRequest are in the branch; the fake invents no PKFare answer (X-058, X-064). First add the three operations' allow-lists to the recorder of X-056 (`tools/pkfare-stub/src/scrub.ts`, with its test). **Human step:** the developer then records them in PKFare's sandbox with `pnpm pkfare:record`, as for X-057, on a sandbox order that may be cancelled, and hands over the scrubbed files. No agent holds the credentials. If the sandbox cannot produce an answer, stop and tell the lead.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. The new fixtures join the manifest of X-057 with the ids of the facts that they show, and those facts become `observed`.
+  3. The adapter declares the capability "refund by request". A quote uses RefundPricing and CheckRefundPricing and answers `quoted` with the amounts, or `refused`. It never sends a RefundRequest.
+  4. The submit sends one RefundRequest behind a write-ahead and answers `submitted`. PKFare cancels the PNR on a successful RefundRequest (plan §4.12), so only the engine's submit sends it. The result comes by polling.
+  5. The fake answers the three operations from the new fixtures. Nothing calls the operation yet: OBE-211 does.
+- **Acceptance:**
+  - A quote leaves the fake's order unchanged and sends no RefundRequest.
+  - The fake counts one RefundRequest per submit, also after a lost answer. The service request cases of the conformance suite pass.
+  - `fixtures-scan` and `manifest` pass with the new fixtures, and each fact that they show is `observed`.
+- **Verify:** `pnpm --filter @velexis/pkfare-stub test && pnpm --filter @velexis/ota-backend test:int supply/conformance pkfare-refund-request`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. The fixture set of X-057 holds none of the three operations and the fake answers only from fixtures, so step 1 is a recording run (the lead's ruling G11). The fake, its fixtures and the facts file (`tools/pkfare-stub`, a foundation tool, and an OTA document) merge with the adapter (the lead's ruling G4); Verify runs the fake's tests. Added dependencies: OBE-107, whose facts file step 2 reads; X-056 and X-057, whose recorder and manifest the new fixtures use; X-064, whose order side the fake extends; OBE-184, whose conformance run takes the new cases.
+
+### OBE-211 · Drive the cases from the adapter: quote and submit call the engine, reimbursements reach the ledger
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-209, OBE-210, OBE-200, OBE-195, PBE-092
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.12 and §4.13 (plan key RC-30); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 7, 8 and 21); platform/docs/adr/0021-reconciliation-role-ledger-and-cases.md (item 8, proposed); the blocks of OBE-200, OBE-195 and PBE-092
+- **Files:** `ota/backend/src/support/`, `ota/backend/src/supply/`, `ota/backend/test/integration/support/case-adapter-driven.int.test.ts`, `platform/backend/src/reconciliation/`, `platform/backend/test/integration/reconciliation/ledger-consumer.int.test.ts`
+- **Steps:**
+  1. For a source whose adapter declares void or refund "by request", the support actions of OBE-200 call the engine: "quote" asks for a quote and stores it, and "submit" sends the request once. The code tests the capability, never a supplier's name.
+  2. The confirmation rule stays: no submit before the OTA confirmed the quote.
+  3. The outcome comes by polling. A reimbursement goes out as a fact of OBE-195, and the platform's consumer (PBE-092) updates the reimbursements of the ledger row.
+  4. A source without the capability keeps the hand-recorded path of OBE-200.
+- **Acceptance:**
+  - On the fake, a cancel case runs from the quote to the outcome through the adapter with one request to the supplier, and the ledger row shows the reimbursement.
+  - `case-submit-needs-confirmation` and `support-no-payment-operations` pass without a change. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int support supply && pnpm --filter @velexis/platform-backend test reconciliation && pnpm --filter @velexis/platform-backend test:int reconciliation`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. The platform backend's files (the ledger consumer and its test) merge with the OTA change, as the plan's row says. Added dependencies: OBE-200, OBE-195 and PBE-092, whose actions, facts and consumer this task drives.
+
+### OBE-212 · Close the one clear case automatically: the supplier shows the order cancelled and never paid
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-211, OBE-200, OBE-107, X-057
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.10, the paragraph on a lost order answer, and §4.12 (plan key RC-31; A33 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 7 and 21); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 9, proposed); the blocks of OBE-200 and OBE-211
+- **Files:** `ota/backend/src/supply/`, `ota/backend/src/support/`, `ota/backend/test/integration/supply/case-automatic-outcome.int.test.ts`
+- **Steps:**
+  1. **Gate:** real statuses must have been seen. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. It must hold, as `observed`, what PKFare reports for an order that was cancelled and never paid, and PKFare's written word that an unpaid order is never debited (A33).
+  2. When a fresh Read order shows exactly that status for a case's order, the case gets its outcome without the role. The booking moves as the outcome step of OBE-200 moves it, with an audit row that names the system as the actor.
+  3. Any other status, an unreadable answer or an order with a payment stays with the role.
+- **Acceptance:**
+  - On the fake, only the one observed status closes a case; every other status leaves it open.
+  - The automatic outcome follows a fresh read and writes one audit row. `case-outcome-needs-fresh-read` passes without a change.
+- **Verify:** `pnpm --filter @velexis/ota-backend test:int case-automatic-outcome support`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. Added dependencies: OBE-200, whose outcome step the automatic outcome reuses; OBE-107, whose facts file the gate reads; X-057, whose fixture shows the `observed` status.
+
+### OBE-213 · Add paid bags after ticketing: a second payment and a supplier order of kind `extras`
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-173, X-054, OBE-168, OBE-185, OBE-110
+- **Size:** L
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.11 (plan key BM7-16; A30 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 12 and 21); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 12, proposed; question 2); docs/mvp/conventions.md §9; ota/backend/openapi/velexis-ota-booking-api.openapi.yaml (`getBookingAncillaries`, `addBookingAncillaries` and `createBookingPayment`: `x-milestone: deferred`); ota/backend/src/common/http/pending-operations.ts; the blocks of OBE-110 (the interface and the fake adapter), OBE-168, OBE-173 and OBE-185
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/test/integration/migrations/`, `ota/backend/test/integration/provisioning/provision.int.test.ts`, `ota/backend/test/integration/dev/dev-seed.int.test.ts`, `ota/backend/src/bookings/`, `ota/backend/src/supply/interface/`, `ota/backend/src/supply/engine/`, `ota/backend/test/supply/fake-adapter.ts`, `ota/backend/test/integration/supply/extras-after-ticketing.int.test.ts`, `ota/docs/data-model.md`, `ota/frontend/src/pages/booking.js`, `ota/sdk/src/namespaces/bookings.js`, `ota/sdk/src/internal/operations.js`, `ota/sdk/test/contract/methods.generated.ts`, `ota/sdk/docs/extensions.md`, `ota/sdk/CHANGELOG.md`
+- **Steps:**
+  1. Contract first, additive: the operation that adds paid bags to a ticketed booking, with the neutral extras of OBE-185 and `x-milestone: M8`, chosen by the rule of the Note. A deferred operation that this task serves leaves `PENDING_OPERATIONS`. Add the change-log row and run `pnpm contracts:generate`.
+  2. Store: `booking_supplier_orders` (OBE-168) already has the order's kind and a unique key on the booking and the kind, so a booking holds at most one `extras` order beside its `flight` order. If the CHECK of the kind allows only `flight`, one tenant migration with the next free tenant migration number (0006 is reserved by OBE-105), phase `expand`, adds `extras`: added `NOT VALID`, then validated (conventions §9). Update the tests that list the tenant migrations (the lead's ruling S3).
+  3. Under the booking lock: a second payment, captured before the supplier is asked; the `extras` row behind a write-ahead; the result by the follow-up job of OBE-173. A failure after the capture opens a case and sends no second request.
+  4. The action is offered only for a source whose adapter declares extras after booking. The interface of OBE-110 gains the optional adapter call for that second order, which the engine calls only for such a source; the fake adapter implements it for the acceptance. The storefront's booking page gains the add-bags entry, and the SDK its method.
+- **Acceptance:**
+  - On the fake adapter, bags are added to a ticketed booking with one second payment and one `extras` order row; a second `flight` row is still refused.
+  - A failure after the capture opens a case and sends no second request. Without the capability the entry is hidden.
+- **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code packages/api-types/src/generated && pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test route-parity migration-0002 supply && pnpm --filter @velexis/ota-backend test:int migrations provisioning dev-seed extras-after-ticketing && pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-sdk test`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. Rests on OADR-0020, question 2: the lead recommends paid bags after ticketing later (A30), which this milestone is. The wave proposal names it; the owner's go for the wave accepts it. The storefront page (ota-frontend) and the SDK method (ota-sdk) merge with the operation, as the plan's row says. Added dependencies: OBE-168, whose table holds the `extras` order, OBE-185, whose neutral extras the operation takes, and OBE-110, whose fake adapter (`ota/backend/test/supply/fake-adapter.ts`) the acceptance runs on. Proposed (lead); confirm in the pull request (the lead's ruling S9): reuse the deferred `getBookingAncillaries` and `addBookingAncillaries` only if their schemas take the neutral extras of OBE-185 without a breaking change; otherwise add a new additive operation. The deferred `createBookingPayment` (a payment for extras bought after booking) follows the same rule for the second payment.
+
+### OBE-214 · Add PKFare's paid bags after ticketing to the adapter and the fake, with the 30-minute expiry
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-213, OBE-107, X-056, X-057, X-064
+- **Size:** M
+- **Read first:** docs/mvp/plans/multi-supplier-plan.md §4.11 and §4.15, the row "Fixtures" (plan key BM7-17; A30 of §3); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 12 and 21); ota/docs/adr/0020-suppliers-paid-from-a-balance.md (item 12, proposed; question 2); the blocks of OBE-213, X-056 (the recorder), X-057 (the fixtures and their manifest) and X-064
+- **Files:** `ota/backend/src/supply/adapters/pkfare/`, `tools/pkfare-stub/src/`, `tools/pkfare-stub/test/`, `tools/pkfare-stub/fixtures/`, `tools/pkfare-stub/fixtures/manifest.json`, `ota/docs/suppliers/pkfare-facts.md`, `ota/backend/test/integration/supply/pkfare-extras-after-ticketing.int.test.ts`
+- **Steps:**
+  1. **Gate:** recorded answers of the five operations of step 3 are in the branch; the fake invents no PKFare answer (X-058, X-064). First add their allow-lists to the recorder of X-056 (`tools/pkfare-stub/src/scrub.ts`, with its test). **Human step:** the developer then records them in PKFare's sandbox with `pnpm pkfare:record`, as for X-057, on a ticketed sandbox order, and hands over the scrubbed files. No agent holds the credentials. If the sandbox cannot produce an answer, stop and tell the lead.
+  2. Read ota/docs/suppliers/pkfare-facts.md (OBE-107); if a fact there differs from this block, stop and tell the lead. The new fixtures join the manifest of X-057 with the ids of the facts that they show, and those facts become `observed`.
+  3. The adapter declares extras after booking and serves the flow of OBE-213: AncillaryPricing by order for the catalogue, one AncillaryBooking behind a write-ahead, one AncillaryTicketing after the capture, AncillaryOrderDetail for the polling, and CancelAncillaryOrder for an order that is not paid.
+  4. The 30-minute expiry: an ancillary order that is not paid in time is cancelled, and the hold of the second payment is voided. The fake answers the five operations from the new fixtures and keeps the expiry on its clock.
+- **Acceptance:**
+  - On the fake, the flow of OBE-213 completes through the PKFare adapter with one AncillaryBooking and one AncillaryTicketing.
+  - An ancillary order past its 30 minutes is cancelled and nothing is captured.
+  - `fixtures-scan` and `manifest` pass with the new fixtures, and each fact that they show is `observed`.
+- **Verify:** `pnpm --filter @velexis/pkfare-stub test && pnpm --filter @velexis/ota-backend test:int pkfare-extras`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. Rests on OADR-0020, question 2, as OBE-213 does. The wave proposal names it; the owner's go for the wave accepts it. The fixture set of X-057 holds AncillaryPricing before booking only, and the fake answers only from fixtures, so step 1 is a recording run (the lead's ruling G11). The fake, its fixtures and the facts file (`tools/pkfare-stub`, a foundation tool, and an OTA document) merge with the adapter (the lead's ruling G4); Verify runs the fake's tests. Added dependencies: OBE-107, whose facts file step 2 reads; X-056 and X-057, whose recorder and manifest the new fixtures use; X-064, whose order side the fake extends.
+
+### OBE-215 · Make `supply_id` NOT NULL on offers and bookings; drop the `amadeus` default and `amadeus_order_id` fallback
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-113, OBE-125, OBE-147, OBE-148, X-075
+- **Size:** M
+- **Read first:** the lead's rulings S1, S2 and S10 of 2026-11-25 (this task); docs/mvp/conventions.md §9; ota/backend/migrations/README.md (the contract phase, the tests of a migration) and tenant/0005_add_cancellation_claim_tighten_calling_codes.sql (rows counted first, nothing rewritten); docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3 and 11; item 14, proposed; item 15, proposed); the blocks of OBE-113, OBE-125, OBE-147 (the job and its report), OBE-148 and X-075; ota/backend/src/bookings/supplier-order.ts (`hasSupplierOrder`, since OBE-125); ota/backend/test/integration/migrations/tenant-0002.int.test.ts (the upgrade from N-1); ota/docs/data-model.md §3
+- **Files:** `ota/backend/migrations/tenant/`, `ota/backend/migrations/README.md`, `packages/db/src/generated/tenant.ts`, `packages/db/src/migrate/baselines.test.ts`, `packages/db/test/integration/baselines.int.test.ts`, `packages/db/test/integration/tenants.int.test.ts`, `packages/testing/test/integration/test-database.int.test.ts`, `ota/backend/test/contract/migration-0002.contract.test.ts`, `ota/backend/src/bookings/supplier-order.ts`, `ota/backend/src/bookings/supplier-order.test.ts`, `ota/backend/test/builders/`, `ota/backend/test/integration/` (the migration tests, provisioning, the dev seed and the 31 files of step 4, setup only), `ota/backend/test/cross-backend/m5.xb.test.ts`, `ota/docs/data-model.md`
+- **Steps:**
+  1. **Human step first** (added in the review of 2026-11-25; the lead's rulings S2 and S10): the developer runs OBE-147's batched job in every deployed environment and records in the pull request, per environment and date, that its report lists no unmapped row: every offer, priced offer and booking has its `supply_id`, and the job has filled `supplier_order_ref` of the old Amadeus bookings. The task does not start without it.
+  2. One tenant migration, phase `contract`, with the next free tenant migration number. It counts first, as `0005` does, the rows of `flight_offers`, `priced_offers` and `bookings` without `supply_id`, and the bookings with `amadeus_order_id` but no `supplier_order_ref`; any such row stops it with an exception that names the table, the column and the count, and the schema's transaction rolls back. Then `supply_id` becomes NOT NULL on the three tables and their `supplier` loses its `DEFAULT 'amadeus'`; the comments follow. No CHECK lists the suppliers (the lead's ruling S1). `flight_search_sources.supply_id` stays nullable: this file does not touch it (the lead's ruling S16).
+  3. `hasSupplierOrder` reads `supplier_order_ref` alone, as a row test and as a query fragment; its fallback to `amadeus_order_id` goes. The Amadeus writers keep writing both columns.
+  4. Test setup, counted at commit 04127444: 31 integration files (account 2, amadeus 1, bookings 7, console 8, documents 2, identity 1, jobs 2, m4 1, m6 1, migrations 1, notifications 1, payments 2, provisioning 1, secrets 1) and `m5.xb.test.ts` insert bookings, flight offers or priced offers without `supplier` or `supply_id`. Each insert names both, through one helper of `ota/backend/test/builders/` that gives the supply id of the test tenant's source (X-075's builders); the upgrade test from N-1 writes its rows as the release before writes them. Setup lines only. The size stays M (the lead's ruling S16): if one helper cannot make each test's change a single line, stop and ask the lead, who resizes the task.
+  5. Run `pnpm db:codegen`, update the tests that list the tenant migrations (the lead's ruling S3), and test the file on an empty schema, a mapped populated one and one with an unmapped row, which stays at the previous version. Update data-model §3 (OBE-125's sentence on the fallback of `hasSupplierOrder` goes; on the three tables `supply_id` is NOT NULL and `supplier` has no default) and the migrations README.
+- **Acceptance:**
+  - The pull request holds the record of step 1 for every deployed environment.
+  - The migration applies to an empty and to a mapped schema; with one row without `supply_id`, or one booking with `amadeus_order_id` and no `supplier_order_ref`, it stops, names the table, the column and the count, and changes nothing.
+  - After it, an insert of an offer, a priced offer or a booking without `supplier` or `supply_id` fails, and `hasSupplierOrder` is false for a booking that holds only `amadeus_order_id`.
+  - `pnpm db:codegen` leaves no diff. The test files change setup lines only: no assertion changes, and no test is deleted or weakened.
+- **Verify:** `pnpm db:migrate && pnpm db:migrate:tenants && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/db test && pnpm --filter @velexis/db test:int && pnpm --filter @velexis/testing test:int && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int && pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:xb`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch.
+- **Note (2026-11-25):** Contract step (the lead's ruling S2, Proposed (lead)): conventions §9 puts a contract step at least one release after its expand step, and a dependency alone does not make a later release. This file ships in a release after the one that holds OBE-147's writers and job; the pull request names that release. The launch does not need it: every writer sets the values, and until then a row without `supply_id` answers without the member (OBE-148).
+- **Note (2026-11-25):** X-075 is listed as a producer: step 4 writes its rows with X-075's builders (the lead's ruling S5).
+
+### OBE-216 · Serve an OTA's own Amadeus connection beside Velexis's: resolver, cache and tools by supply source
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M8
+- **Depends on:** OBE-146, OBE-138, OBE-149, X-075, OBE-106, OBE-111
+- **Size:** L
+- **Read first:** the lead's ruling S10 of 2026-11-25 (this task); docs/mvp/plans/multi-supplier-plan.md §4.5 (the bullet "Own Amadeus beside Velexis") and §4.7; docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md (items 3, 6 and 21; item 18, proposed); platform/docs/adr/0020-supplier-registry-switches-and-suppliers-page.md (item 11, proposed); ota/docs/adr/0001-amadeus-client-design.md (points 3 and 4; the note of 2026-11-25 under point 1); ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md (item 8, proposed; item 10, proposed); ota/docs/flows/amadeus-connection-and-tokens.md §2; the blocks of OBE-146, OBE-138, OBE-149, X-075 and PBE-103; ota/backend/src/supply/adapters/amadeus/connection-resolver.ts (its header, since OBE-111); ota/backend/src/tenancy/platform-read.repository.ts (`amadeusConnection`, `monitoredQueues`); ota/backend/src/console/queue-poller.processor.ts and queues.service.ts (`listSnapshots`); ota/backend/test/cross-backend/m5.xb.test.ts
+- **Files:** `ota/backend/src/supply/adapters/amadeus/`, `ota/backend/src/supply/tools/`, `ota/backend/src/tenancy/platform-read.repository.ts`, `ota/backend/src/tenancy/platform-read.types.ts`, `ota/backend/src/tenancy/platform-read.repository.test.ts`, `ota/backend/src/tenancy/platform-cache.ts`, `ota/backend/src/tenancy/platform-cache.test.ts`, `ota/backend/src/console/queue-poller.processor.ts`, `ota/backend/src/console/queue-poller.processor.test.ts`, `ota/backend/src/console/queues.service.ts`, `ota/backend/src/console/queues.service.test.ts`, `ota/backend/test/builders/platform-rows.ts`, `ota/backend/test/integration/amadeus/resolver.int.test.ts`, `ota/backend/test/integration/console/amadeus-tools-own-account.int.test.ts`, `ota/backend/test/integration/console/queues.int.test.ts`, `ota/backend/test/cross-backend/m5.xb.test.ts`, `ota/docs/flows/amadeus-connection-and-tokens.md`, `ota/docs/architecture.md`, `ota/docs/adr/0001-amadeus-client-design.md`, `docs/mvp/architecture.md`
+- **Steps:**
+  1. Added in the review of 2026-11-25 (the lead's ruling S10): with PBE-103 an OTA may hold its own Amadeus connection and Velexis's in one environment, each with its supply source. Today `PlatformReadRepository.amadeusConnection` reads one row per tenant and environment, `ConnectionResolver` caches it under `conn:amadeus:<tenantId>:<env>`, and the tools class (OBE-138, OBE-149) and the poller assume that row.
+  2. Reads: one read gives every Amadeus connection of the tenant and environment with its supply source, and the key caches that list. Proposed (lead); confirm in the pull request: the key keeps its name, so the `connection` invalidation deletes it as today, and an entry of the one-row shape is a miss.
+  3. Resolver: `resolve` and `tenantOffices` take the supply source of the call (the offer's or booking's `supply_id` through the registry of OBE-146, an old id included) and serve with that source's connection. A call without a source, or a row without `supply_id`, is served by the tenant's single Amadeus connection as today; with two it answers `424` with the reason `no_supply_source`, logged with ids only (Proposed (lead); confirm in the pull request). The releasing-office rule (rule 3) stays for an OTA that switched before.
+  4. Tools: the tools class acts for the own source's connection alone. The raw reads, the PNR import, the queue reads and `listSnapshots` see its offices and the `releasing` ones of an earlier switch, never an office of the Velexis connection beside it, so no order or queue entry of a Velexis-supplied booking reaches the OTA (ADR-0030 item 18, proposed).
+  5. The worker's `queues.poll` polls each connection's monitored queues through that connection; the Velexis connection's queues are staff settings (PBE-105). `amadeus:ping` checks each of the tenant's connections.
+  6. Tests: unit tests of the read, the cache parser and the resolver; `resolver.int.test.ts` with two connections, a rotated id and a row without `supply_id`; the side-by-side case of `amadeus-tools-own-account.int.test.ts` (class 3 of the lead's ruling T) and the snapshot filter in `queues.int.test.ts`. `m5.xb.test.ts` gains one case: beta keeps Velexis's connection and gets an own test connection beside it, written as PBE-103 will write it; its search reaches both stubs, each booking syncs through its own stub, a raw read reaches the own stub only. The existing cases keep their assertions.
+  7. Docs: flow §2, OTA architecture §7, the key table of `docs/mvp/architecture.md` §4, and a dated note under OADR-0001 point 4.
+- **Acceptance:**
+  - With two active Amadeus connections in one environment, each offer, priced offer and booking is served by the connection of its supply source, an old supply id included.
+  - The tools reach the own connection alone: no raw read, PNR import, queue read or snapshot of an office of the Velexis connection is answered.
+  - The poller polls each connection with its own credential set. A row without `supply_id` is served as today while the tenant has one connection and refused with `424` when it has two; nothing is guessed.
+  - `m5.xb.test.ts` passes with the new case, and its existing cases keep their assertions. No test is deleted or weakened.
+- **Verify:** `pnpm --filter @velexis/ota-backend test supply/adapters supply/tools tenancy queue-poller queues && pnpm --filter @velexis/ota-backend test:int amadeus console tenancy && pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:xb`
+- **Note (2026-11-25):** After the launch (ADR-0030 item 21): not started before the launch. Found in the review of 2026-11-25: no block made the OTA backend serve two Amadeus connections while PBE-103 creates the second, so PBE-103 depends on this task (the lead's ruling S10); the fixture of step 6 becomes the verifier's there. If the pull request renames the key instead of step 2's proposal, `guidebook/content/pages/concepts.md` cites it (plan-lint cannot list `guidebook/`): name that update and run `node --test guidebook/tools/guidebook.test.mjs`. The lead's ruling S16 accepts the proposals of steps 2 and 3 as written.
+- **Note (2026-11-25):** X-075, OBE-106 and OBE-111 are listed as producers (the lead's ruling S5): step 6 extends X-075's OTA row builders (`ota/backend/test/builders/platform-rows.ts`) and OBE-106's `amadeus-tools-own-account.int.test.ts`, and step 3 changes the resolver in `supply/adapters/amadeus/`, the folder that OBE-111 made.
+
 ## Cross-group dependencies at a glance
 
 | OTA task | Needs | Why |
@@ -3307,6 +6092,34 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 | OAD-016 | PFE-017 | The portal's "Open console" hand-off |
 | OBE-083 | PBE-053, PBE-055, PBE-057, PBE-061 | Own Amadeus credentials, Connect, API-key connections, go-live |
 | OBE-103, SDK-019 | X-048 | The switch to Node.js 24 ([ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md); since 2026-11-16) |
+| OBE-106, OAD-024, OBE-149 … OBE-152, OBE-154, OBE-157, OBE-158, OBE-185, OBE-195, OBE-197, OBE-198 | X-055 | The test OTA with its own Amadeus connection: the tool suites move to it, and the tests of an own source use it (M7; since 2026-11-25) |
+| OBE-108 | X-056 | The recorder `pkfare:record`, run in PKFare's sandbox for the timings (M7) |
+| OBE-138, OBE-141 | X-060 | The lint boundary between business code and the supplier adapters, with its shrinking list (M7) |
+| OBE-146 | PBE-078, PBE-079, X-061 | The supplier registry tables, `supplier_accounts` with the OTA role's column grants, and the registry's invalidation events and Redis keys (M7) |
+| OBE-146, OBE-148, OBE-149, OBE-157, OBE-159, OBE-160, OBE-166, OBE-167, OBE-190 … OBE-194 | X-075 | Test and seed connections and Velexis Amadeus accounts written with their supply source, through shared helpers (M7) |
+| OBE-147, OBE-148 | PBE-080 | Supply ids, generated, rotated and resolved on the platform (M7) |
+| OBE-152 … OBE-154, OBE-185, OBE-186, OBE-188, SDK-021 | X-051 | The contract annex of ADR-0030: the hiding rules, the source values, the changed meanings and the version rule that these tasks follow (M7) |
+| OAD-025 | PFE-032 | The portal's Suppliers page, where the OTA admin's portal link now points (M7) |
+| OBE-159, OBE-161, OBE-164, OBE-174, OBE-180, OBE-182, OBE-184 | X-057 | The PKFare fixture set recorded in the sandbox, with its manifest (M7) |
+| OBE-159, OBE-165 | PBE-079 | `supplier_accounts` and `supplier_wallet_readings` with the OTA role's column grants (M7) |
+| OBE-160, OBE-166, OBE-167 | X-058 | The PKFare fake for search, pricing, fare rules and extras pricing (M7) |
+| OBE-169, OBE-183, OBE-184 | X-064 | The order side of the PKFare fake: order store, six operations, scripted failures (M7) |
+| OBE-176, OBE-182, OBE-196, OBE-197, OBE-199, OBE-200 | X-054 | `x-milestone: M7` for the operations they add to the OTA contract (M7) |
+| OBE-177 | PBE-079, PBE-082, X-066 | The supplier accounts with the OTA role's grants, the daily limit per OTA with the default 0 (what 0 means is question (44a)), and the sales stop after a balance refusal (M7) |
+| OBE-190, OBE-193 | PBE-088 | The OTA backend's read of Velexis's supply rules: grant, repository, cache key and invalidation (M7) |
+| OBE-194 | PBE-088, PBE-089 | The read of Velexis's supply rules, and the rules kept on the platform with their admin operations (M7) |
+| OBE-195 | X-067 | The supply report messages `supply.booking_fact` and `supply.case_opened` under one envelope (M7) |
+| OBE-201 | X-064, X-065 | The order side of the PKFare fake, and PKFare bookings proven end to end on it (M7) |
+| OBE-203 | X-065, X-068 | PKFare bookings and the cases of plan §4.12 proven end to end (M7) |
+| OBE-205 | X-071, X-072 | PKFare's test host allowed on the VM, and the supplier operations pack (M7) |
+| OBE-206 | X-069, X-070, X-071, X-072, X-074, PBE-101, PAD-018, PAD-019 | The proofs by value and of isolation, PKFare's test host, the operations pack, the after-sales gate and the platform's security review, and the platform admin pages where the switches and caps are set (M7) |
+| OBE-207 | PBE-089, PBE-102, PBE-103 | Velexis's supply rules on the platform, an OTA's own PKFare account, and its own Amadeus account beside Velexis supply (M8, after the launch) |
+| OBE-208, OBE-213 | X-054 | `x-milestone: M8` for the operations they add to the OTA contract (M8) |
+| OBE-209, OBE-210, OBE-214 | X-056, X-057, X-064 | The PKFare recorder, the fixture set and the fake's order side, which they extend with the recorded answers of their operations (M8) |
+| OBE-211 | PBE-092 | The platform's consumer of the supply messages and its ledger, which the reimbursements reach (M8) |
+| OBE-212 | X-057 | The fixture set with PKFare's status of an order that was cancelled and never paid (M8) |
+
+*Since 2026-11-25:* the rows marked M7 and M8 list every platform and foundation task that the **Depends on** of an OTA task of M7 or M8 names. M8's tasks start after the launch.
 
 | Platform task | Gated on OTA feature | Delivered by |
 |---|---|---|

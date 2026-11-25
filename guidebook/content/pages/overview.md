@@ -134,7 +134,7 @@ expected result and your notes as "Actual". Check [Known issues](#/issues) befor
 
 - The code at commit `f72d3f2a` is the reference for this guide. Where a document and the code disagree, the guide
   follows the code and says so.
-- The planning documents (milestones M0 to M6, task ids such as `PBE-`, `OBE-`, `PFE-`, `OAD-`, `OFE-`, `SDK-`, `X-`) are
+- The planning documents (milestones M0 to M8, task ids such as `PBE-`, `OBE-`, `PFE-`, `OAD-`, `OFE-`, `SDK-`, `X-`) are
   in `repo:docs/mvp/README.md`, `repo:platform/docs/plans` and `repo:ota/docs/plans`.
 - Some features are behind [[feature-switch|milestone switches]] that are **off by default locally**: Stripe Billing,
   the OTA's own Stripe, settlements, own Amadeus credentials, custom domains and the live switch. Turn one on in

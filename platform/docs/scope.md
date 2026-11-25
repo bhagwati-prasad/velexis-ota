@@ -1,6 +1,6 @@
 # Platform MVP scope
 
-This document fixes what the platform group (platform backend, portal, platform admin) delivers in the MVP: what is in, out and later for each component, who the users are and what each role may do, and every feature with acceptance-level criteria and its milestone. Plans and tests derive from it. It follows [`decisions.md`](../../docs/mvp/decisions.md) and the shared milestones M0–M6 in [`docs/mvp/README.md`](../../docs/mvp/README.md#1-shared-milestones).
+This document fixes what the platform group (platform backend, portal, platform admin) delivers in the MVP: what is in, out and later for each component, who the users are and what each role may do, and every feature with acceptance-level criteria and its milestone. Plans and tests derive from it. It follows [`decisions.md`](../../docs/mvp/decisions.md) and the shared milestones M0–M8 in [`docs/mvp/README.md`](../../docs/mvp/README.md#1-shared-milestones). M7 and M8, since 2026-11-25, hold the multi-supplier work of [ADR-0030](../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md), M7 before the launch and M8 after it; this document does not list their scope yet, and their task blocks in [`plans/agent-tasks.md`](plans/agent-tasks.md) do.
 
 Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventory.md), [`data-model.md`](data-model.md), [flows](README.md#flows), [platform ADRs](adr/README.md).
 
