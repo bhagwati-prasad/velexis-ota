@@ -76,13 +76,21 @@ info:
 
     **Supplier fidelity.** Amadeus payloads are exposed in `amadeus` fields typed with the `Amadeus*` schemas converted
     from the Amadeus specifications. In customer scope supplier prices are replaced by the OTA's selling prices; console
-    scope sees net prices and markups.
+    scope sees net prices and markups. An `amadeus` member of an answer can be missing where the schema does not
+    require it, and null where the schema allows null: do not rely on such a member being there.
 
 
     **Conventions.** JSON camelCase; money `{amount: decimal string, currency}`; IDs prefixed (`off_`, `prc_`, `chk_`,
     `bkg_` …); `Idempotency-Key` on state-changing POSTs; cursor pagination `{data, page:{nextCursor, limit}}`; errors
     `{error:{code, message, status, requestId, details, fieldErrors, supplier}}`; Amadeus warnings pass through in
     `warnings`.
+
+
+    **Enumerations.** A response enumeration may gain values in a later release: a new value is an additive change,
+    not a breaking one. A client treats a value it does not know as opaque: it keeps the value, shows a neutral text
+    and does not fail. Types generated from this document, the SDK's included, list only the values known when they
+    were generated, so give every `switch` over a response enumeration a default branch. Request enumerations stay
+    closed: a client sends only the values that this document lists.
 
 
     **Traceability.** `x-sdk-method` names the SDK method, `x-amadeus` the Amadeus operations called, `x-tenant-tables`
@@ -344,7 +352,8 @@ tags:
       Amadeus request/response structures (Amadeus* schemas) so that every Amadeus parameter and body field is reachable
       from the console. Calls run with the OTA's own Amadeus connection (environment of the API key); responses are net
       supplier data (no markup) and are never shown to customers. Each call writes supplier_requests (redacted) and
-      staff_actions.
+      staff_actions. An OTA without an Amadeus connection of its own can be refused any of these operations with
+      `403 FEATURE_DISABLED`, which each of them lists.
   - name: Console payments
     description: >-
       The OTA's payments (`payments`, `payment_events`, `refunds`) of the request's environment: the list and the
@@ -15255,6 +15264,8 @@ paths:
         flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup,
         tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders.
         Permission `amadeus:read`. Rate limit: the console's, 600 requests per minute per staff session or key.
+        An OTA without an Amadeus connection of its own can be refused with `403 FEATURE_DISABLED`, which every
+        console.amadeus.* operation lists.
 
 
         **Idempotent by design**: a search has no side effect at Amadeus; retries are safe without `Idempotency-Key`.
@@ -34290,7 +34301,8 @@ components:
           $ref: '#/components/schemas/AmadeusFlightOffer'
           description: >-
             The Amadeus flight offer (full view). Selling amounts in customer scope (publishable and plain secret-key
-            calls), verbatim in console scope (staff token, or secret key with `X-Velexis-Scope: console`).
+            calls), verbatim in console scope (staff token, or secret key with `X-Velexis-Scope: console`). Optional:
+            an offer can come without it, so do not rely on it.
         createdAt:
           type: string
           format: date-time
@@ -35927,7 +35939,8 @@ components:
           $ref: '#/components/schemas/PricedOfferAmadeus'
           description: >-
             Amadeus pricing request query, response data and included maps (selling amounts in customer scope, verbatim
-            in console scope: staff token, or secret key with `X-Velexis-Scope: console`).
+            in console scope: staff token, or secret key with `X-Velexis-Scope: console`). Optional: a priced offer can
+            come without it, so do not rely on it.
         createdAt:
           type: string
           format: date-time
@@ -38391,7 +38404,9 @@ components:
             - string
             - 'null'
           pattern: ^[A-Z0-9]{5,8}$
-          description: Main Amadeus record locator (PNR), null while pending.
+          description: >-
+            Main Amadeus record locator (PNR), null while pending. It can stay null after pending too, so do not rely
+            on a value.
         recordLocators:
           type: array
           items:
@@ -38498,7 +38513,7 @@ components:
             Wrapped Amadeus flight order (customer scope: selling amounts; `travelers[].documents[].number` and
             `travelers[].discountEligibility[].cardNumber` / `certificateNumber` masked to the last 4 characters;
             redacted form of payment; office/queue/commission data and staff remarks removed). Null while the booking is
-            pending without an Amadeus order.
+            pending without an Amadeus order. It can also be missing, or stay null after pending, so do not rely on it.
         metadata:
           type: object
           additionalProperties:

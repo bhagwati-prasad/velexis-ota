@@ -2357,7 +2357,7 @@ export interface paths {
          * Raw Flight Offers Search (POST)
          * @description **Raw pass-through** of Amadeus **Flight Offers Search** `POST /v2/shopping/flight-offers` (searchFlightOffers). `amadeus` is the complete getFlightOffersQuery — `currencyCode`, `originDestinations` (id, originLocationCode, destinationLocationCode, originRadius, destinationRadius, alternativeOriginsCodes, alternativeDestinationsCodes, departureDateTimeRange / arrivalDateTimeRange with date, time, dateWindow, timeWindow, includedConnectionPoints, excludedConnectionPoints), `travelers` (id, travelerType, associatedAdultId, fareOptions, loyaltyPrograms), `sources` (GDS, LTC, PYTON, EAC, NDC) and `searchCriteria` (excludeAllotments, addOneWayOffers, maxFlightOffers, maxPrice, allowAlternativeFareOptions, oneFlightOfferPerDay, additionalInformation, pricingOptions, flightFilters incl. carrier, cabin and connection restrictions) — forwarded verbatim with `X-HTTP-Method-Override: GET`.
          *
-         *     **Behaviour common to console.amadeus.*.** NestJS authenticates with the OTA's Amadeus connection of the key's environment (OAuth2 client credentials from platform.supplier_connections, token cached in Redis until 60 s before expiry) and adds nothing else to the Amadeus request; the verbatim Amadeus response is returned in `amadeus` with `call` (supplier request id, office, status, latency, correlation id). Amadeus 4xx → `422 SUPPLIER_REJECTED` (verbatim `errors[]` in `details.errors`), 5xx → `502 SUPPLIER_ERROR`, unavailable → `503`, timeout (30 s for shopping, 60 s for orders) → `504`. Every call writes `supplier_requests` (redacted; `bookingId` links it to a booking) and `staff_actions` (`amadeus.<operationId>`, `reason`). Prices are **net supplier prices** (no markup) and are never shown to customers. Raw results are not stored in flight_offers: to sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup, tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders. Permission `amadeus:read`. Rate limit: the console's, 600 requests per minute per staff session or key.
+         *     **Behaviour common to console.amadeus.*.** NestJS authenticates with the OTA's Amadeus connection of the key's environment (OAuth2 client credentials from platform.supplier_connections, token cached in Redis until 60 s before expiry) and adds nothing else to the Amadeus request; the verbatim Amadeus response is returned in `amadeus` with `call` (supplier request id, office, status, latency, correlation id). Amadeus 4xx → `422 SUPPLIER_REJECTED` (verbatim `errors[]` in `details.errors`), 5xx → `502 SUPPLIER_ERROR`, unavailable → `503`, timeout (30 s for shopping, 60 s for orders) → `504`. Every call writes `supplier_requests` (redacted; `bookingId` links it to a booking) and `staff_actions` (`amadeus.<operationId>`, `reason`). Prices are **net supplier prices** (no markup) and are never shown to customers. Raw results are not stored in flight_offers: to sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup, tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders. Permission `amadeus:read`. Rate limit: the console's, 600 requests per minute per staff session or key. An OTA without an Amadeus connection of its own can be refused with `403 FEATURE_DISABLED`, which every console.amadeus.* operation lists.
          *
          *     **Idempotent by design**: a search has no side effect at Amadeus; retries are safe without `Idempotency-Key`.
          *
@@ -8045,7 +8045,7 @@ export interface components {
             markup?: components["schemas"]["OfferMarkup"];
             /** @description flights.getOffer only; lists carry dictionaries once per page. */
             dictionaries?: components["schemas"]["Dictionaries"];
-            /** @description The Amadeus flight offer (full view). Selling amounts in customer scope (publishable and plain secret-key calls), verbatim in console scope (staff token, or secret key with `X-Velexis-Scope: console`). */
+            /** @description The Amadeus flight offer (full view). Selling amounts in customer scope (publishable and plain secret-key calls), verbatim in console scope (staff token, or secret key with `X-Velexis-Scope: console`). Optional: an offer can come without it, so do not rely on it. */
             amadeus?: components["schemas"]["AmadeusFlightOffer"];
             /**
              * Format: date-time
@@ -8789,7 +8789,7 @@ export interface components {
             dictionaries?: components["schemas"]["Dictionaries"];
             /** @description Amadeus warnings (e.g. price changed, fare rules unavailable). */
             warnings?: components["schemas"]["Warning"][];
-            /** @description Amadeus pricing request query, response data and included maps (selling amounts in customer scope, verbatim in console scope: staff token, or secret key with `X-Velexis-Scope: console`). */
+            /** @description Amadeus pricing request query, response data and included maps (selling amounts in customer scope, verbatim in console scope: staff token, or secret key with `X-Velexis-Scope: console`). Optional: a priced offer can come without it, so do not rely on it. */
             amadeus?: components["schemas"]["PricedOfferAmadeus"];
             /**
              * Format: date-time
@@ -9899,7 +9899,7 @@ export interface components {
             customerId: string | null;
             /** @description Guest booking (accessed with X-Booking-Token). */
             isGuest: boolean;
-            /** @description Main Amadeus record locator (PNR), null while pending. */
+            /** @description Main Amadeus record locator (PNR), null while pending. It can stay null after pending too, so do not rely on a value. */
             recordLocator: string | null;
             /** @description All associated records (Amadeus and airline locators — the airline one is used for online check-in). */
             recordLocators: components["schemas"]["BookingRecordLocator"][];
@@ -9948,7 +9948,7 @@ export interface components {
              * @enum {string}
              */
             syncStatus: "refreshed" | "fresh" | "stale" | "throttled" | "failed";
-            /** @description Wrapped Amadeus flight order (customer scope: selling amounts; `travelers[].documents[].number` and `travelers[].discountEligibility[].cardNumber` / `certificateNumber` masked to the last 4 characters; redacted form of payment; office/queue/commission data and staff remarks removed). Null while the booking is pending without an Amadeus order. */
+            /** @description Wrapped Amadeus flight order (customer scope: selling amounts; `travelers[].documents[].number` and `travelers[].discountEligibility[].cardNumber` / `certificateNumber` masked to the last 4 characters; redacted form of payment; office/queue/commission data and staff remarks removed). Null while the booking is pending without an Amadeus order. It can also be missing, or stay null after pending, so do not rely on it. */
             amadeus?: components["schemas"]["BookingAmadeus"] | null;
             /** @description OTA-defined key/values from the checkout. */
             metadata?: {

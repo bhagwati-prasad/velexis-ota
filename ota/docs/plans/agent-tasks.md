@@ -3316,8 +3316,8 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 | K. Reconciliation | OBE-195, OBE-196, OBE-197, OBE-198, OBE-199, OBE-200, OAD-028 |
 | L. Proof and launch readiness | OBE-201, OBE-202, OBE-203, OBE-204, OBE-205, OBE-206 |
 
-### SDK-020 · Add the SDK 1.0.0 documentation notes: open enumerations, optional `amadeus` members, refused tools
-- **Status:** todo
+### SDK-020 · Add the SDK 1.0.0 documentation notes: open enumerations, optional `amadeus` members, refused tools ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M7
 - **Depends on:** —

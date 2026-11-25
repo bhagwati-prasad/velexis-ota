@@ -2,7 +2,7 @@
 
 Velexis is a multi-tenant online travel agency (OTA) platform. A person signs up on the Velexis **portal**, subscribes to a plan and gets their own **OTA** (a tenant). The OTA sells flights from **Amadeus Enterprise** to its customers through a hosted **storefront**, or its own frontend built with the Velexis **JS SDK**, and runs its operations in the **OTA admin**. This repository holds the whole system: six components in two groups, the SDK, shared libraries, deployment files, and the planning and reference documents.
 
-**Status:** 325 of the plans' 540 tasks were done on 2026-11-25; milestone M7 is built before the launch and M8 after it, and `node tools/plan-lint/plan-lint.mjs` prints the live count ([`AGENTS.md`](AGENTS.md) §1). The application directories below are created by the M0 tasks.
+**Status:** 326 of the plans' 540 tasks were done on 2026-11-25; milestone M7 is built before the launch and M8 after it, and `node tools/plan-lint/plan-lint.mjs` prints the live count ([`AGENTS.md`](AGENTS.md) §1). The application directories below are created by the M0 tasks.
 
 ## Where to start
 
