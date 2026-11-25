@@ -11,13 +11,17 @@
 Today Amadeus Enterprise is the only supplier (a company that sells flight content through an API), and business code calls it directly. This plan describes a new milestone, M7.
 
 - An **ingestion engine** stands between the booking flow and the suppliers, as one module of the OTA backend. A search fans out to the **adapter** of every enabled supplier, and the engine merges the results. Other actions go to the supplier of the offer or booking.
-- Amadeus becomes the first adapter, with no change in behaviour. PKFare becomes the second: search, pricing, booking, ticketing paid from Velexis's prepaid wallet, extras (paid bags and seats) and low-cost content.
+- Amadeus becomes the first adapter, with no change in behaviour. PKFare becomes the second: search, pricing, booking, ticketing paid from Velexis's prepaid wallet, extras (paid bags and seats, booked with the order) and low-cost content, if PKFare's sandbox shows how to recognise it (9.1).
 - Three **hooks** (pre-action, post-action, post-merge) run rules stored as data: supplier selection, carrier rules, price rules, removal of duplicates, limits.
 - The platform gets a registry: an id with a history for every supply source (one supplier used through one account), switches globally and per tenant, one **Suppliers page** in the portal, Velexis's own supplier accounts and a wallet watch.
 - An OTA (a tenant travel agency) on Velexis supply is not shown which supplier served a booking. Amadeus tools open only with the OTA's own Amadeus account.
 - A reconciliation role for Velexis staff gets a ledger, cases, an audited view of Velexis-supplied bookings and an export for offline reconciliation.
 
+Decided by the owner (section 2): the engine with fan-out and merge, the adapters, the three hooks, the switches, the id with its history, the Suppliers page, the hidden supplier, the wallet, the reconciliation role, offline reconciliation, extras and low-cost content. Proposed and not decided: the engine's place (A1), rules as data (A2), routing by offer or booking (A3), the wallet watch (A6, A26), the ledger and the audited view (A7), the cases (A8), the milestone (A13), the removal of duplicates (proposal 3).
+
 Three numbers: **11 phases** (P0 to P10); **836 to 1,254 agent-hours** over 179 tasks (likely 961); **16 to 24 full review weeks** (likely 19) of the one reviewer, whose hours the launch also needs.
+
+**First visible result:** PKFare offers in the merged list on the local stack, after 51 tasks (234 agent-hours, 5 full review weeks). Nothing is sellable then: a PKFare booking needs P3, P4 and P7. PKFare goes live for one OTA only after the product launch and the gate of P10 (A43). Each M7 review week before the launch moves the launch by one week (section 7).
 
 ## 2. What the owner decided
 
@@ -26,7 +30,7 @@ All quotes are from the owner's two messages of 2026-11-24.
 | # | Decision in short | The owner's words | What it changes today |
 |---|---|---|---|
 | 1 | Adapters behind one interface | "I want to use suppliers as an adapter, so that the booking flow is agnostic to the supplier. I need a common interface, which works independently and an adapter which implements the interfaces." | No supplier interface exists. |
-| 2 | Several suppliers, PKFare first; switches globally and per tenant | "I would add multiple suppliers. PKFare is first in line. I want the ability to enable and disable the supplier globally from admin portal, as well as per tenant." | No run-time switch exists. |
+| 2 | Several suppliers, PKFare first; switches globally and per tenant | "I would add multiple suppliers. PKFare is first in line. I want the ability to enable and disable the supplier globally from admin portal, as well as per tenant." | No global switch exists. Per tenant, staff can only set the one Amadeus connection to `disabled`, which also stops existing orders (4.4). |
 | 3 | Velexis supply, own accounts, or both; Velexis's suppliers hidden behind an id | "Each OTA can have their own Amadeus or PKFare. OTA can use either the velexis as supplier OR their own (Amadeus or PKFare or something else, it could be all or some of them). OTAs/Tenants should not be aware of suppliers which Velexis uses internally to supply to the OTAs. Use an id (md5 or something else) to identify the supplier on OTA end." | One Amadeus connection per OTA and environment. Every OTA surface names Amadeus. |
 | 4 | One flow | "The flow for all of the suppliers should remain the same." | The booking orchestrator stays one class. |
 | 5 | OTAs pay through Velexis's PKFare wallet | "OTAs pay through the Velexis PKFare wallet. OTAs don't have to worry about it." | New: Velexis pays the supplier from a prepaid balance. |
@@ -73,9 +77,9 @@ None of these is decided. The lead made A1 to A15; the section writers added A16
 | A16 | A search fails only when no called source answers. | Engine |
 | A17 | Shares of the search limit are equal. A losing duplicate is not stored. | Engine |
 | A18 | "Like for like" compares flights, cabins, included bags, and change and refund conditions. | Engine |
-| A19 | A failing hook fails closed. No hook refuses ticketing or a release for a captured booking (this narrows A3). | Engine |
+| A19 | A failing hook fails closed where a hook may refuse: Search, Price and Create order. No hook, failing or not, stops Check payable, ticketing, a read, a release or a service request (this narrows A3). | Engine |
 | A20 | A priced offer pins its rule versions. Price rules adjust the fare, not extras. | Engine |
-| A21 | Velexis's rules reach the OTA backend by a read grant on a new platform table. Reading the wallet balance is not an engine action. | Engine |
+| A21 | Velexis's rules reach the OTA backend by a read grant on a new platform table. Reading the wallet balance is not an engine action of its own: the platform's wallet watch reads it for the floor (4.6), and the PKFare adapter reads it inside Check payable, in the OTA backend, once per completion. | Engine |
 | A22 | The global switch also stops the OTAs' own accounts of that supplier. | Platform |
 | A23 | A new Velexis source starts off for every OTA. An OTA selects "Velexis" as a whole. | Platform |
 | A24 | `amadeus_accounts` stays; a new table holds Velexis's account for every other supplier. | Platform |
@@ -87,13 +91,13 @@ None of these is decided. The lead made A1 to A15; the section writers added A16
 | A30 | Extras after booking stay off for a source that needs a second order. | OTA surface |
 | A31 | The Ticketing request goes out in the completion request; a job sends it only after a late capture. | Money |
 | A32 | N = 30 minutes (paid, no ticket), K = 3 open cases per source, H = 24 hours (tickets or a refund). Margins: 5 minutes before the capture deadline, 20 minutes for the second OrderPricing. | Money |
-| A33 | An unknown answer to an order request stays with staff, until PKFare confirms in writing that an unpaid order is never debited. | Money |
+| A33 | An unknown answer to an order request stays with staff (for a Velexis source the reconciliation role, 4.10), until PKFare confirms in writing that an unpaid order is never debited. | Money |
 | A34 | The watchdog and the held-back confirmation follow the capability "tickets later, paid from a supplier balance", not PKFare's name. | Money |
-| A35 | The contact e-mail in a Ticketing request is a Velexis mailbox. Limits for extras are checked when the selection is stored. | Money |
+| A35 | Every contact e-mail and phone number sent to PKFare for a Velexis source (PreciseBooking `email`, `mobile`, `buyerEmail` and `buyerMobile`; Ticketing `email` and `telNum`) is a Velexis mailbox or number. Limits for extras are checked when the selection is stored. | Money |
 | A36 | The platform admin's server calls the support interface, with a one-time handoff through Redis. | Reconciliation |
 | A37 | The role is separate from "platform admin". The OTA sees the role's actions in its audit list. | Reconciliation |
 | A38 | The ledger holds the OTA's cost price. Velexis-supplied Amadeus bookings get ledger rows and cases too. | Reconciliation |
-| A39 | Deadlines: 24 hours for a rejected ticket; one working day for a cancel request; for a schedule change the earlier of 48 hours and 24 hours before departure; three working days for a disclosure. | Reconciliation |
+| A39 | Deadlines: for a rejected ticket a deadline shorter than H (proposal: H less 4 hours), so that the OTA can refund inside H; one working day for a cancel request; for a schedule change the earlier of 48 hours and 24 hours before departure; three working days for a disclosure. | Reconciliation |
 | A40 | Five new records, not three. New operations carry `x-milestone: M6`. | Governance |
 | A41 | Task blocks are written phase by phase; those of P6 and P7 after the P1 facts. | Governance |
 | A42 | PKFare's reference pages are committed only if its terms allow it. | Governance |
@@ -115,9 +119,11 @@ The ingestion engine (owner) is the only door between the booking flow and the s
 | Find order, after a lost answer | `found`, `absent`, `incomplete` | none |
 | Check payable (new) | `payable`, `refused`, `higher_amount`, `balance_short`, `unknown` | observe only |
 | Request ticketing | `issued`, `accepted`, `rejected`, `balance_refused`, `unknown` | observe only |
-| Service request (void, refund, change) | `quoted`, `submitted`, `completed`, `refused` | pre may refuse |
+| Read order (sync, polling) | `order`, `not_found`, `unavailable` | observe only |
+| Cancel or release | `cancelled`, `order_not_found`, `refused`, `version_conflict`, `not_sent`, `unknown` | observe only |
+| Service request (void, refund, change) | `quoted`, `submitted`, `completed`, `refused` | observe only |
 
-- `not_sent` needs proof that the request never left the process. Any other unclear failure is `unknown`: the booking stays pending and nothing is voided. A booking fails only after Find order answers `absent`.
+- Each adapter classifies its own failures. The Amadeus adapter keeps today's `createFailureKind` unchanged (E3-05). Every other adapter answers `not_sent` only with proof that the request never left the process, and `unknown` otherwise: the booking stays pending and nothing is voided. After `unknown`, a booking fails only when Find order answers `absent`; where an adapter cannot search, staff decide (4.10).
 - Each source has its own deadline. A late or failing source never fails the search, unless no called source answers.
 - One currency per search and no conversion: a source that cannot quote it is skipped.
 - The merged list keeps today's limit of offers, with a share per source. Duplicates across sources are removed (proposal 3).
@@ -130,7 +136,7 @@ An **adapter** (owner) implements the common interface for one supplier. It buil
 |---|---|---|
 | Search limits | journeys, travellers, currencies | the source is skipped for that query |
 | Extras | bags, seats, after booking | the step is skipped for that booking (owner) |
-| Find order | by queue and remark, by our reference, none | a lost answer goes to staff |
+| Find order | by queue and remark, by our reference, none | a lost answer goes to staff (4.10) |
 | Ticketing | now or later; paid by the agency or from a supplier balance; ticket numbers may be absent | required |
 | Cancel, void, refund, change | by API, by request, none | today's "request only" path |
 
@@ -150,15 +156,16 @@ The three **hooks** (owner) are extension points in code. Staff manage **rules**
 
 - Built-in handlers run in a fixed order: supplier selection, carrier rules, price rules, removal of duplicates, limits.
 - A rule has conditions (supply ids, route, carriers, cabins, travel dates), one effect (exclude a source, block a carrier, adjust the price, prefer a source, set a share or a deadline), a priority, an active window and a version.
+- A rule is data only: conditions and one effect from the fixed lists above. No code, script, expression, template or URL from a tenant or from staff is stored or run (A2; `rules-are-data-only`).
 - Velexis staff manage rules for Velexis sources in the platform admin; an OTA manages rules for its own sources in the OTA admin (A14). No rule crosses ownership (`rule-ownership`).
 - A Velexis price rule turns the supplier's net price into the OTA's cost price (A15). The net price is never returned (`supply-net-leak`).
-- On money actions the hooks are read-only (`money-hooks-cannot-mutate`). A failing hook fails closed (`hook-failure-fails-closed`).
+- On money actions the hooks are read-only (`money-hooks-cannot-mutate`). A failing hook fails closed only where a hook may refuse: Search, Price and Create order (`hook-failure-fails-closed`). On Find order, Read order, Check payable, Request ticketing, Cancel or release and Service request no rule applies; a failing hook is logged and alerted, and the action goes on (A19; `hook-failure-never-blocks-servicing`).
 
 ### 4.4 Supply sources, ids and switches
 
 A **supply source** is one supplier used through one account: a Velexis account or the OTA's own (A4). New platform tables hold the suppliers, their global state, the supply sources and every id of a source. Today the platform allows one provider, `amadeus` (`platform/backend/migrations/platform/0001_baseline.sql:269`).
 
-**Id** (owner: an id with a history table; the format is A4). `sup_` plus 16 random characters. No id is reused. Only a platform admin rotates an id. An old id on an old booking still resolves.
+**Id** (owner: an id with a history table; the format is A4). `sup_` plus 16 random characters. No id is reused. Only a platform admin rotates an id. An old id on an old booking still resolves. This is an exception to the rule that ids are prefixed ULIDs (`docs/mvp/conventions.md` §1): a ULID shows when a source was created. ADR-0030 records the exception.
 
 **Switches** (owner: globally and per tenant; the levels are A12). A source sells only when every level allows it.
 
@@ -170,7 +177,7 @@ A **supply source** is one supplier used through one account: a Velexis account 
 | Stop | wallet watch or staff | one Velexis source, for every OTA |
 
 - "Off" leaves the source out of new searches and refuses its offers at pricing and checkout. Existing bookings keep being ticketed, polled, synced and serviced (`supply-switch.int.test.ts`).
-- Today's status `disabled` serves nothing, existing orders included (`ota/backend/src/amadeus/connection-resolver.ts:16-18`). It stays as the emergency stop.
+- Today's status `disabled` serves nothing, existing orders included (`ota/backend/src/amadeus/connection-resolver.ts:16-18`). It stays as the emergency stop. For a source that tickets later it also stops the Ticketing request and the polling of bookings that are already captured. The dialog warns of this, and the watchdog lists each such booking as an open case (4.10, rule 7). This is the one exception to rule 6 of 4.10.
 - A test environment never reaches a production supplier host (`supply-host-guard.test.ts`).
 
 ### 4.5 The Suppliers page and supplier accounts
@@ -183,7 +190,7 @@ The portal's Amadeus section becomes "Suppliers": one page with three sections (
 | Amadeus | the OTA's own connection, offices and settings | submit credentials; select or unselect |
 | PKFare | the OTA's own connection | submit partner id and key; select or unselect |
 
-- Own Amadeus beside Velexis needs two connection rows. Today own credentials replace the Velexis connection (PADR-0012 item 4). Side by side ships after P3.
+- Own Amadeus beside Velexis needs two connection rows. Today own credentials replace the Velexis connection (PADR-0012 item 4). Side by side ships in P4 (SP-20), once P3 routes Amadeus by supply source; it is in the first release.
 - PKFare credentials are checked by one read-only balance request. The host never comes from the form.
 - Onboarding and go-live ask for "at least one source that sells in that environment" (A11).
 
@@ -213,6 +220,7 @@ For a Velexis source, no OTA-facing answer, screen, e-mail or document shows the
 | OTA API, console scope | the verbatim offer and order with net prices (`ota/backend/src/shopping/offers.mapper.ts:1268-1274`); supplier errors; office ids; the supplier log | none of these; `netPrice` is the OTA's cost price (A15) |
 | OTA admin | 472 lines in 39 files: PNR lookup, Queues, Shopping, Supplier log | tools hidden; neutral labels |
 | Storefront, e-mails, PDFs | the main record locator is Amadeus's | the airline's reference, or none |
+| The supplier's own e-mails (new with PKFare) | — | every contact given to the supplier is Velexis's (A35); its e-mails reach Velexis, and staff pass them on in neutral words (no task yet: 9.6) |
 
 - **Amadeus-only tools** (owner). Without an own active Amadeus connection, 15 operations answer `403 FEATURE_DISABLED`: the 12 `console.amadeus.*` operations, two queue operations and PNR import. The OTA admin hides their menu items.
 - **`supplyId`** (owner: "some form of ID") is on offers, priced offers and bookings. Console scope adds a label: "Velexis", or the own supplier's name.
@@ -251,10 +259,11 @@ The flow is the same for every supplier (owner). The orchestrator stays one clas
 
 Capture comes before the ticketing request (proposal). Otherwise a failed capture leaves Velexis paying for the ticket.
 
-- Create order `unknown`: the booking stays pending; Find order or staff decide.
+- Create order `unknown`: the booking stays pending; Find order or staff decide (4.10).
 - Check payable refused, or the capture deadline passed: the order is released and the card hold is voided.
-- Ticketing `rejected`, `balance_refused` or `unknown`: an **open case** (captured money without a ticket), a staff alert, no re-send.
+- Ticketing `rejected`, `balance_refused` or `unknown` from a source that is paid from a supplier balance (A34): an **open case** (captured money without a ticket), a staff alert, no re-send. The Amadeus adapter keeps today's retries and its give-up alert.
 - Each background job query names the supplier it serves. The Amadeus retry and reconciliation jobs select Amadeus rows only; a database CHECK and fence tests hold this.
+- The OTA's ticketing policy applies by capability (BM3-03). For an OTA on `manual_review`, a source paid from a supplier balance is left out of the search and refused at completion, so that OTA gets no PKFare content; `issue_at_booking` runs as `issue_after_payment` for such a source. To confirm.
 
 ### 4.10 PKFare: search, pricing, booking and ticketing
 
@@ -265,19 +274,21 @@ Three terms: a **write-ahead** is a marker committed before a request leaves; th
 | Money rule | Test |
 |---|---|
 | 1. A fresh PrecisePricing before every order; a price reference is never used twice. | `pkfare-price-reference-once` |
-| 2. A write-ahead before PreciseBooking; never a second order request. A lost answer goes to staff. | `pkfare-one-order-per-checkout` |
+| 2. A write-ahead before PreciseBooking; never a second order request. A lost answer opens a case (below). | `pkfare-one-order-per-checkout` |
 | 3. No capture unless OrderPricing just succeeded, the hold is open, the amount is within the expected debit and the wallet covers it. | `pkfare-capture-needs-payable-order` |
 | 4. The capture deadline is the earlier of the hold end and OrderPricing plus 30 minutes, less a margin. Then: read the payment under the booking lock, CancelOrder, booking cancelled, void. | `pkfare-capture-deadline` |
-| 5. Ticketing follows a full capture. A write-ahead; never a second Ticketing request. The reported debit is checked against the expected one. | `pkfare-one-ticketing-request` |
-| 6. Polling never stops before a final status. Never `ticketed` without ticket numbers (exception: 4.11). Never a void after a Ticketing request. | `pkfare-poll-until-final` |
+| 5. Ticketing follows a full capture, an OrderDetail read that shows the order payable and, when the last OrderPricing is older than 20 minutes (A32), a second OrderPricing (unknown: whether PKFare allows a repeat; if not, the capture deadline of rule 4 becomes OrderPricing plus 20 minutes). A second OrderPricing that fails or shows a higher amount is an open case; nothing more is captured. A write-ahead; never a second Ticketing request. The reported debit is checked against the expected one. | `pkfare-one-ticketing-request` |
+| 6. Polling never stops before a final status (one exception: the emergency stop of 4.4). Never `ticketed` without ticket numbers (exception: 4.11). After a Ticketing write-ahead the card payment is never voided and CancelOrder is never sent. | `pkfare-poll-until-final` |
 | 7. A watchdog finds captured money without a ticket after N minutes: a daily alert and a row in the open-cases list. | `paid-unticketed-watchdog` |
 | 8. After one balance refusal, or K open cases, completions are refused before the capture. Only staff lift the stop. | `balance-refusal-stops-sales` |
 
 Rules 7 and 8 are the lead's safety set (proposal). The owner sets N, K and H (A32).
 
-- The traveller is told the truth: "We are finalising your booking" until ticketing is accepted; never "not charged" after a capture; for an open case, tickets or a full refund within H hours.
+A lost order answer opens a case of the kind "order unknown" for the reconciliation role, without a supplier order number. The role looks the order up in PKFare's portal and records its number or "no order". The engine then releases a found order; the booking fails and the card hold is voided. Deadline: H hours (proposal). Until PKFare confirms A33 in writing, nothing fails the booking without this step. On an OTA's own account, OTA staff decide at close-review (BM7-14).
+
+- The traveller is told the truth: "We are finalising your booking" until ticketing is accepted; never "not charged" after a capture; for an open case, tickets or a full refund within H hours. H counts from the capture (proposal). The role records the outcome before its own, shorter deadline (A39); OTA staff then refund.
 - PKFare's notifications are not authenticated: one only triggers a read. Polling is the source of truth.
-- Proof: a failure matrix stops the process between every two steps and replays the same idempotency key. No second write reaches PKFare.
+- Proof: a failure matrix stops the process between every two steps and replays the same idempotency key. No second write reaches PKFare. Its fourteen assertions follow the P7 tasks in Annex B.
 
 ### 4.11 Extras and low-cost content
 
@@ -305,7 +316,9 @@ OTA staff talk to the traveller and move the traveller's money. The reconciliati
 | Traveller cancels a ticketed booking | confirm the quote; refund after the outcome | records the quote, submits, records what is returned |
 | Supplier changes the schedule | record the traveller's choice | answers the supplier in time |
 | Non-refundable low-cost booking | a goodwill refund is its own money | records what comes back |
+| Order unknown: a lost order answer (4.10) | none; the booking stays pending | looks the order up in the supplier's portal; records its number or "no order" |
 
+- From the Ticketing write-ahead until a final status nobody can cancel the booking; the traveller and OTA staff see that it is being finalised. "Unticketed" in A8 means that no Ticketing request was sent.
 - For a ticketed booking the adapter's capability decides: "by API" keeps today's automatic path, "by request" opens a case. This differs from A8 as written (9.1).
 - The outcome returns through the support interface (4.13). The OTA's existing refund operation then pays the traveller.
 - Never a supplier refund request before the OTA confirmed the quote: PKFare cancels the PNR on a successful RefundRequest.
@@ -331,9 +344,9 @@ Three channels keep both ownership rules: the platform never touches tenant sche
 
 The search carries an id, and an OTA can ask for the supplier (owner). An OTA owner or admin asks on the Suppliers page. A platform admin answers from the id history with the supplier's legal name, country and privacy contact at that date. The answer is stored and audited.
 
-By the audit's reading of the law, a traveller who asks for the actual recipients may be entitled to them, so the procedure always ends with a name. Velexis needs an agreement with each supplier that covers traveller data, a dated list of recipients, and OTA terms that describe the procedure.
+By this plan's reading of the law, which counsel must confirm, a traveller who asks for the actual recipients may be entitled to them, so the procedure always ends with a name. Velexis needs an agreement with each supplier that covers traveller data, a dated list of recipients, and OTA terms that describe the procedure.
 
-One question goes to the owner's counsel; it is a step, not advice. Is Velexis a processor for each OTA, or a controller of its own? If a processor, "on request" may not be enough. No live Velexis-supplied sale starts before the answer.
+One question goes to the owner's counsel; it is a step, not advice. Is Velexis a processor for each OTA, or a controller of its own? If a processor, "on request" may not be enough. No supplier is hidden in live use before the answer. This gates the live step of P5 (Velexis-supplied Amadeus) and the gate of P10 (PKFare).
 
 ### 4.15 Tests, operations and security
 
@@ -365,9 +378,9 @@ One question goes to the owner's counsel; it is a step, not advice. Is Velexis a
 
 Nine of the records named for dated notes were not opened; the drafting tasks confirm each one. The lead's proposals enter OADR-0019, OADR-0020 and the SDK notes; merging those decides them.
 
-**Milestone M7.** ADR-0025 item 3 starts a milestone's tasks "after the previous milestone's go/no-go"; for M6 that is the launch. A dated revision must say how M7 runs beside M6 (A13). plan-lint accepts `M7` (`tools/plan-lint/plan-lint.mjs:115`). The contract generator knows M0 to M6 only (`packages/api-types/scripts/generate.mjs:123`), so a new operation carries `x-milestone: M6` (A40).
+**Milestone M7.** ADR-0025 item 3 starts a milestone's tasks "after the previous milestone's go/no-go"; for M6 that is the launch. A dated revision must say how M7 runs beside M6 (A13). plan-lint accepts `M7` (`tools/plan-lint/plan-lint.mjs:115`). Its `--remaining` mode (`tools/plan-lint/plan-lint.mjs:230-236`) and `AGENTS.md` ("Take the lowest milestone that still has open tasks") offer only the lowest open milestone, and six M6 tasks may stay open after the launch (the launch exceptions of ADR-0025 item 4). Beside M6, the lead hands out M7 tasks by id and the revision of ADR-0025 item 3 says so, or G0-03 changes the rule and the tool. The contract generator knows M0 to M6 only (`packages/api-types/scripts/generate.mjs:123`), so a new operation carries `x-milestone: M6` (A40).
 
-**Task ids.** Each task is counted by its first component. About ten tasks join a backend change with a screen; if P0 splits them, the counts rise. Tenant migrations start at 0007, platform migrations at 0005.
+**Task ids.** The counts per prefix are estimates by main component; only the total of 179 is exact, and P0 assigns the real ids. About ten tasks join a backend change with a screen; if P0 splits them, the counts rise. Tenant migrations start at 0007 (0006 is reserved by OBE-105), platform migrations at 0005.
 
 | Prefix | Estimated range | Tasks |
 |---|---|---|
@@ -387,19 +400,21 @@ Sizes: S is 2 agent-hours, M is 4, L is 8. "Dark" means that no traveller and no
 | Phase | Goal | Live for Amadeus, or dark | Depends on | Tasks | Agent-hours |
 |---|---|---|---|---|---|
 | P0 | Decisions, records, task blocks, re-baseline | no code | the owner's confirmation of section 3 | 15 | 70 |
-| P1 | PKFare facts, fixtures, the fake | dark: developer machine and CI | P0; sandbox credentials | 6 | 20 |
-| P2 | Engine and interface; Amadeus search and pricing as the first adapter | live, same behaviour | P0 | 16 | 68 |
+| P1 | PKFare facts, fixtures, the fake | dark: developer machine and CI | P0 without G0-09; sandbox credentials | 6 | 20 |
+| P2 | Engine and interface; Amadeus search and pricing as the first adapter | live, same behaviour | P0 without G0-09 | 16 | 68 |
 | P3 | Amadeus adapter for booking, ticketing, sync, cancellation, console actions | live, same behaviour | P2; the Amadeus proof of section 8 | 22 | 106 |
 | P4 | Platform: registry, ids, switches, Suppliers page, Velexis accounts, wallet watch | live for Amadeus; PKFare parts dark | P0; parts of P1, P2 and P3 | 21 | 102 |
-| P5 | The supplier hidden on every OTA surface | live | P3, P4 | 17 | 70 |
-| P6 | PKFare search and pricing, merged results | dark: local stack and tests | P1, P2, four tasks of P4 | 9 | 44 |
+| P5 | The supplier hidden on every OTA surface | live, after counsel's answer (4.14) | P3, P4 | 17 | 70 |
+| P6 | PKFare search and pricing, merged results | dark: local stack and tests | P1, P2, four tasks of P4, OS-08 | 9 | 44 |
 | P7 | PKFare booking, ticketing, extras, low-cost | dark: PKFare off outside tests | P3 to P6 | 25 | 134 |
 | P8 | Rules at the hooks and their two screens | live once a rule exists | P2, P4, P5 | 12 | 58 |
 | P9 | Reconciliation role, ledger, cases, export | live for Velexis-supplied Amadeus bookings | P3, P4, P5, P7 | 23 | 124 |
 | P10 | Proof, certification, pilot, live gate | PKFare live for one OTA, after the gate | P7, P8, P9; section 8 | 13 | 40 |
 | **Total** | | | | **179** | **836** |
 
-**P0.** Delivers the changed `decisions.md`, five records, the ADR-0025 revision, task blocks with real ids and the roadmap re-baseline. Exit: the owner has merged `decisions.md` and approved the records; plan-lint reports `ERRORS: 0`; the SDK publish is not delayed.
+The deliverables, exits, going-live steps and preconditions below are proposals. Open cases, stops and limits in P7 are the lead's safety set (proposal 2, A6).
+
+**P0.** Delivers the changed `decisions.md`, five records, the ADR-0025 revision, task blocks with real ids and the roadmap re-baseline. G0-09 waits for the P1 facts (A41); only P6 and P7 wait for it. Exit: the owner has merged `decisions.md` and approved the records; plan-lint reports `ERRORS: 0`; the SDK publish is not delayed.
 
 **P1.** Delivers a facts file (each PKFare statement marked stated, observed or assumed), fixtures and the fake. Exit: a test fails on an unscrubbed fixture value; A6, A8 and A9 are checked against observed facts; every "assumed" fact is a question to PKFare.
 
@@ -407,17 +422,17 @@ Sizes: S is 2 agent-hours, M is 4, L is 8. "Dark" means that no traveller and no
 
 **P3.** Delivers Amadeus booking through the engine, Check payable and the fence for background jobs. Exit: the golden comparison is equal; the 9 booking integration files are unchanged and green; no file outside the adapter imports the Amadeus client.
 
-**P4.** Delivers the registry, ids, switches, Velexis accounts, the wallet watch and the Suppliers page. Exit: the switch and host-guard tests pass; an end-to-end run switches a source off and on at each level; a Velexis-only OTA finds no supplier name in the portal.
+**P4.** Delivers the registry, ids, switches, Velexis accounts, the wallet watch and the Suppliers page. Exit: the switch and host-guard tests pass; an end-to-end run switches a source off and on at each level; for a Velexis-only OTA the Velexis section, the portal answers about Velexis supply and the rendered platform e-mails show no supplier name, office id or host; the own-account sections "Amadeus" and "PKFare" stay on the page (owner).
 
-**P5.** Delivers `supplyId`, the own-account guard and neutral answers, screens, e-mails and documents. Exit: both leak walks and `amadeus-tools-own-account` pass; an end-to-end crawl finds no supplier word in the OTA admin, e-mails and PDFs of a Velexis-only OTA.
+**P5.** Delivers `supplyId`, the own-account guard and neutral answers, screens, e-mails and documents. Exit: both leak walks and `amadeus-tools-own-account` pass; an end-to-end crawl finds no supplier word in the OTA admin, e-mails and PDFs of a Velexis-only OTA. The live step, hiding the supplier in production, waits until counsel's answer is recorded (4.14).
 
 **P6.** Delivers the first visible result: PKFare offers in the merged list, on the local stack. Exit: the conformance suite passes for the PKFare adapter; a PKFare failure never fails the search; a source that is off gets zero calls.
 
-**P7.** Delivers PKFare orders, ticketing, open cases, limits, extras and low-cost. Exit: the failure matrix passes with the fourteen assertions of the money review; the tests of the eight money rules pass; end-to-end runs on the fake cover full-service, low-cost, extras and an open case.
+**P7.** Delivers PKFare orders, ticketing, open cases, limits, extras and low-cost. Exit: the failure matrix passes with its fourteen assertions (Annex B, after the P7 tasks); the tests of the eight money rules pass; end-to-end runs on the fake cover full-service, low-cost, extras and an open case.
 
 **P8.** Delivers rule tables on both sides, the handlers and the two screens. Exit: `rule-ownership` and `supply-net-leak` pass; both hook tests pass with stored rules; the cost of rules is measured in the search load test.
 
-**P9.** Delivers the role, the ledger, the support interface, cases, export and disclosure. Exit: the case and redaction tests pass; an admin without the role is refused; an end-to-end run takes the four cases through both admins and finds no supplier word on the OTA side.
+**P9.** Delivers the role, the ledger, the support interface, cases, export and disclosure. Exit: the case and redaction tests pass; an admin without the role is refused; an end-to-end run takes the cases of 4.12 through both admins and finds no supplier word on the OTA side.
 
 **P10.** Delivers the by-value secrets test, the isolation test, the final load run, two security reviews and the go-live runbook. Going live has four steps: sandbox certification; a pilot with one OTA in the test environment; the live co-test that PKFare requires; live for one OTA. Exit: eight preconditions, the first seven before the co-test.
 
@@ -434,6 +449,8 @@ Sizes: S is 2 agent-hours, M is 4, L is 8. "Dark" means that no traveller and no
 
 The plan has 24 S, 113 M and 42 L tasks: 48 + 452 + 336 = 836 agent-hours. Review time uses the figures of [`roadmap.md`](roadmap.md) §1.1: 0.469 review hours per agent-hour, 30 review hours a week, a 20 % buffer.
 
+The factor 0.469 is derived from the roadmap, not printed there: 0.75 developer-hours for an S task of 2 agent-hours, plus 25 % (0.9375 / 2). It was never checked against real review time: the roadmap records no actual milestone exit yet (`roadmap.md:618-626`). The likely case adds 15 %, the growth of the MVP plan since its baseline (1,406 to 1,618 agent-hours, [`README.md`](README.md) §5). The high case adds 50 %, an allowance of this plan, not a measurement. The spread covers agent-hours only, not the review factor.
+
 | Case | Agent-hours | Review hours | Weeks at 30 h | With 20 % buffer | Full review weeks |
 |---|---|---|---|---|---|
 | Low: the plan sum | 836 | 392 | 13.1 | 15.7 | 16 |
@@ -442,7 +459,7 @@ The plan has 24 S, 113 M and 42 L tasks: 48 + 452 + 336 = 836 agent-hours. Revie
 
 **The launch needs the same hours.** One person reviews, and M7 adds no reviewer. M7 after the launch does not move the launch. Each M7 review week before the launch moves it by one week. A fixed weekly share is the third way. The revision of ADR-0025 item 3 must name the choice.
 
-Fixed dates (`roadmap.md:570`): the first merge into `main` at about 4 December 2026; SDK 1.0.0 published by about 18 December, hard limit 31 December. The roadmap's example launch date is 11 June 2027. Proposed order: outside steps and P0 drafts now; the review of P0 after the SDK publish; code from January 2027.
+Fixed dates (`roadmap.md:570`): the first merge into `main` at about 4 December 2026; SDK 1.0.0 published by about 18 December, hard limit 31 December. The roadmap's example launch date is 11 June 2027. Proposed order (a proposal of this plan, not a roadmap date): outside steps and P0 drafts now; the review of P0 after the SDK publish and the year-end break (21 December 2026 to 2 January 2027, `roadmap.md` §1.2); code in January 2027 at the earliest, and only if the revision of ADR-0025 item 3 lets M7 run before the launch.
 
 **Not in the figures:**
 
@@ -453,14 +470,14 @@ Fixed dates (`roadmap.md:570`): the first merge into `main` at about 4 December 
 
 The figures include five tasks (28 agent-hours) that no section listed and the editor added: supply ids on old rows (ED4-01) and the management side of the rules (ED8-01 to ED8-04). Without them the low figure is 808.
 
-**First visible result.** PKFare offers appear in the merged list after P0, P1, P2, four tasks of P4 (SP-01, SP-02, SP-03, SP-07) and P6: 50 tasks, 226 agent-hours, 106 review hours, 5 full review weeks. Nothing is sellable then: a PKFare booking needs P3, P4 and P7.
+**First visible result.** PKFare offers appear in the merged list after P0, P1, P2, four tasks of P4 (SP-01, SP-02, SP-03, SP-07), P6 and OS-08: 51 tasks, 234 agent-hours, 110 review hours, 5 full review weeks. Nothing is sellable then: a PKFare booking needs P3, P4 and P7.
 
 **What could be cut or moved later:**
 
 | What | Tasks | Agent-hours | Effect |
 |---|---|---|---|
 | Rules for OTAs and their screen | E8-02, ED8-03, ED8-04 | 12 | the owner asked for them and decides |
-| Rules for shares, deadlines, preferred source | E8-07 | 4 | they stay configuration |
+| Rules for shares, deadlines, preferred source | E8-07 | 4 | they stay configuration; no stored rule then runs at post-merge, a hook the owner asked to manage (row 13); the owner decides |
 | Notification endpoint | BM7-20 | 4 | polling only; enough for the pilot |
 | Statement upload and match | RC-18 | 4 | it waits for PKFare's statement format |
 | Disclosure screens | RC-24, RC-25 | 6 | the procedure runs by e-mail, from the id history |
@@ -477,11 +494,11 @@ No agent can do these steps.
 | PKFare's answers to the questions of section 9.2 | P1; the task blocks of P6 and P7 | not asked |
 | PKFare certification file: the scenarios of PKFare's workbook, booked in the sandbox | P10 | the workbook is not among the saved pages |
 | Live co-test with PKFare: a funded wallet, a real round-trip ticket, the financial statement confirmed | P10 | after the launch (A43) |
-| Counsel on Velexis's role (processor or controller), the notice text and the OTA terms | any live Velexis-supplied sale | the pack is a P0 task |
+| Counsel on Velexis's role (processor or controller), the notice text and the OTA terms | P5 going live; P10 | the pack is a P0 task |
 | Amadeus Enterprise test credentials for a proof on the real test environment; or the owner accepts a proof on the stub only | P3 | "not requested" (`roadmap.md:632`) |
 | The offline reconciliation routine: period, invoice, written terms with each OTA, who signs the daily check | P10 | to define |
 | Staffing the reconciliation role: a named holder, a stand-in, cover hours | P10 | to name |
-| The owner's numbers: wallet floor, daily limits, N, K, H, case deadlines | P4, P7, P9 | proposals in A26, A32, A39 |
+| The owner's numbers: wallet floor, daily limits, N, K, H, case deadlines (for a rejected ticket: shorter than H) | P4, P7, P9 | proposals in A26, A32, A39 |
 
 ## 9. Risks and open questions
 
@@ -494,7 +511,7 @@ No agent can do these steps.
 | A5, A11: nothing is renamed | The platform API's `amadeus_test` and `amadeus_live` name the supplier to a Velexis-only OTA. | One breaking rename, recorded in PADR-0020. The clients are the portal and the platform admin. |
 | A6: the daily limit is off by default | In the Connect and own-keys payment modes the OTA collects the traveller's money. Velexis pays the ticket and holds nothing. | P10 sets a limit for the first live OTA. The owner decides the default. |
 | A8: every ticketed Velexis-supplied booking cancels by request | For Amadeus this removes today's automatic same-day void (`ota/backend/src/bookings/cancellation-mode.ts:16`). | The adapter's capability decides (4.12). |
-| A9: low-cost in the first PKFare release | PKFare's saved reference has no field for the content type and does not say whether low-cost orders get ticket numbers. | The low-cost task waits for P1. Without a reliable mark, the owner decides again. |
+| The owner's decision 12 (and A9): low-cost content in the first release | PKFare's saved reference has no field for the content type and does not say whether low-cost orders get ticket numbers. | Low-cost stays in the first release (BM6-04, BM6-07, BM7-18, OS-20), and its task blocks wait for the P1 facts. If the sandbox shows no reliable mark, the plan cannot keep decision 12; the owner then decides between a first release without low-cost content and a later release. |
 | A13: M7 runs beside M6 | One person reviews. M7 adds no review hours. | The ADR-0025 revision says before, after, or which weekly share. |
 
 ### 9.2 Facts that PKFare must still confirm
@@ -507,40 +524,44 @@ PKFare's saved reference states none of these. Each is a question for PKFare.
 | Low-cost | which field marks low-cost content; whether such orders get ticket numbers; when the airline's reference arrives |
 | Currency | which currencies the account quotes: the Shopping request has no currency field, and conversion is in no phase |
 | Offers | whether bags and conditions compare with Amadeus's |
-| Wallet and key | whether a sub-buyer has its own credentials; how often the balance may be read; how a key is rotated |
+| Wallet and key | whether a sub-buyer has its own credentials; how often the balance may be read (the wallet watch and one read per checkout); how a key is rotated |
 | Hosts and speed | the production host; response times per operation |
-| After-sales | how a schedule change reaches us; the format of the statement file |
+| After-sales | how a schedule change reaches us; whether the airline still reaches the traveller when the order holds a Velexis contact (A35); the format of the statement file |
 | Going live | the scenarios of the certification workbook; who travels on the co-test ticket |
 
 ### 9.3 The limits of hiding the supplier
 
-- The published contract keeps `console.amadeus`, 134 Amadeus schemas and the member names `amadeus`, `amadeusOrderId` and `amadeusOperationId`. A reader learns that Velexis can use Amadeus. The plan hides only which supplier served an offer or a booking.
+- The published contract keeps `console.amadeus`, 140 schemas whose name starts with `Amadeus` (170 with `Amadeus` in the name) and the member names `amadeus`, `amadeusOrderId` and `amadeusOperationId`. A reader learns that Velexis can use Amadeus. The plan hides only which supplier served an offer or a booking.
 - `supplyId` reaches every browser. Anyone can count Velexis's sources and group offers by source.
 - For some airlines Amadeus returns no airline locator. With Amadeus's own locator hidden, the traveller has no reference until a ticket number exists. The owner decides whether to show it.
-- OTAs lose the queue screens in P5; Velexis staff get their tools in P9. Nothing is live in between.
+- In P5 an OTA without its own Amadeus account loses four screens of the OTA admin: PNR lookup with PNR import, Queues, Supplier log and Shopping. Shopping is the staff's screen to search and quote flights for a caller; after P5 such staff sell through the storefront only. The owner named "(making queues etc)"; the owner confirms that Shopping goes too.
+- Velexis staff get their tools in P9, which depends on P7: P7 and P9 are 258 agent-hours, 302 with P6. If an OTA is live in that time, nobody works its queues inside the product; RC-03 only sends its staff to Velexis support, who have no tool in the product before P9. Two ways close the gap: the guard of OS-04 and OS-13 goes on in production only when RC-11 is merged, or RC-04, RC-05 and RC-09 to RC-11 move before P5 without their P7 dependencies. The owner decides.
 
 ### 9.4 Credit exposure of the wallet
 
 - Offline recovery is credit given by Velexis. Where the OTA collects the traveller's money itself, its debt for tickets is unbounded until the owner invoices (A6 in 9.1). The owner should name the Stripe modes allowed in the first live weeks.
 - One wallet serves every OTA. A low balance stops sales for all of them.
 - The Velexis PKFare key is decrypted in the OTA backend's memory to sign requests. The signature is fixed, so one logged request body gives away the wallet. Floor, daily limit and alerts bound the loss; they do not prevent it.
-- A lost order answer stays with staff, because PKFare reads an order only by its own number.
+- A lost order answer stays with staff, because PKFare reads an order only by its own number. For a Velexis source the reconciliation role decides (4.10); until then the booking is pending and the card hold stays.
 - Without a statement file the daily check cannot name the booking behind a difference.
 - Until the adapter implements void requests, a PKFare void is done by hand, and some windows will be missed.
 
 ### 9.5 The size of the work against the launch
 
 - The low figure, 836 agent-hours, is 52 % of the 1,618 agent-hours of the whole MVP plan.
-- P0 alone needs about 33 review hours, in the weeks of the SDK publish, which has priority.
+- P0 alone needs about 33 review hours, more than one review week. Section 7 proposes them after the SDK publish, which has priority.
 - P3 changes the live Amadeus money path, and Amadeus was never proven on its real test environment. P7 depends on P3.
+- Counsel's answer (4.14) is not a precondition of the M6 launch while the supplier is shown, as today. It becomes one if P5 goes live before the launch.
 
 ### 9.6 Other open questions
 
 1. **Markup in two places.** OTAs already have markup rules. Should an OTA rule also adjust the price? The alternative adds a supply id condition to the markup scope.
-2. **Paid bags after ticketing** are out of the first release (A30; 12 agent-hours later). Bags and seats with the order meet the owner's "extras in the first release". To confirm.
+2. **Paid bags after ticketing** are out of the first release (A30; BM7-16 and BM7-17, 12 agent-hours, are in "Later"). Reason: they need a second payment and a second supplier order, two section writers disagreed, and this is the safer version for money. The owner's words are "the extras and low-cost should be in the first release". The first release has bags and seats booked with the order. The owner decides whether that is enough, or whether the two tasks return to P7.
 3. **Own PKFare accounts** get no tools in the OTA admin (A29); the OTA works its cases in PKFare's portal. To confirm.
-4. **Schedule changes of PKFare orders.** PKFare's reference lists schedule-change operations, and no task reads them. The task blocks of P7 add the task or a manual routine.
+4. **Schedule changes of PKFare orders.** PKFare's reference lists schedule-change operations, and no task reads them. PKFare's own e-mails reach a Velexis mailbox (A35), and no task passes them on. The task blocks of P7 add the tasks or a manual routine.
 5. **The deadline of the second source** has no number until P1 and the P6 load test.
+6. **Disclosure on request may not be enough.** The owner decided that an OTA may ask for the supplier (row 9). If counsel finds that Velexis is a processor for each OTA, "on request" may not be enough (4.14); the owner then decides again. Until the answer, no supplier is hidden in live use.
+7. **Ticketing policy.** An OTA on `manual_review` gets no PKFare content, and `issue_at_booking` runs as `issue_after_payment` for a source paid from a supplier balance (4.9, BM3-03). This is an exception to the owner's one flow and to "all enabled suppliers". To confirm.
 
 ## Annex A: proposed wording for the `decisions.md` rows
 
@@ -554,10 +575,10 @@ The owner merges these rows; nothing here is in force. The column "Rests on" sho
 | Line 18, OTA admin | "… bookings, **supplier tools for the OTA's own supplier accounts (the Amadeus console) and its supply rules**, payments, customers, markups, storefront settings" | Rows 6 and 13; A5, A14 |
 | Line 32, Customer payments: sentences added | "Method (b) only for Amadeus. Other sources: Stripe only, captured before ticketing. Velexis pays PKFare from its wallet and recovers the cost offline." | Rows 5 and 7; "Stripe only, captured before ticketing" is A6 and the lead's first proposal |
 | Line 34: replaces "Whose Amadeus account" | "**Whose supplier account: Velexis supply by default, own Amadeus or PKFare accounts as well.** Each is a supply source with an opaque id. An OTA is not shown which supplier Velexis uses; it may ask." | Rows 3, 9 and 11 |
-| New row "Supplier engine" | "**One ingestion engine with supplier adapters.** The booking flow uses one interface and is the same for every supplier. A search fans out to the adapters of all enabled suppliers, and the engine merges the results. Hooks (pre-action, post-action, post-merge) let Velexis manage supply. An OTA that uses its own supplier gets the same engine." | Rows 1, 4 and 13; the engine's place in the OTA backend is A1 |
+| New row "Supplier engine" | "**One ingestion engine with supplier adapters.** The booking flow uses one interface and is the same for every supplier. A search fans out to the adapters of all enabled suppliers, and the engine merges the results. Hooks (pre-action, post-action, post-merge) let Velexis manage supply through rules stored as data; no tenant-supplied code runs. An OTA that uses its own supplier gets the same engine." | Rows 1, 4 and 13; the engine's place in the OTA backend is A1; rules as data without tenant code are A2 |
 | New row "Supplier switches" | "**A supplier can be switched on and off globally in the platform admin, and per tenant.**" | Row 2; what "off" stops is A12 |
 | New row "Supplier id" | "**An opaque id identifies a supply source to the OTA.** A history table keeps every id that a source ever had." | Rows 3, 9 and 11; the format is A4 |
-| New row "Content" | "**Extras and low-cost content are in the first multi-supplier release.** Extras are part of the supplier interface; a booking without extras skips the step." | Row 12 |
+| New row "Content" | "**Extras and low-cost content are in the first multi-supplier release.** Extras are part of the supplier interface; a booking without extras skips the step." | Row 12. Not yet secured: low-cost depends on the P1 facts (9.1); paid bags after ticketing are later (A30, 9.6) |
 | New row "Staff access to bookings" | "**A reconciliation role for Velexis staff gets a reference to OTA bookings.** It sees bookings that Velexis supplies." | Row 8; the limit to Velexis-supplied bookings is A7 |
 | Line 68, Secrets | "**Secrets**: supplier credentials (Amadeus, PKFare) and Stripe credentials are envelope-encrypted in the database …" | Follows from rows 2 and 3 |
 | Section 3, new row | "`docs/pkfare-api/README.md` and `ota/docs/suppliers/pkfare-facts.md`: the index of PKFare's API reference and the facts the plans rely on." | A42 |
@@ -585,9 +606,9 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | Key | Task | Size | Component | Depends on |
 |---|---|---|---|---|
 | G0-01 | `docs/mvp/decisions.md`: the rows of Annex A; the owner merges it | S | Decision file | The owner's confirmation of section 3 |
-| G0-02 | ADR-0030 with its index row; dated notes in ADR-0012, ADR-0006, ADR-0011, ADR-0015 and ADR-0004 | M | Decision records | G0-01 |
+| G0-02 | ADR-0030 with its index row; dated notes in ADR-0012, ADR-0006, ADR-0011, ADR-0015 and ADR-0004; a dated note in `docs/mvp/conventions.md` §1 on the id format | M | Decision records | G0-01 |
 | OS-02 | Contract annex of ADR-0030: the hiding rule per surface, the `FlightOfferSource` values, the fields whose meaning changes, the rule that a new response property or enumeration value is a minor SDK version | S | Decision records | The owner's decisions |
-| G0-03 | ADR-0025: dated revision of item 3 (how M7 runs beside M6; never in the wave of the first merge or of the SDK publish) and a note under item 6; `AGENTS.md` and `docs/mvp/README.md` name M7; approved by the owner | S | Decision records | G0-01 |
+| G0-03 | ADR-0025: dated revision of item 3 (how M7 runs beside M6; never in the wave of the first merge or of the SDK publish) and a note under item 6; `AGENTS.md` (its picking rule), `CLAUDE.md` rule 2, `docs/mvp/README.md` and `docs/mvp/plans/README.md` §4 follow the revision and name M7; approved by the owner | S | Decision records | G0-01 |
 | G0-04 | OADR-0019 with its index row; dated notes in OADR-0001, OADR-0002, OADR-0003 and OADR-0005 | M | Decision records (OTA) | G0-02 |
 | G0-05 | OADR-0020 with its index row; dated notes in OADR-0003, OADR-0008, OADR-0010 and OADR-0013 | M | Decision records (OTA) | G0-02 |
 | G0-06 | PADR-0020 with its index row; dated notes in PADR-0015 item 6, PADR-0010, PADR-0012 item 4 and PADR-0018 | M | Decision records (platform) | G0-02 |
@@ -615,13 +636,13 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 
 | Key | Task | Size | Component | Depends on |
 |---|---|---|---|---|
-| E2-01 | Golden baseline for shopping: record the Amadeus request bodies, the `supplier_requests` rows, the stored offer and priced-offer rows and the API answers of the stub scenarios (search, price, upsell); a test compares them | M | OTA backend (tests) | P0 |
-| E2-02 | `supply/interface`: adapter interface, capability list, outcome sets, neutral offer and priced-offer types (today's `ParsedOffer` with a supplier offer reference); a fake adapter under `ota/backend/test/supply/` | M | OTA backend | P0 |
+| E2-01 | Golden baseline for shopping: record the Amadeus request bodies, the `supplier_requests` rows, the stored offer and priced-offer rows and the API answers of the stub scenarios (search, price, upsell); a test compares them | M | OTA backend (tests) | G0-07 |
+| E2-02 | `supply/interface`: adapter interface, capability list, outcome sets, neutral offer and priced-offer types (today's `ParsedOffer` with a supplier offer reference); a fake adapter under `ota/backend/test/supply/` | M | OTA backend | G0-07 |
 | E2-03 | Move `src/amadeus/` (client, token, limiter, connection resolver, error mapper) into `supply/adapters/amadeus/`; the supplier call log repository becomes common and requires a provider; no change in behaviour | M | OTA backend | E2-01, E2-02 |
 | E2-04 | Lint boundary in `eslint.config.mjs`: no adapter import from business code, no business import from an adapter, HTTP clients only in adapters; cases in `lint-rules.test.ts` | S | Root tooling, OTA backend | E2-03 |
 | E2-05 | Registry (`supply/registry`): the sources that are on for a tenant and environment, read through the platform cache (the Amadeus connection today); adapter look-up; `capabilities()` | M | OTA backend | E2-02, E2-03 |
 | E2-06 | Tenant migration: `supplier`, `supply_id` (nullable until ED4-01) and `supplier_offer_ref` on `flight_offers` and `priced_offers`; Amadeus columns nullable, with a CHECK for Amadeus rows; table `flight_search_sources` (search, source, outcome, skip reason, offers received, kept and dropped, duration); insert helpers that require the source | M | OTA backend (migration) | E2-02; the id format (G0-02) |
-| E2-07 | Engine core (`supply/engine`): action pipeline, the three hooks with typed inputs (read-only on money actions, fail closed), routing by row; tests `unknown-source-refused`, `money-hooks-cannot-mutate` and `hook-failure-fails-closed` with the fake | M | OTA backend | E2-05 |
+| E2-07 | Engine core (`supply/engine`): action pipeline, the three hooks with typed inputs (read-only on money actions; fail closed where a hook may refuse), routing by row; tests `unknown-source-refused`, `money-hooks-cannot-mutate`, `hook-failure-fails-closed` and `hook-failure-never-blocks-servicing` with the fake | M | OTA backend | E2-05 |
 | E2-08 | Search through the engine: `buildAmadeusSearch` becomes the adapter's pure `prepare` step and keeps today's validation errors; fan-out with a deadline per source; `searches.service.ts` stops importing the client; single-flight key unchanged with one source; the outcome stored per source | L | OTA backend | E2-06, E2-07 |
 | E2-09 | Merge: the limit on the merged list with shares (equal by default, an unused share passes on); the one-currency rule; unit tests with two fake sources | M | OTA backend | E2-08 |
 | E2-10 | Duplicates across sources: the like-for-like key; minimum saving and preferred source as settings; tests with two fake sources | M | OTA backend | E2-09 |
@@ -675,14 +696,14 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | SP-10 | `submitSupplierCredentials` (kind in the path) and the `pkfare` verifier: check, apply, own source and id, e-mail to the submitter; an OTA's own balance is never stored | L | Platform backend | SP-01, SP-08 |
 | SP-11 | `getSuppliersPage` and `setSupplierSelection`; the Amadeus-named portal operations answer only for an own connection | M | Platform backend | SP-06 |
 | SP-12 | Onboarding facts and go-live precondition: `supply_test`, `supply_live`; the portal's checklist and go-live texts | M | Platform backend, portal | SP-01 |
-| SP-13 | Suppliers page: route, menu item, redirect from `/amadeus`, the Velexis section, the live access request, texts without a supplier name | L | Portal | SP-11 |
+| SP-13 | Suppliers page: route, menu item, redirect from `/amadeus`, the Velexis section, the live access request, texts without a supplier name; the platform e-mail `amadeus.live_ready` gets a neutral text for a Velexis source, without a supplier name or an office id | L | Portal, platform backend | SP-11 |
 | SP-14 | Own-account sections from the registry descriptor: Amadeus settings and credentials moved in, the PKFare form | M | Portal | SP-10, SP-13 |
 | SP-15 | "Suppliers" area: registry list, dialogs for the global switch and the source stop with a reason, Velexis accounts with verify and disable | M | Platform admin | SP-05, SP-09 |
 | SP-16 | Tenant page: supply sources, per-tenant switch, daily limit, id rotation and look-up | M | Platform admin | SP-04, SP-06 |
 | SP-17 | The job `supplier.wallet_watch`: readings, warning level and floor, stop and resume on the source, alerts through the outbox (also "balance unknown" after three failed reads, without a stop), the runbook "wallet under the floor" | L | Platform backend | SP-09 |
 | SP-19 | Wallet panel (balance, time, floor, stop, 30 days of readings) and a dashboard tile | S | Platform admin | SP-15, SP-17 |
 | SP-20 | Own Amadeus beside Velexis: the verifier inserts a second connection and releases no office; the status action and the row locks take the supply source | M | Platform backend | SP-01; E3-03 to E3-15 (Amadeus routed by supply source) |
-| SP-21 | End-to-end proof: switch off and on at each level; a Velexis-only OTA finds no supplier name on the Suppliers page or in any portal API answer | M | End-to-end tests | SP-13 to SP-16 |
+| SP-21 | End-to-end proof: switch off and on at each level; for a Velexis-only OTA the Velexis section, the portal API answers about Velexis supply and the rendered platform e-mails hold no supplier name, office id or host; the own-account sections "Amadeus" and "PKFare" stay | M | End-to-end tests | SP-13 to SP-16 |
 | ED4-01 | Supply ids on old rows (added by the editor; the engine section proposes the step and lists no task): a tenant migration and a backfill set `supply_id` on stored offers, priced offers and bookings from the tenant's supply source, then NOT NULL; a row that cannot be mapped is listed, never guessed | M | OTA backend (migration) | SP-04, SP-07, E2-06, E3-02 |
 
 ### P5: the supplier hidden (17 tasks, 70 agent-hours)
@@ -713,7 +734,7 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 |---|---|---|---|---|
 | BM6-01 | PKFare client in `supply/adapters/pkfare/`: JSON POST, signature in the body, official-host guard, time-outs, call-log rows without signature or document numbers (`pkfare-signature-redaction` for the OTA backend) | M | OTA backend | G1-03, E2-03, SP-07 |
 | BM6-03 | Search: a pure `prepare` step (2 journeys, 9 seats, infants, currency) that answers `skipped`; Shopping with its own deadline; neutral offers; unreadable offers counted | L | OTA backend | BM6-01, G1-05, E2-08 |
-| BM6-04 | Offer reader: the complete price reference as `supplier_offer_ref`, carriers, cabins, bags, the content type with the low-cost flag | M | OTA backend | BM6-03, E2-11 |
+| BM6-04 | Offer reader: the complete price reference as `supplier_offer_ref`, carriers, cabins, bags, the content type with the low-cost flag | M | OTA backend | BM6-03, E2-11, OS-08 |
 | BM6-05 | Pricing: PrecisePricing, the single-use reference (`supplier_valid_until`, `consumed_at`), outcomes `priced`, `sold_out`, `refused`, `unavailable` | L | OTA backend | BM6-04, E2-12, E2-13 |
 | BM6-06 | Traveller requirements in the neutral form of the checkout | M | OTA backend | BM6-05 |
 | BM6-07 | Fare rules through the Penalty API; "not sold without readable rules"; the "no change, no refund" block for low-cost | M | OTA backend | BM6-05 |
@@ -731,18 +752,18 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | BM7-04 | Check payable: OrderPricing and WalletBalance against the expected debit; the release path (CancelOrder, booking failed, void) | M | OTA backend | BM7-03, BM3-01 |
 | BM7-05 | Capture deadline: PaymentIntent read under the booking lock, CancelOrder, booking cancelled, void, e-mail; a racing capture becomes an open case | L | OTA backend | BM7-04 |
 | BM7-06 | Request ticketing: order read, second OrderPricing, write-ahead, one request, debit comparison, balance refusal | L | OTA backend | BM7-04, E3-09 |
-| BM7-07 | Follow-up job `supply.order_followup`: the one ticketing request after a late capture, polling until a final status, stale write-aheads to review, status mapping | L | OTA backend | BM7-06 |
+| BM7-07 | Follow-up job `supply.order_followup`: the one ticketing request after a late capture, polling until a final status, stale write-aheads to review (it sends `supply.case_opened` for a stale order write-ahead), status mapping | L | OTA backend | BM7-06, BM7-10 |
 | BM7-08 | Record tickets and the airline's reference from OrderDetail (`pnrList`, fall-back) under the booking lock | M | OTA backend | BM7-07 |
 | BM7-09 | Watchdog `supply.paid_unticketed_watch` in its own scheduler; daily repeat of the alert; the age of the oldest case in the health checks | M | OTA backend | BM7-01 |
 | BM7-10 | Open cases: query, console operation (contract first, additive), the case message `supply.case_opened` on `platform-tenant-events` for P9 | M | OTA backend, `packages/api-types` | BM7-09 |
 | BM7-11 | Open-cases list in the OTA admin, with state and deadline; no supplier details for a Velexis source | M | OTA admin | BM7-10 |
 | BM7-12 | Limits at completion: sales stop, the cap of K open cases, the daily limit per OTA from the expected debit; refused before the capture | M | OTA backend | SP-06, SP-18, BM6-08 |
 | BM7-13 | Texts: the rules that send `booking.ticketing_problem` (the key is OS-21), staff alert reasons, the held-back confirmation in use (`pkfare-traveller-texts`) | M | OTA backend | BM3-02, BM7-06, OS-21 |
-| BM7-14 | Console guards for a non-Amadeus booking: capture, refund, close-review, refresh | M | OTA backend | BM7-07, E3-14 |
+| BM7-14 | Console guards for a non-Amadeus booking: capture, refund, close-review (refused for a Velexis source; for an own source it takes a PKFare order number), refresh | M | OTA backend | BM7-07, E3-14 |
 | BM7-15 | Extras with the order: AncillaryPricing catalogue, selection limits, bags and seats in PreciseBooking, re-price, the amount in the expected debit | L | OTA backend | BM7-03, E3-07 |
 | BM7-18 | Low-cost: the ticketless completion rule (`ticketless-only-when-flagged`), the kind of the airline reference, the closed cancel reason; the contract field and the wording are OS-20 | L | OTA backend | BM7-08, BM6-04; the P1 facts |
 | BM7-20 | Notification endpoint (optional for the pilot): routing by our reference, read trigger only, rate limit | M | OTA backend | BM7-07, E3-16 |
-| BM7-21 | Failure matrix `pkfare-failure-matrix.int.test.ts` with the fourteen assertions of the money review | L | OTA backend (tests) | BM7-03 to BM7-14 |
+| BM7-21 | Failure matrix `pkfare-failure-matrix.int.test.ts` with its fourteen assertions (listed below this table) | L | OTA backend (tests) | BM7-03 to BM7-14 |
 | BM7-22 | Conformance suite part 2 against the PKFare adapter; `pkfare-snapshot-redaction` on `bookings.order_snapshot` and the call log | M | OTA backend (tests) | BM7-08, E3-17 |
 | BM7-23 | End-to-end on the fake (full-service, low-cost, with extras, open case) and three runbooks (paid and not ticketed, balance refusal, lost order answer) | M | End-to-end tests, documents | OS-19, OS-20, BM7-13, BM7-18 |
 | OS-19 | Extras, neutral shape: `ExtraOption`, `AncillaryCatalogue.extras`, `BookingAncillaryOptions.extras`, filled for every supplier; the storefront extras step reads `extras` and is skipped when there are none | L | OTA contract, OTA backend, storefront | E3-07 |
@@ -751,11 +772,28 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | OS-22 | `SupplierIssue`: open `provider` values and a text `providerCode`, shown for own accounts only | S | OTA contract, `packages/errors` | BM7-03 (the error mapping) |
 | SP-18 | Balance refusal path (moved from P4, because it needs PKFare ticketing): the Redis stop flag in the OTA backend, the message `supply.balance_refused` on `platform-tenant-events`, the platform consumer | M | OTA backend, platform backend, `packages/api-types` | SP-17, BM7-06 |
 
+The fourteen assertions of the failure matrix (BM7-21):
+
+1. No capture unless the last OrderPricing is inside its window and the hold is open; a console capture past the hold is refused.
+2. No Ticketing request without a full capture.
+3. At most one Ticketing request per order; after a lost answer or a restart, none.
+4. At most one PreciseBooking per checkout, for any idempotency key and any number of tabs.
+5. The captured amount equals the booking total and the selling total of the pricing used, and never exceeds the authorised amount.
+6. No void of the card payment once a Ticketing request was sent; a void is queued only after the booking left `confirmed`.
+7. Never `ticketed` without ticket numbers (exception: 4.11).
+8. Every booking with captured money and no ticket has a staff alert and a row in the open-cases list.
+9. No "confirmed" e-mail before the Ticketing request was accepted; no "not charged" text after a capture.
+10. The debit in the Ticketing answer is compared with the expected debit.
+11. A process stop between every two steps, with the same idempotency key replayed after each, sends no second write to PKFare.
+12. The capture deadline handled while a capture is in flight ends with an alert.
+13. After one balance refusal the next completion is refused before the capture.
+14. PKFare tests send nothing to the Amadeus stub, and the Amadeus booking tests are unchanged.
+
 ### P8: rules at the hooks and their two screens (12 tasks, 58 agent-hours)
 
 | Key | Task | Size | Component | Depends on |
 |---|---|---|---|---|
-| E8-01 | Rule model and matcher in `supply/rules`: conditions reuse the markup scope parser (`pricing/rule-matcher.ts`), plus supply ids, travel dates and days before departure; unknown fields refused | M | OTA backend | E2-07 |
+| E8-01 | Rule model and matcher in `supply/rules`: conditions reuse the markup scope parser (`pricing/rule-matcher.ts`), plus supply ids, travel dates and days before departure; unknown fields refused; test `rules-are-data-only` | M | OTA backend | E2-07 |
 | E8-02 | Tenant rules: the table `supply_rules` (tenant migration), repository, a check that a rule names only the OTA's own sources | M | OTA backend (migration) | E8-01, SP-10, SP-20 |
 | E8-03 | Read path for Velexis's rules: read grant in `R__ota_read_access.sql`, read repository, cache key and invalidation; no OTA answer returns them | M | Platform backend (grant), OTA backend | E8-01, ED8-01 |
 | E8-04 | Handler: supplier selection by rule (origin, destination, dates, airline) at pre-action; outcome `skipped` with the rule id | M | OTA backend | E8-02, E8-03 |
@@ -778,12 +816,12 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | RC-07 | Fact outbox in the OTA backend: tenant migration (outbox, sequence), writes in the transactions that create, pay, ticket, cancel and reimburse a supplier order, a publisher job with fixed job ids, a daily re-send of open orders; `own-source-sends-no-fact`; isolation test | L | OTA backend (migration) | RC-06, BM7-01, BM7-07 |
 | RC-08 | Ledger consumer: `tenant-events.processor.ts` dispatches the supply messages; upsert by tenant and supplier order, the highest sequence wins; replay and out-of-order tests | M | Platform backend | RC-04, RC-06 |
 | RC-09 | Support interface 1: caller kind `support` (`PLATFORM_ADMIN_SERVICE_KEY`, loopback, no forwarded headers), handoff redeem (`GETDEL`), a token bound to tenant, environment and booking; tenant migration for the actor `platform_staff` and the new value of `ConsoleActor.type`; contract tag `Support` with `x-internal: true`, blocked publicly by Caddy; `support-caller-route-fence` | L | OTA backend, OTA contract, deploy files | RC-01 |
-| RC-10 | Handoff issue `createSupportHandoff`: role, reason, only a booking that has a ledger row; Redis `SET … EX 60 NX`; audit `support.handoff_issued` | M | Platform backend | RC-05, RC-08 |
+| RC-10 | Handoff issue `createSupportHandoff`: role, reason, only a booking that has a ledger row or an open case; Redis `SET … EX 60 NX`; audit `support.handoff_issued` | M | Platform backend | RC-05, RC-08 |
 | RC-11 | Support interface 2, reads: booking view, a fresh supplier read through the engine (status, codes, deadlines), the call log of the booking, queue snapshots of the OTA's Velexis office; every read audited; `support-view-redaction`, `support-own-source-404` | L | OTA backend | RC-09, E3-11, E3-15 |
-| RC-12 | Cases in the OTA backend: for a Velexis source a `request_only` request and a schedule change that needs an answer open a case; states; case messages; neutral texts for the traveller and staff | M | OTA backend | BM7-10, E3-13, OS-11 |
+| RC-12 | Cases in the OTA backend: for a Velexis source a `request_only` request, a schedule change that needs an answer and a lost order answer (the kind "order unknown", 4.10) open a case; states; case messages; neutral texts for the traveller and staff | M | OTA backend | BM7-10, E3-13, OS-11 |
 | RC-13 | Console side of a case (contract first, additive): confirm a quote or record the traveller's choice; `console.payments.refund` refused with the reason `case_open`; a refund proposal from the outcome; `refund-refused-while-case-open` | M | OTA contract, OTA backend | RC-12, BM7-14 |
-| RC-14 | Support interface 3, actions: record a quote, mark submitted, record the outcome (fresh read, booking moved by the sync's record step, waiting request ended, amounts stored, staff alert), note; one write per case step; `case-submit-needs-confirmation`, `case-outcome-needs-fresh-read`, `support-no-payment-operations` | L | OTA backend | RC-11, RC-13 |
-| RC-15 | Cases on the platform: list, take, quote, submit, outcome, close; the due time from the owner's hours and the supplier's limit; an overdue job with a daily repeat and escalation; action names in `audit-actions.ts`; notes refuse card numbers | L | Platform backend | RC-08, RC-10 |
+| RC-14 | Support interface 3, actions: record a quote, mark submitted, record the outcome (fresh read, booking moved by the sync's record step, waiting request ended, amounts stored, staff alert), for "order unknown" the order number or "no order" (the engine then releases a found order and fails the booking), note; one write per case step; `case-submit-needs-confirmation`, `case-outcome-needs-fresh-read`, `support-no-payment-operations` | L | OTA backend | RC-11, RC-13 |
+| RC-15 | Cases on the platform: list, take, quote, submit, outcome, close; the kind "order unknown" with its two outcomes; the due time from the owner's hours and the supplier's limit; an overdue job with a daily repeat and escalation; action names in `audit-actions.ts`; notes refuse card numbers | L | Platform backend | RC-08, RC-10 |
 | RC-16 | Ledger operations: list with filters, one row, CSV export per period and OTA (audit `supply_ledger.exported`), a recovery mark with a note; test: no traveller field in the export | M | Platform backend | RC-08 |
 | RC-17 | Daily job `supply.ledger_check` with its top-ups table: the balance equation from `supplier_wallet_readings`, paid rows without a ticket after N minutes, sequence gaps; alerts | M | Platform backend | RC-08, SP-17 |
 | RC-18 | Statement upload with its table; match by supplier order number and amount; three lists (equal, differs, on one side only) | M | Platform backend | RC-16; a statement sample (G1-03) |
@@ -794,7 +832,7 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | RC-23 | OTA admin: cancel and schedule cases in the open-cases list, a case panel on the booking page (confirm, traveller's choice), the refund proposal and the `case_open` text, "Velexis support" rows in the audit list | M | OTA admin | RC-13, BM7-11 |
 | RC-24 | Disclosure: recipient fields on the supplier account (legal name, address, country, privacy contact, agreement date), `supply_disclosures`, `adminDiscloseSupplier` (resolve the id at a date, store, audit `supply.disclosed`), admin dialog | M | Platform backend, platform admin | SP-04, RC-04 |
 | RC-25 | Portal: "Ask which supplier served a booking" on the Suppliers page; a request row and an alert to platform admins; the notice text block in the portal documents | S | Platform backend, portal | RC-24, SP-13 |
-| RC-26 | End-to-end proof on the fake: the four cases through both admins; no supplier word in the OTA admin, alerts or e-mails; the runbooks "work a case", "daily check" and "disclosure request"; the support-level table updated | L | End-to-end tests, documents | RC-20 to RC-25 |
+| RC-26 | End-to-end proof on the fake: the cases of 4.12 through both admins; no supplier word in the OTA admin, alerts or e-mails; the runbooks "work a case", "daily check" and "disclosure request"; the support-level table updated | L | End-to-end tests, documents | RC-20 to RC-25 |
 
 ### P10: proof, certification, pilot and live gate (13 tasks, 40 agent-hours)
 
@@ -812,7 +850,7 @@ What the editor changed in the six writers' lists (178 tasks, 828 agent-hours as
 | G10-10 | Pilot plan and record `ota/docs/runbooks/supplier-pilot.md`: one OTA, test environment, scenarios, daily check list, exit criteria | S | OTA documents | G10-04, G10-05 |
 | G10-11 | Go-live runbook `ota/docs/runbooks/supplier-go-live.md`, after the model of `airline-card-go-live.md`: the eight preconditions with evidence and sign-off, the co-test steps, the caps, how the switch goes on and off | M | OTA documents | G10-01 to G10-10, RC-27 |
 | G10-12 | Live step: PKFare's production host as a constant and as an egress line, a `check-vm.sh` test; merged only when preconditions 1 to 6 are signed | S | Deploy, platform backend | G10-11 |
-| RC-27 | Live gate for after-sales: a named role holder and a stand-in with MFA, the owner's deadlines set, counsel's answer recorded, a drill of the four cases in the sandbox, the first daily check done against the supplier's statement | S | Launch checklist | RC-26 |
+| RC-27 | Live gate for after-sales: a named role holder and a stand-in with MFA, the owner's deadlines set, counsel's answer recorded, a drill of the cases of 4.12 in the sandbox, the first daily check done against the supplier's statement | S | Launch checklist | RC-26 |
 
 ### Later: outside the first release (6 tasks, 36 agent-hours, not in the totals)
 
