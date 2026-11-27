@@ -55,6 +55,7 @@ import {
   edgeWriteHeaders,
   newApiKey,
   newCsrfToken,
+  TEST_MASTER_KEY_CURRENT,
   TEST_STOREFRONT_BASE_DOMAIN,
   testApiCredentials,
   testKeyProvider,
@@ -790,6 +791,9 @@ describe("the keys dev:seed prints", () => {
         DATABASE_PROVISIONER_URL: db.urlFor("provisioner"),
         DATABASE_MIGRATOR_URL: db.urlFor("migrator"),
         API_KEY_PEPPER_FILE: testApiCredentials().pepperFile,
+        // dev:seed seals the second test OTA's own Amadeus secret with these KEKs since X-055.
+        MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
+        MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
         STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
       },
     });
