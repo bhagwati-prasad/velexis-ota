@@ -124,4 +124,5 @@ There are two plan styles ([ADR-0020](adr/0020-ai-agent-development-workflow.md)
 | [`../velexis-sdk/sdk/docs/`](../velexis-sdk/sdk/docs/) | SDK developer guides B1–B4 and the Next.js guide. |
 | [`../velexis-sdk/examples/next-storefront/`](../velexis-sdk/examples/next-storefront/) | Reference storefront and console flows written against the SDK. |
 | [`../amadeus-api/`](../amadeus-api/) | The 9 Amadeus Enterprise specifications (12 operations). |
+| [`../pkfare/`](../pkfare/README.md) | PKFare's Flight Buyer API pages (146 pages, indexed by its `README.md`), committed by the owner on 2026-11-27. Reference material, read only; the facts the plans take from it are in [`ota/docs/suppliers/pkfare-facts.md`](../../ota/docs/suppliers/pkfare-facts.md). Whether it joins [`decisions.md`](decisions.md) §3 is [ADR-0030](adr/0030-suppliers-supply-sources-and-ingestion-engine.md) question 22. |
 | [`../ota-build/ota-model-1-b2c-essentials.html`](../ota-build/ota-model-1-b2c-essentials.html) | The broader B2C essentials plan. Background only. |

@@ -41,6 +41,14 @@ The evidence for Velexis's PCI DSS v4.0.1 self-assessment (SAQ D for Service Pro
 | [`pci/incident-response.md`](pci/incident-response.md) | The incident response plan: roles, detection, containment (the airline card off, rollback, evidence), card data found where it must not be, the Stripe, Amadeus and OTA notifications, recovery and yearly test. |
 | [`pci/responsibility-matrix.md`](pci/responsibility-matrix.md) | Velexis versus the OTA for each requirement of the SAQ D (and Appendix A1), with the controls of ADR-0027, and the third-party service providers. |
 
+## Suppliers
+
+What the OTA backend relies on from its suppliers other than Amadeus (milestone M7, [multi-supplier plan](../../docs/mvp/plans/multi-supplier-plan.md)).
+
+| Document | One line |
+|---|---|
+| [`suppliers/pkfare-facts.md`](suppliers/pkfare-facts.md) | Every PKFare fact the multi-supplier plan and its task blocks rely on, with its source in the owner's [`docs/pkfare/`](../../docs/pkfare/README.md) (page and line) or the workflow image, its status (stated, observed, assumed) and the plan sections and tasks that rely on it; the API versions of the image and of the pages; the questions for PKFare. Task blocks that build on PKFare read it first (OBE-107). |
+
 ## Runbooks
 
 What to do when something goes wrong in operation, and the launch checklist (task OBE-089; the go-live gate of the airline card is OBE-086's). Each runbook names the signals (log lines, `/health/ready`, the health check's e-mails, the OTA admin's views, the staff alerts), the commands and the escalation.
