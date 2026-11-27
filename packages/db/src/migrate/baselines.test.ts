@@ -109,6 +109,8 @@ describe("the baseline migrations", () => {
               ["0003_add_billing_customer_attempts", "numbered", "expand", false],
               // The price warnings of a plan's last comparison with Stripe, a column of plans (FIX-W42-PLATFORM).
               ["0004_add_plan_price_warnings", "numbered", "expand", false],
+              // The supplier registry and the supply sources of the connections and Velexis Amadeus accounts (PBE-078).
+              ["0005_add_supplier_registry", "numbered", "expand", false],
             ]
           : []),
         ...(set === "tenant"

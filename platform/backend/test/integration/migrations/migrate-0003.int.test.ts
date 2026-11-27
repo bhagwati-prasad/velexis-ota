@@ -39,7 +39,7 @@ const MIGRATION_ID = "0003_add_billing_customer_attempts";
 /** The files of the version before 0003. */
 const PREVIOUS_FILES = ["0001_baseline.sql", "0002_add_mvp_platform_deltas.sql", "R__ota_read_access.sql"];
 /** The numbered platform migrations after 0003: the real folder holds them, so the upgrade applies them after it. */
-const LATER_IDS = ["0004_add_plan_price_warnings"] as const;
+const LATER_IDS = ["0004_add_plan_price_warnings", "0005_add_supplier_registry"] as const;
 
 type Pool = ReturnType<typeof createPool>;
 type Row = Record<string, unknown>;

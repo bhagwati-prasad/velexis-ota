@@ -182,7 +182,7 @@ Handlers on both sides are idempotent and act on the **current** state, not on m
 
 ### 6.2 Platform tables the OTA backend reads
 
-`velexis_ota_app` has `SELECT` on: `tenants`, `tenant_domains`, `api_keys`, `api_key_tenant_grants`, `tenant_memberships`, `accounts` (identity and MFA columns), `plans`, `supplier_connections`, `payment_provider_connections`, `amadeus_accounts`, `amadeus_offices` ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md)). It has **no** privilege on the other platform tables (billing, settlements, payout accounts, sessions, tokens, outbox, events, submissions). Migration `0002` grants the two new Amadeus tables ([`data-model.md`](data-model.md)).
+`velexis_ota_app` has `SELECT` on: `tenants`, `tenant_domains`, `api_keys`, `api_key_tenant_grants`, `tenant_memberships`, `accounts` (identity and MFA columns), `plans`, `supplier_connections`, `payment_provider_connections`, `amadeus_accounts`, `amadeus_offices`, and on listed columns of the supply registry: `supplier_environments` (`supplier_id`, `environment`, `sales_enabled`), `supply_sources` (`id`, `supplier_id`, `environment`, `credential_source`, `tenant_id`, `sales_stop`) and `supply_source_ids` (`supply_id`, `supply_source_id`, `retired_at`) ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md), dated note of 2026-11-27). It has **no** privilege on the other platform tables (billing, settlements, payout accounts, sessions, tokens, outbox, events, submissions, `suppliers`) or on the other columns of the registry (who set a stop, when and why; row versions and times). Migration `0002` grants the two new Amadeus tables, and `0005` the registry's columns (PBE-078; [`data-model.md`](data-model.md) §4.11).
 
 What the OTA backend relies on, by column:
 
@@ -192,6 +192,7 @@ What the OTA backend relies on, by column:
 | `tenant_domains` (`hostname`, `kind`, `purpose`, `verification_status`) | Host → tenant for edge requests (verified rows only) |
 | `api_keys` (`prefix`, `key_hash`, `kind`, `environment`, `scopes`, `allowed_origins`, `revoked_at`, `expires_at`) | Key verification |
 | `supplier_connections` (`credential_source`, `amadeus_account_id`, offices, defaults) + `amadeus_accounts` + `amadeus_offices` | Amadeus credential resolution. Orders owned by an office in status `assigned` **or** `releasing` for the tenant use the Velexis account ([PADR-0012](adr/0012-amadeus-office-pool.md)). |
+| `supplier_connections` (`provider`, `supply_source_id`, `sales_enabled`) + `supplier_environments` + `supply_sources` + `supply_source_ids` | Which source sells and which serves (OBE-146, from PBE-078): the supplier's global switch in the environment, the tenant's switch and status, the source's stop, and the source of a supply id, current or old. The OTA backend reads them through its platform cache and never writes them. |
 | `payment_provider_connections` (`account_mode`, `account_reference`, `publishable_key`, secrets, `status`, `statement_descriptor_suffix`) | Stripe gateway configuration per environment |
 | `tenant_memberships`, `accounts` | Staff sign-in, roles, MFA flags |
 | `plans.limits`, `plans.features` | Plan-gated OTA features |

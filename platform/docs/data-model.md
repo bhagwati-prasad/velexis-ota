@@ -12,7 +12,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | Column descriptions | [`dictionary.json`](../../docs/velexis-sdk/db/dictionary.json) |
 | Baseline ER diagrams | [`er/er-platform.mmd`](../../docs/velexis-sdk/db/er/er-platform.mmd), [`er/er-reference.mmd`](../../docs/velexis-sdk/db/er/er-reference.mmd), [`er/er-overview.mmd`](../../docs/velexis-sdk/db/er/er-overview.mmd) |
 | Design (provisioning, runner, routing, security) | [`db/README.md`](../../docs/velexis-sdk/db/README.md) §3, §4, §5, §8 |
-| Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql`, and the deltas found during implementation: `0003_add_billing_customer_attempts.sql`, `0004_add_plan_price_warnings.sql` (§4.10) |
+| Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql`, and the deltas found during implementation: `0003_add_billing_customer_attempts.sql`, `0004_add_plan_price_warnings.sql`, `0005_add_supplier_registry.sql` (§4.10, §4.11) |
 | Reference migrations | `platform/backend/migrations/reference/0001_baseline.sql` (no delta in the MVP) |
 | Reference data files and loader | `tools/reference-data/data/*.csv` (`@velexis/reference-data`), loaded by `pnpm db:seed:reference` with the `velexis_platform_app` role; the backend's `ref:load` script is only a shortcut for it ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)) |
 
@@ -40,9 +40,13 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | `stripe_events` | **new** | common (inbox), billing sync, payment-connections | | M5 |
 | `api_keys` | baseline | api-keys | ✓ | M1 |
 | `api_key_tenant_grants` | baseline | (unused in the MVP: hosting keys are later) | ✓ | — |
-| `amadeus_accounts` | **new** | supplier-connections | ✓ | M1 |
+| `amadeus_accounts` | **new** + `0005` | supplier-connections | ✓ | M1 |
 | `amadeus_offices` | **new** | supplier-connections | ✓ | M1 |
-| `supplier_connections` | baseline + `0002` | supplier-connections | ✓ | M1 |
+| `supplier_connections` | baseline + `0002` + `0005` | supplier-connections | ✓ | M1 |
+| `suppliers` | **new** (`0005`) | supplier-connections | | M7 (seeded by `0005`) |
+| `supplier_environments` | **new** (`0005`) | supplier-connections | ✓ (listed columns, §4.11) | M7 (seeded by `0005`) |
+| `supply_sources` | **new** (`0005`) | supplier-connections | ✓ (listed columns, §4.11) | M7 (`0005` for the rows of its day) |
+| `supply_source_ids` | **new** (`0005`) | supplier-connections | ✓ (listed columns, §4.11) | M7 (`0005` for the rows of its day) |
 | `payment_provider_connections` | baseline + `0002` | payment-connections | ✓ | M1 |
 | `credential_submissions` | **new** | supplier-connections, payment-connections | | M5 |
 | `settlements` | **new** | settlements | | M5 |
@@ -66,6 +70,12 @@ erDiagram
   tenants ||--o{ supplier_connections : "per environment"
   amadeus_accounts ||--o{ amadeus_offices : "office pool"
   amadeus_accounts ||--o{ supplier_connections : "credential_source velexis"
+  suppliers ||--o{ supplier_environments : "global switch per environment (0005)"
+  suppliers ||--o{ supply_sources : "supplier (0005)"
+  supply_sources ||--o{ supply_source_ids : "every supply id (0005)"
+  supply_sources ||--o{ supplier_connections : "supply source (0005)"
+  supply_sources ||--o| amadeus_accounts : "the account's source (0005)"
+  tenants ||--o{ supply_sources : "own account (0005)"
   tenants ||--o{ amadeus_offices : "assigned_tenant_id"
   tenants ||--o{ payment_provider_connections : "per environment"
   tenants ||--o{ credential_submissions : "pending secrets"
@@ -171,6 +181,40 @@ Deltas found during implementation, one numbered migration each ([`conventions.m
 |---|---|---|
 | `0003_add_billing_customer_attempts` (FIX-W29-PLATFORM) | New `billing_customer_attempts` (`tenant_id` primary key and foreign key, `attempt` from 1, `updated_at`), DML for `velexis_platform_app`, nothing for the OTA role | Stripe replays a stored 5xx for the same idempotency key for 24 hours, so the Customer creation of a tenant's Checkout moves to the key `customer:<tenantId>:<attempt>` after a failure that spent `customer:<tenantId>` (no row is attempt 0), and the next attempt first looks for a Customer the failed one made. It cannot live in `billing_customers`, whose rows exist only once a Customer does ([PADR-0002](adr/0002-stripe-billing-integration.md) item 3, revision of 2026-10-24). |
 | `0004_add_plan_price_warnings` (FIX-W42-PLATFORM) | New column `plans.price_warnings` (`jsonb NOT NULL DEFAULT '[]'`, CHECK `plans_price_warnings_ck`: a JSON array) with its comment; no grant (the table-level privileges on `plans` cover it: the platform role writes it, the OTA role may read it with the rest of `plans`), no backfill | The warnings of a plan's last comparison with its linked Stripe prices (`AdminPlan.priceWarnings`, `[{field, expected, actual}]`), written by `adminUpdatePlan` and `adminCheckPlanPrices` under the plan's row lock and read by every admin read of a plan. PBE-048 read them back from the comparison's audit row, which a retention purge of `platform_audit_log` would take with it ([PADR-0006](adr/0006-platform-admin-access-and-audit.md), Audit items 3 and 4); the audit rows keep recording each comparison (lead decision (4c) of 2026-11-04, second set; [PADR-0002](adr/0002-stripe-billing-integration.md) item 2). A plan compared before the column shows its warnings again after its next comparison. |
+| `0005_add_supplier_registry` (PBE-078) | New `suppliers`, `supplier_environments`, `supply_sources` and `supply_source_ids` (§4.11); `supplier_connections` gains `supply_source_id` (nullable) and `sales_enabled` (NOT NULL, default `true`), `provider` a foreign key to `suppliers` in place of its CHECK (its `DEFAULT 'amadeus'` stays), the unique key `supplier_connections_env_source_uq` (tenant, provider, environment, credential source) in place of `supplier_connections_env_uq`, and `supplier_connections_source_ck` rewritten for the other suppliers (`NOT VALID`, then validated); `amadeus_accounts` gains `supply_source_id`; the backfill of the rows of its day; DML on the four tables for `velexis_platform_app`, column grants for `velexis_ota_app` | The owner's decisions on suppliers as adapters, switches globally and per tenant, Velexis supply beside an OTA's own accounts, and an opaque id with a history table ([ADR-0030](../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) items 1 to 3 and 11). The registry is [PADR-0020](adr/0020-supplier-registry-switches-and-suppliers-page.md) items 7 to 9 and ADR-0030 items 14 and 15: Proposed (lead); accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26). The new connection columns are nullable or have a default, so the previous release and today's test inserts keep writing; PBE-106 makes the source NOT NULL and drops the default of `provider` in a later release. |
+
+### 4.11 The supply registry (`0005`)
+
+A **supply source** is one supplier used through one account: one of Velexis's accounts, which serves every OTA that Velexis supplies, or an OTA's own ([ADR-0030](../../docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md) item 14). A source sells only when every level allows it: the supplier's global switch in that environment, the OTA's connection (its switch on and its status `active`), and no stop on the source ([PADR-0020](adr/0020-supplier-registry-switches-and-suppliers-page.md) item 9). "Off" leaves the source out of new searches, pricing and checkout; existing bookings are still served. The status `disabled` of a connection stays the emergency stop that serves nothing.
+
+| Table | Columns | Rules |
+|---|---|---|
+| `suppliers` | `id` (a short lower-case name: `amadeus`, `pkfare`), `name`, `created_at`, `updated_at` | Seeded by `0005`. `supplier_connections.provider` and every source name one. The OTA role reads nothing of it: its adapters are registered under the same names in code. |
+| `supplier_environments` | `supplier_id`, `environment`, `sales_enabled` (the global switch, default `false`), `version`, `created_at`, `updated_at`; primary key (supplier, environment) | Seeded by `0005`: Amadeus on in `test` and `live`, as it sells today; PKFare off in both, in `live` until PKFare certifies Velexis (ADR-0030 item 28) and in `test` until staff switch it on with a reason. PBE-081 writes it. |
+| `supply_sources` | `id` (`ssr_` + ULID), `supplier_id`, `environment`, `credential_source` (`velexis` or `tenant`: whose account), `tenant_id` (the OTA of an own account; none for Velexis), `sales_stop` (who stopped the source: `staff`, `wallet_watch` or `balance_refusal`; none = no stop), `sales_stop_at`, `sales_stop_reason` (1 to 500 characters), `sales_stop_by_account_id` (the platform admin of a staff stop), `version`, `created_at`, `updated_at` | `supply_sources_owner_ck`: a `tenant` source has its OTA, a Velexis one none. `supply_sources_sales_stop_ck` lists who may set a stop, apart from `supply_sources_sales_stop_shape_ck`, so a later value (PBE-107's cap) rewrites the list alone: a stop has its time and reason, and only a staff stop names an account. A deleted OTA takes its own sources with it. PBE-081 sets and lifts the stop; PBE-087 and X-066 call it. |
+| `supply_source_ids` | `supply_id` (primary key: `sup_` + 16 random Crockford base32 characters, a pattern CHECK and no ULID), `supply_source_id`, `issued_at`, `retired_at` (none while current) | Every id a source has had, unique for ever; one current id per source (`supply_source_ids_current_uq`). An OTA sees a source only through this id. PBE-080 generates, rotates and resolves ids. |
+
+The connections and accounts:
+
+- `supplier_connections.supply_source_id` is the source a row sells through: its account's for `velexis`, its own for `tenant`. The composite foreign key `supplier_connections_supply_source_fk` (source, provider, environment, credential source) keeps a row on a source of its own supplier, environment and credential source. It is nullable until every writer sets it (PBE-106). The connection repository names the supplier on every insert and points a `velexis` row at its account's source; an own connection's source comes with the verifier's apply (PBE-080).
+- One write of the previous release fails on this schema: its switch of a `velexis` row to the OTA's own credentials (`switchToTenant`) keeps the row's source, and the composite foreign key refuses a `tenant` row on the Velexis source that the backfill gave it. So it can fail only between the migration and the restart of the apps (the deploy order). It needs an OTA's own credentials, behind `FEATURE_OWN_AMADEUS`, which stays off at launch (PADR-0020 item 16).
+- `supplier_connections.sales_enabled` is the per-tenant switch: `true` by default, so a row written by the previous release or a test sells as before. PBE-082 writes it.
+- `supplier_connections_env_source_uq`: one row per tenant, supplier, environment and credential source, so an OTA can later hold a Velexis row and an own row of one supplier and environment (PBE-103). Nothing writes a second row before then.
+- `supplier_connections_source_ck`, rewritten: a `tenant` row holds its own credentials and no Velexis account; a `velexis` row holds no credentials and names the Velexis Amadeus account for Amadeus, or no Amadeus account and its supply source for another supplier, whose Velexis account is reached through the source (`supplier_accounts`, PBE-079).
+- `amadeus_accounts.supply_source_id` is the account's source (unique; same environment, composite foreign key), as `supplier_accounts` will hold its own (PBE-079).
+
+The backfill of `0005` (platform rows, not tenant data, so in the migration): one source per Velexis Amadeus account and one per `tenant` connection, each with one supply id; a `velexis` connection shares its account's source, and every connection is switched on. The ids are drawn in SQL from `gen_random_uuid()` (core PostgreSQL 16; `pgcrypto` is not installed): the 80 random bits of a version 4 UUID around its version and variant digits, in Crockford base32, after the millisecond time for a ULID. The rows keep their `version` and `updated_at`. A last check stops the migration if a connection or an account is left without a source, or a source without exactly one current id.
+
+What the OTA role reads (the reads of OBE-146), column by column, so a column added later is not readable until a grant names it ([ADR-0004](../../docs/mvp/adr/0004-postgresql-schema-per-tenant.md), dated note of 2026-11-27):
+
+| Table | `velexis_ota_app` may read | It may not read |
+|---|---|---|
+| `supplier_environments` | `supplier_id`, `environment`, `sales_enabled` | `version`, `created_at`, `updated_at` |
+| `supply_sources` | `id`, `supplier_id`, `environment`, `credential_source`, `tenant_id`, `sales_stop` | who set a stop, when and why (`sales_stop_by_account_id`, `sales_stop_at`, `sales_stop_reason`), `version`, `created_at`, `updated_at` |
+| `supply_source_ids` | `supply_id`, `supply_source_id`, `retired_at` | `issued_at` |
+| `suppliers` | nothing | every column |
+
+The new columns of `supplier_connections` and `amadeus_accounts` fall under the table-level `SELECT` the OTA role has on both tables. It writes none of the four tables.
 
 ## 5. Encrypted columns and their associated data
 
@@ -204,6 +248,7 @@ A value marked **reserved** is one the column's CHECK constraint allows (and, wh
 | `supplier_connections.status` | `pending_verification` (no office yet, or credentials not verified), `active`, `disabled`. Reserved: `invalid_credentials` (the OTA's own credentials are verified in `credential_submissions` before they replace a connection's, so a refusal leaves the connection as it was; `amadeus_accounts.status` does write `invalid_credentials`). |
 | `payment_provider_connections.status` | `pending` (Connect account cannot charge yet), `active`, `disabled` (deauthorised or switched off by an admin). Reserved: `error`. |
 | `amadeus_offices.status` | `available`, `assigned`, `releasing`, `retired`. |
+| `supply_sources.sales_stop` | None (the source has no stop). Reserved until PBE-081, PBE-087 and X-066 write them: `staff`, `wallet_watch`, `balance_refusal`. |
 | `credential_submissions.status` | `pending`, `verifying`, `applied`, `failed`, `superseded`. |
 | `settlements.status` | `draft`, `approved` (to be paid), `paid`, `carried_forward` (net ≤ 0, rolled into the next statement), `void` (drafts only). |
 | `stripe_events.status` | `received`, `processing`, `processed`, `ignored` (no tenant, or a type we do not handle), `failed`. |

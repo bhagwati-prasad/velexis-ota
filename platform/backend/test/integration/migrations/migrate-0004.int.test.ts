@@ -4,8 +4,9 @@
 //   - from scratch: the template database of @velexis/testing (the real runner and the real folders), cloned here;
 //   - as an upgrade: a new empty database prepared like deploy/postgres/bootstrap.sql, the runner applied to a
 //     temporary folder holding the files before 0004 (0001 to 0003 and the repeatable grants), one plan written by
-//     velexis_platform_app, then the runner applied to the real folder: only 0004 is applied, and the plan survives
-//     with no warning and its version (`updated_at`) unchanged.
+//     velexis_platform_app, then the runner applied to the real folder: 0004 is applied (and after it the later files
+//     of LATER_IDS, which migrate-0005.int.test.ts and later files test), and the plan survives with no warning and
+//     its version (`updated_at`) unchanged.
 // The column's rules are checked as the roles that use it: velexis_platform_app writes it (the CHECK and NOT NULL
 // refuse what the code must never write), and velexis_ota_app reads `plans` in full (ADR-0004), this column included.
 // admin-billing.int.test.ts uses it through adminUpdatePlan, adminCheckPlanPrices and adminListPlans.
@@ -43,6 +44,8 @@ const PREVIOUS_FILES = [
   "0003_add_billing_customer_attempts.sql",
   "R__ota_read_access.sql",
 ];
+/** The numbered platform migrations after 0004: the real folder holds them, so the upgrade applies them after it. */
+const LATER_IDS = ["0005_add_supplier_registry"] as const;
 /** The first number of this file's plans (`plan_<n>`), away from the other test files'. */
 const FIRST_PLAN = 9_420;
 const WARNING = { field: "stripePriceIdMonth.currency", expected: "EUR", actual: "USD" };
@@ -226,7 +229,7 @@ describe("migration 0004 as an upgrade from 0003", () => {
     }
   });
 
-  it("[FIX-W42-PLATFORM AC1] applies only 0004 on top of 0003, in a transaction, and keeps the plan written before with no warning and its version", async () => {
+  it("[FIX-W42-PLATFORM AC1] applies 0004 on top of 0003 (then only the later files), in a transaction, and keeps the plan written before with no warning and its version", async () => {
     expect(previousRun.applied.map((event) => event.id)).toEqual([
       "0001_baseline",
       "0002_add_mvp_platform_deltas",
@@ -234,9 +237,17 @@ describe("migration 0004 as an upgrade from 0003", () => {
       "R__ota_read_access",
     ]);
     expect(columnBefore).toBeUndefined();
+    // 0004 first, then only the later numbered files; the unchanged repeatable grants are not applied again.
     expect(
       upgradeRun.applied.map(({ id, phase, status, transaction }) => ({ id, phase, status, transaction })),
-    ).toEqual([{ id: MIGRATION_ID, phase: "expand", status: "applied", transaction: true }]);
+    ).toEqual(
+      [MIGRATION_ID, ...LATER_IDS].map((id) => ({
+        id,
+        phase: "expand",
+        status: "applied",
+        transaction: true,
+      })),
+    );
     expect(await priceWarningsColumn(migrator)).toMatchObject({ data_type: "jsonb", is_nullable: "NO" });
 
     // The existing rows get the default, and nothing else changes: no backfill, the same `updated_at` (version).

@@ -1,8 +1,17 @@
 // The `supplier_connections` repository (platform/docs/architecture.md §2.1: SupplierConnectionsModule owns the
-// table; ADR-0012). One row per tenant, provider and environment (`supplier_connections_env_uq`). A `velexis` row
-// uses the Velexis account of its environment through the offices assigned from the pool and holds no credentials of
-// its own; a `tenant` row holds the OTA's own credentials (M5, PBE-053). The CHECK `supplier_connections_source_ck`
-// keeps the two shapes apart, and the composite foreign key keeps a `velexis` row on the account of its environment.
+// table; ADR-0012). One row per tenant, provider, environment and credential source
+// (`supplier_connections_env_source_uq`, PBE-078; nothing writes a second row of a tenant, provider and environment
+// before PBE-103, so the reads below still take the one row). A `velexis` row uses the Velexis account of its
+// environment through the offices assigned from the pool and holds no credentials of its own; a `tenant` row holds the
+// OTA's own credentials (M5, PBE-053). The CHECK `supplier_connections_source_ck` keeps the two shapes apart, and the
+// composite foreign key keeps a `velexis` row on the account of its environment.
+//
+// Supply sources (PBE-078, platform/docs/data-model.md §4.11): every insert names its supplier (`provider`, a foreign
+// key to `suppliers`) and switches the row on (`sales_enabled`); a `velexis` row points at its account's source
+// (`amadeus_accounts.supply_source_id`, read in the same statement, so NULL while the account has none), also when
+// `completeVelexis` sets its account. A row switched to the OTA's own credentials (`switchToTenant`) leaves the Velexis
+// source, which the composite foreign key `supplier_connections_supply_source_fk` refuses on a `tenant` row, and keeps
+// the source it had as a `tenant` row; an own connection's first source comes with the verifier's apply (PBE-080).
 //
 // Writes of a tenant's connection of one environment are serialised with a transaction-level advisory lock
 // (`lockTenantEnvironment`): an admin assignment here and the provisioning post-step (PBE-022) both create or complete
@@ -35,13 +44,23 @@ export type AmadeusConnection = components["schemas"]["AmadeusConnection"];
 /** A `platform.supplier_connections` row as the platform reads it (with the ciphertext: never answer it). */
 export type SupplierConnectionRecord = Selectable<PlatformDatabase["platform.supplier_connections"]>;
 
-/** A connection row without its secret: what the API may read to answer (no `client_secret_ciphertext`). */
-export type SupplierConnectionView = Omit<SupplierConnectionRecord, "client_secret_ciphertext">;
+/**
+ * A connection row without its secret: what the API may read to answer (no `client_secret_ciphertext`). No answer
+ * carries the row's supply source or per-tenant switch yet (PBE-078 adds the columns; the admin's tenant page reads
+ * them from PBE-082), so the view leaves them out too.
+ */
+export type SupplierConnectionView = Omit<
+  SupplierConnectionRecord,
+  "client_secret_ciphertext" | "supply_source_id" | "sales_enabled"
+>;
 
-/** The supplier of every connection today. */
+/** The supplier of every connection today (`platform.suppliers.id`). */
 export const AMADEUS_PROVIDER = "amadeus";
 
-/** The columns of a `SupplierConnectionView`: every column but the client secret's ciphertext, never selected. */
+/**
+ * The columns of a `SupplierConnectionView`: every column but the client secret's ciphertext, which is never selected,
+ * and the two supply columns of PBE-078, which no answer carries yet.
+ */
 const SUPPLIER_CONNECTION_VIEW_COLUMNS = [
   "id",
   "tenant_id",
@@ -153,6 +172,17 @@ function tenantCredentialColumns(credentials: TenantCredentials, now: Date) {
     last_verified_at: now,
     last_error: null,
   };
+}
+
+/**
+ * The supply source of the Velexis Amadeus account `amadeusAccountId` (`amadeus_accounts.supply_source_id`, PBE-078),
+ * as a scalar subquery of the statement that writes the connection: NULL when the account has none yet.
+ */
+function accountSupplySource(trx: PlatformTransaction, amadeusAccountId: string) {
+  return trx
+    .selectFrom("platform.amadeus_accounts")
+    .select("supply_source_id")
+    .where("id", "=", amadeusAccountId);
 }
 
 /**
@@ -298,6 +328,8 @@ export class SupplierConnectionsRepository {
         environment: row.environment,
         credential_source: "velexis",
         amadeus_account_id: row.amadeusAccountId,
+        supply_source_id: accountSupplySource(trx, row.amadeusAccountId),
+        sales_enabled: true,
         office_ids: [row.officeId],
         default_office_id: row.officeId,
         queuing_office_id: row.officeId,
@@ -333,6 +365,8 @@ export class SupplierConnectionsRepository {
         environment: row.environment,
         credential_source: "velexis",
         amadeus_account_id: row.amadeusAccountId,
+        supply_source_id: accountSupplySource(trx, row.amadeusAccountId),
+        sales_enabled: true,
         office_ids: [],
         // jsonb columns are written as JSON text.
         ticketing_defaults: JSON.stringify({}),
@@ -347,9 +381,9 @@ export class SupplierConnectionsRepository {
   }
 
   /**
-   * Completes a `velexis` connection locked by `lockForTenant` with one office: the account, `office_ids = {office}`,
-   * the default, queuing and owner offices set to it, `active`, no error, `version + 1`. Ticketing defaults and
-   * monitored queues keep what the OTA set.
+   * Completes a `velexis` connection locked by `lockForTenant` with one office: the account and its supply source,
+   * `office_ids = {office}`, the default, queuing and owner offices set to it, `active`, no error, `version + 1`.
+   * Ticketing defaults, monitored queues and the per-tenant switch keep what was set.
    */
   async completeVelexis(
     trx: PlatformTransaction,
@@ -361,6 +395,7 @@ export class SupplierConnectionsRepository {
       .updateTable("platform.supplier_connections")
       .set((eb) => ({
         amadeus_account_id: office.amadeusAccountId,
+        supply_source_id: accountSupplySource(trx, office.amadeusAccountId),
         office_ids: [office.officeId],
         default_office_id: office.officeId,
         queuing_office_id: office.officeId,
@@ -381,7 +416,9 @@ export class SupplierConnectionsRepository {
    * §D item 3): `credential_source = 'tenant'`, no Velexis account, the host, client id and re-encrypted secret, the
    * offices, `active` and verified now, no error, `version + 1`. Monitored queues keep what the OTA set, and so do the
    * ticketing defaults unless `ticketingDefaults` replaces them (the apply drops the `automatedProcess` entries of
-   * offices the credentials do not hold, FIX-W39-PLATFORM). The row comes back without the client secret's ciphertext.
+   * offices the credentials do not hold, FIX-W39-PLATFORM). A row that was `velexis` leaves its account's supply
+   * source (PBE-078: the source of a `tenant` row is its own, which the verifier's apply gives it from PBE-080); a
+   * `tenant` row keeps its own. The per-tenant switch stays. The row comes back without the client secret's ciphertext.
    */
   async switchToTenant(
     trx: PlatformTransaction,
@@ -394,6 +431,11 @@ export class SupplierConnectionsRepository {
       .updateTable("platform.supplier_connections")
       .set((eb) => ({
         ...tenantCredentialColumns(credentials, now),
+        // `credential_source` reads the row's old value: a row that was `velexis` leaves its account's source, a
+        // `tenant` row keeps its own.
+        supply_source_id: sql<
+          string | null
+        >`CASE WHEN credential_source = 'tenant' THEN supply_source_id END`,
         // jsonb columns are written as JSON text.
         ...(ticketingDefaults === undefined ? {} : { ticketing_defaults: JSON.stringify(ticketingDefaults) }),
         version: eb("version", "+", 1),
@@ -407,7 +449,8 @@ export class SupplierConnectionsRepository {
   /**
    * Inserts the tenant's connection of `environment` with the OTA's own credentials (PBE-053, flows/amadeus-connection.md
    * §D item 4: own credentials before any Velexis connection of that environment): the columns of `switchToTenant`,
-   * empty ticketing defaults and monitored queues, version 1. The caller holds `lockTenantEnvironment`. The row comes back
+   * empty ticketing defaults and monitored queues, switched on, no supply source yet (PBE-080 gives an own connection
+   * its source in the verifier's apply), version 1. The caller holds `lockTenantEnvironment`. The row comes back
    * without the client secret's ciphertext.
    */
   async insertTenant(trx: PlatformTransaction, row: TenantConnectionInsert): Promise<SupplierConnectionView> {
@@ -419,6 +462,7 @@ export class SupplierConnectionsRepository {
         provider: AMADEUS_PROVIDER,
         environment: row.environment,
         ...tenantCredentialColumns(row.credentials, row.now),
+        sales_enabled: true,
         // jsonb columns are written as JSON text.
         ticketing_defaults: JSON.stringify({}),
         monitored_queues: JSON.stringify([]),

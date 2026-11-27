@@ -10,10 +10,13 @@ import { Clock } from "./clock";
  *   invoices, settlements, credential submissions, Velexis Amadeus accounts and offices;
  * - the ids of platform rows that the API never shows on their own (the `CHECK (id LIKE '<prefix>\_%')` of the
  *   platform migrations): sessions (`asn`, a session's `familyId`), account tokens (`atk`), settlement lines
- *   (`sln`) and outbox e-mails (`eml`).
+ *   (`sln`), outbox e-mails (`eml`) and supply sources (`ssr`, PBE-078: an OTA sees a source only through its supply
+ *   id).
  *
- * `stripe_events` ids (`evt_…`) are Stripe's own and are never generated here. A new table with a new prefix adds it
- * here first; `ids.test.ts` compares the list with the inventory and the migrations.
+ * `stripe_events` ids (`evt_…`) are Stripe's own and are never generated here. Neither is a supply id (`sup_` plus 16
+ * random base32 characters, `platform.supply_source_ids`): it has no time part, so it is no ULID, and its CHECK is a
+ * pattern (PBE-080 generates it). A new table with a new prefix adds it here first; `ids.test.ts` compares the list
+ * with the inventory and the migrations.
  */
 export const PLATFORM_ID_PREFIXES = Object.freeze([
   "acc",
@@ -35,6 +38,7 @@ export const PLATFORM_ID_PREFIXES = Object.freeze([
   "atk",
   "sln",
   "eml",
+  "ssr",
 ] as const);
 
 /** A prefix of PLATFORM_ID_PREFIXES. */

@@ -23,11 +23,15 @@
 -- The other platform tables (subscriptions, invoices, account_sessions, tenant_invitations,
 -- tenant_schema_migrations, provisioning_jobs, platform_audit_log, schema_migrations) are not readable either.
 -- packages/db/test/integration/baselines.int.test.ts proves every denial with a "permission denied" error.
+-- The tables added after the baseline are granted by the numbered file that adds them, not here: the shared Amadeus
+-- account tables of ADR-0012 by 0002_add_mvp_platform_deltas.sql, and the columns of the supply registry that the
+-- OTA backend reads (supplier_environments, supply_sources, supply_source_ids; nothing of suppliers) by
+-- 0005_add_supplier_registry.sql (PBE-078). The columns that 0005 adds to supplier_connections fall under the
+-- table-level grant below.
 --
 -- Changing it:
 --   - a platform migration that adds a table or column the OTA backend must read grants it in that numbered
---     file (conventions §9) or extends this file in the same pull request; the shared Amadeus account tables of
---     ADR-0012 are granted by 0002_add_mvp_platform_deltas.sql;
+--     file (conventions §9) or extends this file in the same pull request;
 --   - an unchanged file does not run again, so a numbered file that drops and re-creates a table listed here
 --     must grant it again itself (or the same pull request edits this file);
 --   - GRANT only adds: deleting a name from a list below revokes nothing. Withdraw a privilege with an explicit

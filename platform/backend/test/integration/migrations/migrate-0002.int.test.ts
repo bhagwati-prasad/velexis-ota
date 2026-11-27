@@ -7,7 +7,8 @@
 //     temporary folder holding only 0001_baseline.sql, one tenant and one subscription written by
 //     velexis_platform_app, then the runner applied to the real folder. The rows must survive.
 // "One transaction" is read from PostgreSQL itself: every catalog row the file creates, the seeded plan and its ledger
-// row carry the same transaction id (xmin), different from the baseline's.
+// row carry the same transaction id (xmin), different from the baseline's; the two rows that 0005 (PBE-078) writes
+// again carry 0005's (REWRITTEN_BY_LATER).
 // Databases are created as TEST_DATABASE_ADMIN_URL (velexis_test_admin) with the development role passwords of
 // .env.example (TEST_ROLES), named velexis_test_<runId>_<random> so the global teardown removes any left behind.
 import { createHash, randomBytes } from "node:crypto";
@@ -42,6 +43,10 @@ const MIGRATION_ID = "0002_add_mvp_platform_deltas";
 const LATER_MIGRATIONS = [
   { id: "0003_add_billing_customer_attempts", tables: ["billing_customer_attempts"] },
   { id: "0004_add_plan_price_warnings", tables: [] },
+  {
+    id: "0005_add_supplier_registry",
+    tables: ["supplier_environments", "suppliers", "supply_source_ids", "supply_sources"],
+  },
 ] as const;
 const LATER_IDS = LATER_MIGRATIONS.map((migration) => migration.id);
 const LATER_TABLES: string[] = LATER_MIGRATIONS.flatMap((migration) => migration.tables);
@@ -201,26 +206,50 @@ const NEW_INDEXES = [
 ];
 
 /**
- * The transaction ids (xmin) of what 0002 creates: the catalog rows of its 11 tables, of the constraints and indexes
- * it adds to baseline tables, and the seeded `early_access` plan, with the number of rows found of each kind. Nothing
- * after 0002 rewrites these rows (R__ota_read_access grants on baseline tables only), so one id means one transaction.
+ * The catalog rows of 0002 that a later numbered file rewrites, with that file: 0005 (PBE-078) adds a column and two
+ * constraints to amadeus_accounts, which writes its pg_class row again, and replaces supplier_connections_source_ck by
+ * the rewritten CHECK of the same name. Those rows carry the later file's transaction id.
  */
-async function migrationXids(
-  db: Pool,
-): Promise<{ xids: string[]; tables: number; constraints: number; indexes: number; seed: number }> {
-  const { rows } = await db.query<{ kind: string; xid: string }>(
-    "SELECT 'table' AS kind, xmin::text AS xid FROM pg_class WHERE relnamespace = 'platform'::regnamespace " +
-      "AND relkind = 'r' AND relname = ANY($1::text[]) " +
-      "UNION ALL SELECT 'constraint', xmin::text FROM pg_constraint WHERE connamespace = 'platform'::regnamespace " +
-      "AND conname = ANY($2::text[]) " +
-      "UNION ALL SELECT 'index', xmin::text FROM pg_class WHERE relnamespace = 'platform'::regnamespace " +
+const REWRITTEN_BY_LATER: ReadonlyArray<{ kind: string; name: string; by: string }> = [
+  { kind: "table", name: "amadeus_accounts", by: "0005_add_supplier_registry" },
+  { kind: "constraint", name: "supplier_connections_source_ck", by: "0005_add_supplier_registry" },
+];
+
+/**
+ * The transaction ids (xmin) of what 0002 creates: the catalog rows of its 11 tables, of the constraints and indexes
+ * it adds to baseline tables, and the seeded `early_access` plan, with the number of rows found of each kind; and the
+ * id of each row of REWRITTEN_BY_LATER, apart. Nothing else after 0002 rewrites these rows (R__ota_read_access grants
+ * on baseline tables only), so one id for the rest means one transaction.
+ */
+async function migrationXids(db: Pool): Promise<{
+  xids: string[];
+  rewritten: Record<string, string | undefined>;
+  tables: number;
+  constraints: number;
+  indexes: number;
+  seed: number;
+}> {
+  const { rows } = await db.query<{ kind: string; name: string; xid: string }>(
+    "SELECT 'table' AS kind, relname::text AS name, xmin::text AS xid FROM pg_class " +
+      "WHERE relnamespace = 'platform'::regnamespace AND relkind = 'r' AND relname = ANY($1::text[]) " +
+      "UNION ALL SELECT 'constraint', conname::text, xmin::text FROM pg_constraint " +
+      "WHERE connamespace = 'platform'::regnamespace AND conname = ANY($2::text[]) " +
+      "UNION ALL SELECT 'index', relname::text, xmin::text FROM pg_class WHERE relnamespace = 'platform'::regnamespace " +
       "AND relkind = 'i' AND relname = ANY($3::text[]) " +
-      "UNION ALL SELECT 'seed', xmin::text FROM platform.plans WHERE code = 'early_access'",
+      "UNION ALL SELECT 'seed', code, xmin::text FROM platform.plans WHERE code = 'early_access'",
     [NEW_TABLES, NEW_CONSTRAINTS, NEW_INDEXES],
   );
+  const isRewritten = (row: { kind: string; name: string }): boolean =>
+    REWRITTEN_BY_LATER.some((later) => later.kind === row.kind && later.name === row.name);
   const count = (kind: string): number => rows.filter((row) => row.kind === kind).length;
   return {
-    xids: [...new Set(rows.map((row) => row.xid))],
+    xids: [...new Set(rows.filter((row) => !isRewritten(row)).map((row) => row.xid))],
+    rewritten: Object.fromEntries(
+      REWRITTEN_BY_LATER.map((later) => [
+        `${later.kind} ${later.name}`,
+        rows.find((row) => row.kind === later.kind && row.name === later.name)?.xid,
+      ]),
+    ),
     tables: count("table"),
     constraints: count("constraint"),
     indexes: count("index"),
@@ -228,15 +257,26 @@ async function migrationXids(
   };
 }
 
-/** Asserts that 0002 was one transaction: everything it created and its ledger row, not the baseline's. */
+/**
+ * Asserts that 0002 was one transaction: everything it created and its ledger row, not the baseline's, except the rows
+ * a later file rewrote, which carry that file's transaction id.
+ */
 async function expectOneTransaction(db: Pool): Promise<void> {
   const rows = await ledger(db);
-  const baselineXid = rows.find((row) => row["id"] === BASELINE_ID)?.["xid"];
-  const migrationXid = rows.find((row) => row["id"] === MIGRATION_ID)?.["xid"];
+  const xidOf = (id: string): unknown => rows.find((row) => row["id"] === id)?.["xid"];
+  const baselineXid = xidOf(BASELINE_ID);
+  const migrationXid = xidOf(MIGRATION_ID);
   expect(migrationXid).toEqual(expect.any(String));
   expect(migrationXid).not.toBe(baselineXid);
+  for (const later of REWRITTEN_BY_LATER) {
+    expect(xidOf(later.by)).toEqual(expect.any(String));
+    expect(xidOf(later.by)).not.toBe(migrationXid);
+  }
   expect(await migrationXids(db)).toEqual({
     xids: [migrationXid],
+    rewritten: Object.fromEntries(
+      REWRITTEN_BY_LATER.map((later) => [`${later.kind} ${later.name}`, xidOf(later.by)]),
+    ),
     tables: NEW_TABLES.length,
     constraints: NEW_CONSTRAINTS.length,
     indexes: NEW_INDEXES.length,

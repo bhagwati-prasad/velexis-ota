@@ -209,6 +209,10 @@ export interface PlatformAmadeusAccounts {
    */
   status: Generated<string>;
   /**
+   * The account's supply source (a velexis source of amadeus in the same environment); the velexis connections on this account share it. NULL only for accounts written before their writer sets it.
+   */
+  supply_source_id: string | null;
+  /**
    * Last modification time.
    */
   updated_at: Generated<Timestamp>;
@@ -1011,12 +1015,139 @@ export interface PlatformSupplierConnections {
   monitored_queues: Generated<Json>;
   office_ids: Generated<string[]>;
   owner_office_id: string | null;
+  /**
+   * Supplier of the connection (FK to suppliers); DEFAULT amadeus for the writers that name none until the default is dropped (PBE-106).
+   */
   provider: Generated<string>;
   queuing_office_id: string | null;
+  /**
+   * Per-tenant switch, set by a platform admin: false leaves the source out of this OTA's new searches, pricing and checkout; existing bookings are still served. status disabled stays the emergency stop that serves nothing.
+   */
+  sales_enabled: Generated<boolean>;
   status: Generated<string>;
+  /**
+   * Supply source the row sells through: its account's source for velexis, its own for tenant (same supplier, environment and credential source, composite FK); NULL only for rows written before their writer sets it (NOT NULL in a later release, PBE-106).
+   */
+  supply_source_id: string | null;
   tenant_id: string;
   ticketing_defaults: Generated<Json>;
   updated_at: Generated<Timestamp>;
+  version: Generated<number>;
+}
+
+export interface PlatformSupplierEnvironments {
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * test or live.
+   */
+  environment: string;
+  /**
+   * Global switch: false leaves every source of the supplier in this environment out of new searches, pricing and checkout; existing bookings are still served.
+   */
+  sales_enabled: Generated<boolean>;
+  /**
+   * Supplier the switch covers.
+   */
+  supplier_id: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Optimistic-locking counter.
+   */
+  version: Generated<number>;
+}
+
+export interface PlatformSuppliers {
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Supplier id, a short lower-case name (amadeus, pkfare); supplier_connections.provider refers to it.
+   */
+  id: string;
+  /**
+   * Name shown to Velexis staff in the platform admin, never to an OTA on Velexis supply.
+   */
+  name: string;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PlatformSupplySourceIds {
+  /**
+   * When the id became the source's current id.
+   */
+  issued_at: Generated<Timestamp>;
+  /**
+   * When a rotation replaced it; NULL while it is the current id (one per source).
+   */
+  retired_at: Timestamp | null;
+  /**
+   * Supply id: sup_ + 16 random Crockford base32 characters, with no time part, hash or counter (not a ULID); what an OTA sees of a source.
+   */
+  supply_id: string;
+  /**
+   * Source the id names.
+   */
+  supply_source_id: string;
+}
+
+export interface PlatformSupplySources {
+  /**
+   * Row creation time.
+   */
+  created_at: Generated<Timestamp>;
+  /**
+   * Whose account: velexis = one of Velexis's accounts, for every OTA it supplies; tenant = the OTA's own account.
+   */
+  credential_source: string;
+  /**
+   * test or live.
+   */
+  environment: string;
+  /**
+   * Source id (ssr_ + ULID); never shown to an OTA, which sees the supply id of supply_source_ids.
+   */
+  id: string;
+  /**
+   * Who stopped the source's sales, for every OTA: staff, wallet_watch (the balance fell under the floor) or balance_refusal (the supplier refused a ticket for the balance); NULL = no stop.
+   */
+  sales_stop: string | null;
+  /**
+   * When the stop was set.
+   */
+  sales_stop_at: Timestamp | null;
+  /**
+   * Platform admin who set a staff stop; NULL for the wallet watch and a balance refusal.
+   */
+  sales_stop_by_account_id: string | null;
+  /**
+   * Why the stop was set (1 to 500 characters; never shown to an OTA).
+   */
+  sales_stop_reason: string | null;
+  /**
+   * Supplier of the source.
+   */
+  supplier_id: string;
+  /**
+   * OTA whose own account this is (credential_source = tenant); NULL for a Velexis source.
+   */
+  tenant_id: string | null;
+  /**
+   * Last modification time.
+   */
+  updated_at: Generated<Timestamp>;
+  /**
+   * Optimistic-locking counter.
+   */
   version: Generated<number>;
 }
 
@@ -1244,6 +1375,10 @@ export interface PlatformDatabase {
   "platform.stripe_events": PlatformStripeEvents;
   "platform.subscriptions": PlatformSubscriptions;
   "platform.supplier_connections": PlatformSupplierConnections;
+  "platform.supplier_environments": PlatformSupplierEnvironments;
+  "platform.suppliers": PlatformSuppliers;
+  "platform.supply_source_ids": PlatformSupplySourceIds;
+  "platform.supply_sources": PlatformSupplySources;
   "platform.tenant_domains": PlatformTenantDomains;
   "platform.tenant_invitations": PlatformTenantInvitations;
   "platform.tenant_memberships": PlatformTenantMemberships;

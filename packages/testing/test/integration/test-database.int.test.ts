@@ -136,7 +136,8 @@ describe("createTestDatabase", () => {
     ]);
     // Every set was applied by the real runner: its ledger records the baseline (and the repeatable OTA grants), the
     // platform set the MVP deltas of its migration 0002 (PBE-002), the Stripe Customer attempts of 0003
-    // (FIX-W29-PLATFORM) and the plans' price warnings of 0004 (FIX-W42-PLATFORM), and the tenant schemas those of
+    // (FIX-W29-PLATFORM), the plans' price warnings of 0004 (FIX-W42-PLATFORM) and the supplier registry of 0005
+    // (PBE-078), and the tenant schemas those of
     // theirs (OBE-008) and the booking sync's claim column of 0003 (FIX-W27-SYNC), the card fee's lines of 0004
     // (FIX-W28-CANCEL) and the cancellation's claim column and calling-code CHECKs of 0005 (FIX-W31-OTA).
     const ledgers: Record<string, string[]> = {
@@ -145,6 +146,7 @@ describe("createTestDatabase", () => {
         "0002_add_mvp_platform_deltas",
         "0003_add_billing_customer_attempts",
         "0004_add_plan_price_warnings",
+        "0005_add_supplier_registry",
         "R__ota_read_access",
       ],
       reference: ["0001_baseline"],

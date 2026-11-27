@@ -9,13 +9,15 @@
 //     `migrate` script of packages/db/package.json, through runMigrateCli, as velexis_migrator. The platform folder
 //     also holds 0002_add_mvp_platform_deltas.sql (PBE-002), so its 11 tables and its two OTA grants
 //     (amadeus_accounts, amadeus_offices) are expected next to the baseline's, and
-//     0003_add_billing_customer_attempts.sql (FIX-W29-PLATFORM), one table the OTA role may not read, and
-//     0004_add_plan_price_warnings.sql (FIX-W42-PLATFORM), one column of plans and no table;
+//     0003_add_billing_customer_attempts.sql (FIX-W29-PLATFORM), one table the OTA role may not read,
+//     0004_add_plan_price_warnings.sql (FIX-W42-PLATFORM), one column of plans and no table, and
+//     0005_add_supplier_registry.sql (PBE-078), the four tables of the supply registry, of which the OTA role may
+//     read listed columns of three and nothing of suppliers;
 //   - the tenant set is applied to tenant_alpha through the runner library (readMigrationFiles, recordMigration)
 //     in one provisioning transaction as velexis_provisioner (db README §3; migrateTenantSchema of X-013 replaces
 //     this helper). The tenant folder also holds 0002_add_mvp_tenant_deltas.sql (OBE-008), so its 2 tables are
 //     expected next to the baseline's;
-//   - velexis_platform_app adds a plan, an account and a tenant.
+//   - velexis_platform_app adds a plan, an account, a tenant, and a supply source with a stop and its supply id.
 // The tests compare the privileges of velexis_ota_app and velexis_platform_app with ADR-0004 in the catalog and
 // with real queries, logged in as those roles with the development DSNs of ota/backend/.env.example and
 // platform/backend/.env.example (dummy values that deploy/scripts/dev-setup.sh and the CI bootstrap set).
@@ -86,6 +88,41 @@ const MIGRATION_0003 = {
 /** Platform migration 0004 (FIX-W42-PLATFORM): one column of `plans` (`price_warnings`), no table. */
 const MIGRATION_0004 = {
   file: "0004_add_plan_price_warnings.sql",
+};
+/**
+ * Platform migration 0005 (PBE-078): the four tables of the supply registry (platform/docs/data-model.md §4.11). The
+ * OTA role reads, column by column, what the OTA backend's resolver needs (OBE-146), in table order, and nothing else
+ * of them: not who set a stop, when or why, no row version or time, and nothing of `suppliers`. The two columns 0005
+ * adds to supplier_connections and the one it adds to amadeus_accounts fall under the table-level SELECT of those
+ * tables (R__ota_read_access.sql and 0002).
+ */
+const MIGRATION_0005 = {
+  file: "0005_add_supplier_registry.sql",
+  tables: ["supplier_environments", "suppliers", "supply_source_ids", "supply_sources"],
+  otaReadableColumns: {
+    supplier_environments: ["supplier_id", "environment", "sales_enabled"],
+    supply_source_ids: ["supply_id", "supply_source_id", "retired_at"],
+    supply_sources: ["id", "supplier_id", "environment", "credential_source", "tenant_id", "sales_stop"],
+  } as Record<string, string[]>,
+  otaDeniedColumns: {
+    supplier_environments: ["version", "created_at", "updated_at"],
+    supply_source_ids: ["issued_at"],
+    supply_sources: [
+      "sales_stop_at",
+      "sales_stop_reason",
+      "sales_stop_by_account_id",
+      "version",
+      "created_at",
+      "updated_at",
+    ],
+  } as Record<string, string[]>,
+  otaDeniedTables: ["suppliers"],
+};
+/** The supply source and supply id velexis_platform_app writes in beforeAll: a Velexis PKFare source stopped by staff. */
+const SOURCE = {
+  id: "ssr_01J9ZK3V5Q8X2M4N6P7R9S1T5Z",
+  supplyId: "sup_7KQ2M9XW3HT6PBNC",
+  reason: "Paused for the pilot",
 };
 /** What tenant migration 0002 (OBE-008, ota/docs/data-model-migration-0002.md) adds after the tenant baseline. */
 const TENANT_MIGRATION_0002 = {
@@ -383,6 +420,16 @@ beforeAll(async () => {
   await platformApp.query(
     "INSERT INTO platform.tenants (id, key, name, plan_code) VALUES ('ten_01J9ZK3V5Q8X2M4N6P7R9S1T3X', 'alpha', 'Alpha Travel', 'starter')",
   );
+  await platformApp.query(
+    "INSERT INTO platform.supply_sources (id, supplier_id, environment, credential_source, sales_stop, " +
+      "sales_stop_at, sales_stop_reason, sales_stop_by_account_id) " +
+      "VALUES ($1, 'pkfare', 'test', 'velexis', 'staff', now(), $2, $3)",
+    [SOURCE.id, SOURCE.reason, ACCOUNT.id],
+  );
+  await platformApp.query(
+    "INSERT INTO platform.supply_source_ids (supply_id, supply_source_id) VALUES ($1, $2)",
+    [SOURCE.supplyId, SOURCE.id],
+  );
 });
 
 afterAll(async () => {
@@ -437,8 +484,19 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0004.file), "utf8"),
       ),
     ).toEqual([]);
+    // 0005 (PBE-078) creates the four tables of the supply registry.
+    const migration0005Tables = createdTables(
+      await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0005.file), "utf8"),
+    );
+    expect(migration0005Tables).toEqual(MIGRATION_0005.tables);
     expect(await tablesOf("platform")).toEqual(
-      [...platformTables, ...migrationTables, ...migration0003Tables, "schema_migrations"].sort(),
+      [
+        ...platformTables,
+        ...migrationTables,
+        ...migration0003Tables,
+        ...migration0005Tables,
+        "schema_migrations",
+      ].sort(),
     );
     expect(await tablesOf("reference")).toEqual([...referenceTables, "schema_migrations"].sort());
 
@@ -582,14 +640,18 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         .map((table) => ({ table, privilege: "SELECT" })),
     );
 
+    // Column by column: the accounts columns of R__ota_read_access.sql and the registry columns that 0005 grants.
     const columnGrants = await catalog(
       "SELECT c.relname AS table, att.attname AS column, a.privilege_type AS privilege FROM pg_attribute att " +
         "JOIN pg_class c ON c.oid = att.attrelid CROSS JOIN LATERAL aclexplode(att.attacl) a " +
         "WHERE c.relnamespace = 'platform'::regnamespace AND a.grantee = 'velexis_ota_app'::regrole " +
-        "ORDER BY att.attnum",
+        "ORDER BY c.relname, att.attnum",
     );
     expect(columnGrants).toEqual(
-      OTA_READABLE_ACCOUNT_COLUMNS.map((column) => ({ table: "accounts", column, privilege: "SELECT" })),
+      [
+        ["accounts", OTA_READABLE_ACCOUNT_COLUMNS] as const,
+        ...Object.entries(MIGRATION_0005.otaReadableColumns),
+      ].flatMap(([table, columns]) => columns.map((column) => ({ table, column, privilege: "SELECT" }))),
     );
 
     // No default privileges in platform, no grant to PUBLIC, USAGE only on the schema (bootstrap.sql).
@@ -667,6 +729,178 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     },
   );
 
+  it("lets velexis_ota_app read the granted columns of the supply registry, with real rows [PBE-078 AC3]", async () => {
+    const { ota } = clients();
+    // supplier_environments: the global switch of each supplier and environment that 0005 seeds.
+    await expect(
+      ota.query(
+        `SELECT ${MIGRATION_0005.otaReadableColumns["supplier_environments"]?.join(", ")} ` +
+          "FROM platform.supplier_environments ORDER BY supplier_id, environment",
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        { supplier_id: "amadeus", environment: "live", sales_enabled: true },
+        { supplier_id: "amadeus", environment: "test", sales_enabled: true },
+        { supplier_id: "pkfare", environment: "live", sales_enabled: false },
+        { supplier_id: "pkfare", environment: "test", sales_enabled: false },
+      ],
+    });
+    // supply_sources: the source and whether a stop is set, never who set it, when or why.
+    await expect(
+      ota.query(
+        `SELECT ${MIGRATION_0005.otaReadableColumns["supply_sources"]?.join(", ")} FROM platform.supply_sources`,
+      ),
+    ).resolves.toMatchObject({
+      rows: [
+        {
+          id: SOURCE.id,
+          supplier_id: "pkfare",
+          environment: "test",
+          credential_source: "velexis",
+          tenant_id: null,
+          sales_stop: "staff",
+        },
+      ],
+    });
+    // supply_source_ids: the source of an id, and whether the id is current.
+    await expect(
+      ota.query(
+        `SELECT ${MIGRATION_0005.otaReadableColumns["supply_source_ids"]?.join(", ")} FROM platform.supply_source_ids`,
+      ),
+    ).resolves.toMatchObject({
+      rows: [{ supply_id: SOURCE.supplyId, supply_source_id: SOURCE.id, retired_at: null }],
+    });
+    // The resolver's join: an id, current or old, to its source and its stop.
+    await expect(
+      ota.query(
+        "SELECT s.id, s.sales_stop IS NOT NULL AS stopped FROM platform.supply_source_ids i " +
+          "JOIN platform.supply_sources s ON s.id = i.supply_source_id WHERE i.supply_id = $1 AND i.retired_at IS NULL",
+        [SOURCE.supplyId],
+      ),
+    ).resolves.toMatchObject({ rows: [{ id: SOURCE.id, stopped: true }] });
+    // The columns 0005 adds to supplier_connections and amadeus_accounts are covered by their table-level SELECT.
+    await expect(
+      ota.query("SELECT supply_source_id, sales_enabled FROM platform.supplier_connections"),
+    ).resolves.toMatchObject({ rowCount: 0 });
+    await expect(ota.query("SELECT supply_source_id FROM platform.amadeus_accounts")).resolves.toMatchObject({
+      rowCount: 0,
+    });
+  });
+
+  it("lets velexis_ota_app read exactly the listed columns of the registry in the catalog, and no registry table as a whole [PBE-078 AC3]", async () => {
+    // The catalog: every column of the three tables is either granted or listed as denied, so a column added later
+    // and granted by mistake, or a grant dropped, fails here.
+    for (const table of Object.keys(MIGRATION_0005.otaReadableColumns)) {
+      const columns = await catalog<{ column: string; allowed: boolean }>(
+        "SELECT a.attname AS column, has_column_privilege('velexis_ota_app', a.attrelid, a.attnum, 'SELECT') AS allowed " +
+          "FROM pg_attribute a WHERE a.attrelid = format('platform.%I', $1::text)::regclass AND a.attnum > 0 " +
+          "AND NOT a.attisdropped ORDER BY a.attnum",
+        [table],
+      );
+      expect({ table, allowed: columns.filter((row) => row.allowed).map((row) => row.column) }).toEqual({
+        table,
+        allowed: MIGRATION_0005.otaReadableColumns[table],
+      });
+      expect({
+        table,
+        denied: columns
+          .filter((row) => !row.allowed)
+          .map((row) => row.column)
+          .sort(),
+      }).toEqual({
+        table,
+        denied: [...(MIGRATION_0005.otaDeniedColumns[table] ?? [])].sort(),
+      });
+    }
+    // No table-level privilege on any of the four.
+    for (const table of MIGRATION_0005.tables) {
+      const [privilege] = await catalog<{ allowed: boolean }>(
+        "SELECT has_table_privilege('velexis_ota_app', format('platform.%I', $1::text), 'SELECT') AS allowed",
+        [table],
+      );
+      expect({ table, allowed: privilege?.allowed }).toEqual({ table, allowed: false });
+    }
+  });
+
+  it.each(
+    Object.entries(MIGRATION_0005.otaDeniedColumns).flatMap(([table, columns]) =>
+      columns.map((column) => [table, column] as const),
+    ),
+  )("denies velexis_ota_app platform.%s.%s with permission denied [PBE-078 AC3]", async (table, column) => {
+    const { ota, platformApp } = clients();
+    await expect(ota.query(`SELECT ${column} FROM platform.${table}`)).rejects.toMatchObject(denied(table));
+    await expect(
+      ota.query(`SELECT 1 FROM platform.${table} WHERE ${column} IS NOT NULL`),
+    ).rejects.toMatchObject(denied(table));
+    // The column exists and the platform role reads it: the denial is a privilege, not a typo.
+    await expect(platformApp.query(`SELECT ${column} FROM platform.${table}`)).resolves.toBeDefined();
+  });
+
+  it.each([...Object.keys(MIGRATION_0005.otaDeniedColumns), ...MIGRATION_0005.otaDeniedTables])(
+    "denies velexis_ota_app SELECT * on platform.%s [PBE-078 AC3]",
+    async (table) => {
+      const { ota, platformApp } = clients();
+      await expect(ota.query(`SELECT * FROM platform.${table}`)).rejects.toMatchObject(denied(table));
+      await expect(platformApp.query(`SELECT * FROM platform.${table}`)).resolves.toMatchObject({
+        rowCount: expect.any(Number),
+      });
+    },
+  );
+
+  it("denies velexis_ota_app every column of platform.suppliers [PBE-078 AC3]", async () => {
+    const { ota, platformApp } = clients();
+    for (const column of ["id", "name", "created_at", "updated_at"]) {
+      await expect(ota.query(`SELECT ${column} FROM platform.suppliers`)).rejects.toMatchObject(
+        denied("suppliers"),
+      );
+    }
+    await expect(ota.query("SELECT count(*) FROM platform.suppliers")).rejects.toMatchObject(
+      denied("suppliers"),
+    );
+    await expect(platformApp.query("SELECT id FROM platform.suppliers ORDER BY id")).resolves.toMatchObject({
+      rows: [{ id: "amadeus" }, { id: "pkfare" }],
+    });
+    expect(
+      await catalog(
+        "SELECT a.attname FROM pg_attribute a WHERE a.attrelid = 'platform.suppliers'::regclass AND a.attnum > 0 " +
+          "AND has_column_privilege('velexis_ota_app', a.attrelid, a.attnum, 'SELECT')",
+      ),
+    ).toEqual([]);
+  });
+
+  it("denies velexis_ota_app every write on the supply registry, as the platform role makes them [PBE-078 AC3]", async () => {
+    const { ota, platformApp } = clients();
+    const writes: ReadonlyArray<readonly [string, string, unknown[]]> = [
+      ["suppliers", "INSERT INTO platform.suppliers (id, name) VALUES ('duffel', 'Duffel')", []],
+      [
+        "supplier_environments",
+        "UPDATE platform.supplier_environments SET sales_enabled = false WHERE supplier_id = 'amadeus'",
+        [],
+      ],
+      [
+        "supply_sources",
+        "UPDATE platform.supply_sources SET sales_stop = NULL, sales_stop_at = NULL, sales_stop_reason = NULL, sales_stop_by_account_id = NULL WHERE id = $1",
+        [SOURCE.id],
+      ],
+      [
+        "supply_source_ids",
+        "INSERT INTO platform.supply_source_ids (supply_id, supply_source_id, retired_at) VALUES ('sup_8KQ2M9XW3HT6PBNC', $1, now())",
+        [SOURCE.id],
+      ],
+      ["supply_source_ids", "DELETE FROM platform.supply_source_ids WHERE supply_id = $1", [SOURCE.supplyId]],
+    ];
+    for (const [table, text, values] of writes) {
+      await expect(ota.query(text, values)).rejects.toMatchObject(denied(table));
+      // The same statement is valid: the platform role runs it, in a transaction that is rolled back.
+      await platformApp.query("BEGIN");
+      try {
+        await expect(platformApp.query(text, values)).resolves.toBeDefined();
+      } finally {
+        await platformApp.query("ROLLBACK");
+      }
+    }
+  });
+
   it("denies velexis_ota_app UPDATE, and every other write, on every platform table [X-012 AC4]", async () => {
     const { ota, platformApp } = clients();
     // One plain column per table (not generated, not identity), so the statement itself is valid.
@@ -677,8 +911,10 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         "AND NOT a.attisdropped AND a.attgenerated = '' AND a.attidentity = '' ORDER BY c.relname, a.attnum",
     );
     expect(targets.map((target) => target.table)).toEqual(await tablesOf("platform"));
-    // 16 baseline tables, the ledger, the 11 tables of migration 0002 and the one of 0003.
-    expect(targets).toHaveLength(17 + MIGRATION_0002.tables.length + MIGRATION_0003.tables.length);
+    // 16 baseline tables, the ledger, the 11 tables of migration 0002, the one of 0003 and the four of 0005.
+    expect(targets).toHaveLength(
+      17 + MIGRATION_0002.tables.length + MIGRATION_0003.tables.length + MIGRATION_0005.tables.length,
+    );
     for (const { table, column } of targets) {
       const update =
         `UPDATE platform.${pg.escapeIdentifier(table)} ` +
@@ -790,6 +1026,7 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       ["platform", MIGRATION_0002.file, "applied"],
       ["platform", MIGRATION_0003.file, "applied"],
       ["platform", MIGRATION_0004.file, "applied"],
+      ["platform", MIGRATION_0005.file, "applied"],
       ["platform", "R__ota_read_access.sql", "applied"],
       ["reference", "0001_baseline.sql", "applied"],
     ]);
