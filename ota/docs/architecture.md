@@ -29,6 +29,7 @@ The contexts follow [`conventions.md` §2](../../docs/mvp/conventions.md#2-nestj
 | `storefront` | `storefront.get` (settings + platform data), content pages, public assets | `storefront_settings`, `storefront_pages`, `storefront_assets` | storage | API | M2, M4 |
 | `reference` | Locations, airports, airlines, countries, currencies | `reference.*` (read) | — | API | M2 |
 | `amadeus` | The only Amadeus caller: connection resolver, OAuth tokens, rate limits, timeouts, retries, error mapping, redaction, `supplier_requests` ([OADR-0001](adr/0001-amadeus-client-design.md)) | `supplier_requests` | Amadeus | both | M2 |
+| `supply` | The ingestion engine, which becomes the only door between the booking flow and the suppliers ([OADR-0019](adr/0019-supplier-ingestion-engine-and-adapters.md)). So far `supply/interface/` only: the adapter interface, the capability declaration, the outcome set of every action and the neutral offer types; types and constants, no provider, no supplier's name (OBE-110). The engine, the registry and the adapters follow | — | — | both | M7 |
 | `pricing` | Markup and fee engine, card fees, selling prices ([OADR-0005](adr/0005-markup-and-fee-engine.md)) | `markup_rules`, `fee_rules` | — | both | M2 |
 | `shopping` | Search, results, offers, upsell, pricing, ancillaries, fare rules, offer expiry ([OADR-0002](adr/0002-offer-and-priced-offer-caching.md)); availability search is deferred (`501`) | `flight_searches`, `flight_offers`, `offer_upsells`, `priced_offers` | via `amadeus` | API | M2 |
 | `checkout` | Checkout aggregate: travellers (documents encrypted), contacts, ancillaries, remarks, totals, expiry | `checkouts`, `checkout_*` | — | both | M3 |
@@ -82,7 +83,7 @@ flowchart TB
   payments --> tenancy
 ```
 
-Rules: controllers call one service method; services own transactions; only `amadeus`, `payments` (gateways), `notifications` (mailer) and `documents` (storage) talk to the outside ([`conventions.md` §2](../../docs/mvp/conventions.md#rules)). Arrows never point from `amadeus` or `payments` back to business modules, nor from `storefront` to `settings`: the settings context edits what the storefront reads, and the storefront's public reads (`getPublicAsset`, the content pages) have services of their own in `src/storefront` (lead decision (2a) of 2026-10-30, FIX-W34-OTA; a source scan, `src/storefront/module-direction.test.ts`, guards it).
+Rules: controllers call one service method; services own transactions; only `amadeus`, `payments` (gateways), `notifications` (mailer) and `documents` (storage) talk to the outside ([`conventions.md` §2](../../docs/mvp/conventions.md#rules)). Arrows never point from `amadeus` or `payments` back to business modules, nor from `storefront` to `settings`: the settings context edits what the storefront reads, and the storefront's public reads (`getPublicAsset`, the content pages) have services of their own in `src/storefront` (lead decision (2a) of 2026-10-30, FIX-W34-OTA; a source scan, `src/storefront/module-direction.test.ts`, guards it). `src/supply/interface/` (OBE-110) is types and constants only and imports no module's code, so the graph has no `supply` arrow yet: the engine (OBE-114) and the registry (OBE-112) bring them. Its test double, the fake adapter, lives in `test/supply/`, outside the build.
 
 ## 3. Request pipeline
 
