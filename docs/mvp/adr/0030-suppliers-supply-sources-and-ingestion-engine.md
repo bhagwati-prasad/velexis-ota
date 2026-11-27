@@ -91,6 +91,7 @@ These would rest on a proposal or an open question. Nobody writes them before th
 - The owner confirms or changes items 14 to 18 and answers the open questions. The developer then sets the status. 2026-11-25: item 26 too; it proposes how the owner's go for a wave confirms the Proposed items that the wave's tasks name. 2026-11-26: the owner answered questions 10 to 13 (items 27 to 30) and, with question 10, the open part of question 3 except the Stripe modes; counsel's answer to question 4 came as relayed by the owner (its row). Questions 14 to 20 are new. Items 14 to 18 and 26 stay Proposed. 2026-11-27: questions 21 and 22 are new.
 - Ten assumptions of the plan are in no item of the five records. A13, A29 and A43 are in open questions; A21 and A41 are in Follow-ups; A25, A27, A35, A40 and A42 are named in no record. They stay proposals of the plan until the owner confirms them. 2026-11-25: question 1, which held A13, is answered (item 19); A43, the live co-test after the launch, is now part of question (44b). 2026-11-26: question (44b), which held A43, is answered (item 28): the launch does not wait for PKFare's certification; as the lead reads it, it does not wait for the live co-test either, which follows the certification. A29 stays in OADR-0020 question 3, which waits for M8: by item 30, an OTA's own PKFare account comes after the launch. 2026-11-27: A42 is now in question 22, after the owner committed PKFare's pages as `docs/pkfare/`.
 - The waiting notes and the task blocks follow. 2026-11-25: the task blocks are published: 169 tasks in milestone M7 and 17 in milestone M8, in the three task files, [`foundation-tasks.md`](../plans/foundation-tasks.md), the platform's [`agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) and the OTA's [`agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md); the plan is re-scoped in its [section 0](../plans/multi-supplier-plan.md#0-re-scope-of-2026-11-25). 2026-11-26: the plans and the task blocks that rested on questions 4 and 10 to 13 get dated notes of that date; no task is added and no count changes.
+- 2026-11-27: [Annex A](#annex-a-contract-rules) holds the contract rules that the tasks which change the OTA document and the SDK for Velexis supply quote: the hiding rule per surface, the source values, the fields whose meaning changes and the version rule (X-051). It changes no item and no status.
 
 ## Alternatives considered
 
@@ -136,3 +137,98 @@ Only the owner answers these. Each recommendation is the lead's proposal. The se
 | 22 | The owner committed PKFare's pages as `docs/pkfare/` on 2026-11-27. Do PKFare's terms allow the pages in the repository, and does `docs/pkfare/` join the reference material of `decisions.md` §3, with the guard of `.github/workflows/ci.yml` that refuses a pull request changing it? (46b; plan A42 and the lead's ruling G12) | Keep the pages and add them to §3 and the guard; keep them without the guard; or move them out of the repository, so that OBE-107 cites titles and dates only (G12 as written) | The owner checks PKFare's terms or asks PKFare. If they allow it, add `docs/pkfare/` to §3 and to the guard: a small task with a workflow change the owner approves. Until then OBE-107 reads the pages and never edits them |
 
 Plan 9.6 lists more points to confirm. Items 1, 3 and 7 are questions in OADR-0019 and OADR-0020, and item 5 is under Consequences in OADR-0019. Item 4 (schedule changes of PKFare orders) is in no record: the plan leaves it to the task blocks of P7.
+
+## Annex A: contract rules
+
+2026-11-27 (X-051). These are the rules that the tasks which change the [OTA document](../../../ota/backend/openapi/velexis-ota-booking-api.openapi.yaml) and the SDK for Velexis supply follow: OBE-150, OBE-152 to OBE-154, OBE-185, OBE-186, OBE-188 and SDK-021 read them, and the tasks that the table of Part 1 names build that part. The annex changes no item and no status above. Each rule names its item and that item's state on 2026-11-27. On that day the owner wrote "start working on wave 71". As item 26 proposes, that go accepts the Proposed items that the wave's tasks build, and it accepts item 26 too. A sentence set apart as a quote below is the one that the descriptions and documents quote word for word. A schema, member, operation or value in backticks is the OTA document's at commit 4f740863, unless the rule calls it new and names the task that adds it. A Velexis source is a supply source on one of Velexis's supplier accounts; an OTA's own source is on the OTA's own account (item 14, Proposed (lead); accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26)).
+
+### Part 1: the hiding rule per surface
+
+**Rule 1.1, items 6 and 18.** Item 6 is Decided (owner, 2026-11-24). Item 18 is Proposed (lead); accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26). For a Velexis source, Amadeus included, no answer, screen, e-mail or document that reaches an OTA or its travellers shows the supplier's name, payload, error codes, call log or order reference. An OTA's own source is shown as today. The published contract keeps its Amadeus-named members (plan 9.3); the table says which of them a Velexis source leaves out or answers `null`. A required one stays in the answers that a Velexis source still gives: `FlightSearchCriteria.amadeusOperationId`, for example, mirrors the search mode (OBE-150), and the `amadeus` mapping of today's extras options goes only with the options, when OBE-185 empties those lists (rule 3.4). The table is that of [plan 4.7](../plans/multi-supplier-plan.md#47-what-an-ota-sees), with the tasks that build each row. For a Velexis source, OBE-157 walks the customer answers of shopping, checkout and bookings for supplier leaks, and OBE-158 the console answers of the session, shopping, bookings and the supplier log.
+
+| Surface | A Velexis source | An OTA's own source | Tasks |
+|---|---|---|---|
+| OTA API, customer scope | `FlightOffer.amadeus`, `PricedOffer.amadeus`, `Ticket.amadeus` and `BookingFareRules.amadeus` are left out, and `Booking.amadeus` is `null`. The search echo `FlightSearchCriteria.amadeusQuery` and `amadeusBody` is `null`. The supplier's own `warnings` are not passed on. No error text names a supplier, and no answer holds `error.supplier`. `FlightOffer.source` is the content type of Part 2. | As today | OBE-150, OBE-151, OBE-153 |
+| OTA API, console scope | No verbatim offer, priced offer or order: `FlightOffer.amadeus` and `PricedOffer.amadeus` are left out, and `Booking.amadeus` is `null`. No `FlightSearch.diagnostics`, no supplier `warnings` and no `error.supplier`. `ConsoleBookingSummary.amadeusOrderId`, `ConsoleBookingDetails.amadeusOrderId`, `queuingOfficeId`, `ownerOfficeId` and `ConsoleSupplierSync.lastSupplierRequestId` are `null`, and `ConsoleBookingDetails.recentSupplierRequests` is empty. `ConsoleTenant.supplier` holds no office id. `console.supplierRequests.list` lists only the calls of the OTA's own sources. An event whose actor is the supplier names it "Supplier". No reason is `no_amadeus_order`. `netPrice` and the net amounts are the OTA's cost price (Part 3). | As today | OBE-149, OBE-151, OBE-152, OBE-156 |
+| OTA admin | The Amadeus tools are hidden: PNR lookup, Queues, Shopping, Supplier log, the booking's order tab with its raw views, and the dashboard's queue tile. Shopping goes with them as question 8 recommends (open). No other text names a supplier. A booking shows its supply label (new, OBE-148). | The tools as today, and the supply label | OAD-024, OAD-025 |
+| Storefront, e-mails, PDFs | The main record locator is the airline's reference, or none (Part 3). | As today | OBE-154 |
+| The supplier's own e-mails (new with PKFare) | Every contact given to the supplier is Velexis's (plan A35), so its e-mails reach Velexis. Staff pass them on in neutral words. | None in this milestone: an own PKFare account comes after the launch (item 30, Decided (owner, 2026-11-26)) | OBE-169 and OBE-172 for the contacts; no task yet for passing them on (plan 9.6) |
+
+Rows stored before phase G keep their supplier details: the summaries and the stored record locators of earlier events, and the call-log rows without a supply id. No read-time filter is built for them (OBE-154's Note, Proposed (lead)), because before the launch only test tenants hold such rows.
+
+**Rule 1.2, the Amadeus tools, items 21 and 18.** Item 21 is Decided (owner, 2026-11-25): "Hide Amadeus tools right now". Item 18, in the state of rule 1.1, holds the list and the answer. Without an own active Amadeus connection, 15 operations answer `403 FEATURE_DISABLED` with `details.feature` `console.rawAmadeus`: the 12 `console.amadeus.*` operations of the tag `Console Amadeus`, `console.queues.list`, `console.queues.listSnapshots` and `console.bookings.import` (OBE-106; OBE-149 keys the check to supply sources). The four deferred raw writes answer it before their `501`. With an own active Amadeus connection the 15 work as today. OBE-149 also refuses the raw Amadeus offers of a console `flights.price` body (`PricingRequest.amadeusFlightOffers`) with the same `403`.
+
+**Rule 1.3, two console reads beyond the 15, item 18.** Item 18 is in the state of rule 1.1; the lead's ruling S14 ([plan Annex D](../plans/multi-supplier-plan.md#annex-d-the-leads-rulings-for-the-task-blocks)) is Proposed (lead). Phase G closes both reads, contract first. The PNR lookup `console.bookings.findByRecordLocator` (`consoleFindBookingByRecordLocator`) returns the Amadeus order verbatim: without an own active Amadeus connection it answers `403 FEATURE_DISABLED` (OBE-149). The order read `console.bookings.retrieve` (`consoleRetrieveFlightOrder`) answers a Velexis-supplied booking `409 BOOKING_NOT_MODIFIABLE`, and `ConsoleBookingActions.canRetrieve` is false for it (OBE-152).
+
+### Part 2: the source values
+
+**Rule 2.1, item 17.** Item 17 is Proposed (lead); accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26). The contract has no schema `FlightOfferSource`. `AmadeusFlightOfferSource` holds Amadeus's five values `GDS`, `LTC`, `PYTON`, `EAC` and `NDC`, and eight places reference it. This annex proposes a new schema `FlightOfferSource`: the content type of an offer, whatever the supplier, with these five values and the new `LCC` and `OTHER` (plan A28). A new schema beside `AmadeusFlightOfferSource` is the lead's proposal for OBE-153 (the X-051 block, Note of 2026-11-25); it is accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26). OBE-153 adds it in one change. No value is ever removed from either schema.
+
+**Rule 2.2, the eight references, item 17 (in the state of rule 2.1).** From OBE-153 on:
+
+| # | Reference | Schema | Why |
+|---|---|---|---|
+| 1 | `AmadeusFlightAvailability.source` | `AmadeusFlightOfferSource` | Amadeus's own payload |
+| 2 | `AmadeusFlightOffer.source` | `AmadeusFlightOfferSource` | Amadeus's own payload |
+| 3 | `AmadeusGetFlightAvailabilitiesQuery.sources` (its items) | `AmadeusFlightOfferSource` | Amadeus's own request (`console.amadeus.searchFlightAvailabilities`) |
+| 4 | `AmadeusGetFlightOffersQuery.sources` (its items) | `AmadeusFlightOfferSource` | Amadeus's own request (`console.amadeus.searchFlightOffers`) |
+| 5 | `FlightSearchAdvancedQuery.sources` (its items) | `AmadeusFlightOfferSource` | Rule 2.3 |
+| 6 | `FlightOffer.source` | `FlightOfferSource` (new) | The content type, whatever the supplier |
+| 7 | `PricingRuleScope.sources` (its items) | `FlightOfferSource` (new) | A rule matches `FlightOffer.source` |
+| 8 | `FeeRuleScope.sources` (its items) | `FlightOfferSource` (new) | A rule matches `FlightOffer.source` |
+
+The four `Amadeus*` schemas keep Amadeus's own list. They describe Amadeus's own payloads and requests (the `amadeus` members, `PricingRequest.amadeusFlightOffers` and the `console.amadeus.*` operations), which a Velexis source never answers (Part 1). `FlightAvailabilitySource`, the four values of Amadeus's availability search that `FlightAvailability.source` and `FlightAvailabilityQuery.sources` use, is a schema of its own, not one of the eight, and stays as it is.
+
+**Rule 2.3, the request body `FlightSearchAdvancedQuery`, item 17 (in the state of rule 2.1).** The body of `flights.search` in `advanced` mode keeps `AmadeusFlightOfferSource`. The reason: it is Amadeus's own searchFlightOffers body, which the backend forwards to Amadeus after defaults, so its `sources` chooses Amadeus content, and only Amadeus's values mean anything there. The body stays open to every OTA, and a source that cannot serve it is skipped ([OADR-0019](../../../ota/docs/adr/0019-supplier-ingestion-engine-and-adapters.md) item 10, Proposed (lead); for PKFare, OBE-160). A request enumeration stays closed (the OTA document's `info.description`, **Enumerations**), so `LCC` and `OTHER` there would be values that a client may send and that no source takes. The echo `FlightSearchCriteria.amadeusBody` is the body sent to Amadeus, and it is `null` when a Velexis source took part (OBE-150), so no answer needs the new values there.
+
+**Rule 2.4, the Velexis mapping, item 17 (in the state of rule 2.1; plan A28).** One pure function of OBE-153 gives the content type of a Velexis source's offer before the offer is stored, so the stored row, `FlightOffer.source` and the rule matcher see one value. The first row that matches decides:
+
+| The offer's content | A Velexis source answers |
+|---|---|
+| Its supplier marks it as low-cost: the low-cost flag that OBE-161 adds to the neutral offer, from the mark that OBE-107's facts file records | `LCC` |
+| The supplier's value is `GDS` | `GDS` |
+| The supplier's value is `NDC` | `NDC` |
+| Amadeus's `EAC`, `LTC` or `PYTON` | `OTHER` |
+| Any other value, or none | `OTHER` |
+
+The low-cost flag comes first, so a low-cost offer answers `LCC` even when its supplier's value is `GDS` or `NDC`; where this differs from OBE-153 step 4, the annex wins (OBE-153's Note). A Velexis source never answers `LTC`, `PYTON` or `EAC`: they are Amadeus's own names, so they would name the supplier, and Amadeus's reference gives them no low-cost mark. An OTA's own source keeps its supplier's value, so `EAC`, `LTC` and `PYTON` stay in `FlightOfferSource` for an own Amadeus connection. No value is ever removed. A pricing or fee rule stored with `EAC`, `LTC` or `PYTON` matches no offer of a Velexis source once OBE-153 has merged.
+
+### Part 3: the fields whose meaning changes
+
+**Rule 3.0, item 17.** Item 17 is Proposed (lead); accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26). [README §4](../../../ota/backend/openapi/README.md#4-additive-changes-only) of the OTA document counts a change of meaning as breaking, so it needs an ADR: item 17 approves the four changes below, the fourth as the lead's ruling S16 extends it (rule 3.4). Each changes in the OTA document only with the task named for it, whose descriptions quote its sentence word for word; until that task merges, the published meaning of its members stands. As README §4 asks, the task's pull request links item 17 and its change-log row names it.
+
+**Rule 3.1, `FlightOffer.source`, item 17 (in the state of rule 3.0); shipped by OBE-153.** Members: `FlightOffer.source`; `PricingRuleScope.sources` and `FeeRuleScope.sources` take the same values (Part 2). Today: "Amadeus content source (GDS, NDC, EAC, LTC, PYTON)."
+
+> The offer's content type, whatever the supplier: `GDS`, `NDC`, `LCC` for low-cost content or `OTHER` for any other content; `EAC`, `LTC` and `PYTON` come only from an Amadeus connection of the OTA's own.
+
+**Rule 3.2, `netPrice` and the console's net amounts of a booking, item 17 (in the state of rule 3.0; plan A15); shipped by OBE-152.** Members, all in console scope: `FlightOffer.netPrice`, `PricedOffer.netPrice` and `AncillaryOption.netPrice`; `ConsoleBookingSummary.net`; `ConsoleBookingPricing`, whose `net` has the parts `netBase`, `netTaxes`, `netFees` and `netServices`. Today each description names Amadeus.
+
+> The OTA's cost price, before its own markup and fees; for a Velexis source it is the price that Velexis sets for the OTA and does not report the supplier's net price.
+
+The parts of `ConsoleBookingPricing` are the parts of that cost price. Until Velexis's price rules exist (OBE-192), the price that Velexis sets equals the supplier's net (OBE-152, step 2): a limit of the hiding, like those under Consequences.
+
+**Rule 3.3, `recordLocator`, item 17 (in the state of rule 3.0); shipped by OBE-154, and for low-cost bookings by OBE-181.** Members: `Booking.recordLocator`, `BookingSummary.recordLocator` and `ConsoleBookingSummary.recordLocator`. Today `Booking.recordLocator` is the "Main Amadeus record locator (PNR)".
+
+> The main record locator; for a Velexis source it is the airline's own reference, or `null` while the airline has given none.
+
+This rests on question 9 as item 17 drafts it: the airline's reference, or none until a ticket number exists. The owner's go for wave 71 on 2026-11-27 accepts that draft (ADR-0030 item 26). The supplier's order number is never the main locator (OBE-154). The sentence "It can stay null after pending too, so do not rely on a value." (SDK-020) stays.
+
+**Rule 3.4, today's extras lists, item 17 (in the state of rule 3.0) as the lead's ruling S16 extends it (Proposed (lead)); shipped by OBE-185.** Members: `AncillaryCatalogue.checkedBags`, `cabinBags`, `otherServices` and `seats` (lists of `AncillaryOption`), with `AncillaryCatalogue.seatsSupported`; and `BookingAncillaryOptions.options` (a list of `BookingAncillaryOption`). They stay required, as now.
+
+> For a Velexis source this list is empty, `AncillaryCatalogue.seatsSupported` is false, and the options are in the neutral list `extras` of the same object.
+
+`AncillaryCatalogue.extras` and `BookingAncillaryOptions.extras` are new optional lists (OBE-185). For an OTA's own Amadeus source today's lists keep their options. Until OBE-185 merges, a Velexis Amadeus source keeps filling today's lists (the lead's ruling S14). No handler fills `BookingAncillaryOptions.extras` before OBE-213 (milestone M8).
+
+### Part 4: the version rule
+
+**Rule 4.1, item 24.** Item 24 is Decided (owner, 2026-11-25). With [OADR-0016](../../../ota/docs/adr/0016-sdk-packaging-and-type-contract.md) points 4 and 8 it gives this rule, which SDK-021 and [`ota/sdk/README.md` §9](../../../ota/sdk/README.md#9-versioning-publishing-and-what-is-deferred) quote:
+
+> A new response property or a new value of a response enumeration, also one that opens a closed enumeration such as `SupplierIssue.provider`, is a minor SDK version, since the contract test does not reject it; removing or narrowing one stays breaking.
+
+The contract test is OADR-0016 point 4. It does not reject such a change, because the frozen contract and the SDK's declarations are compiled against the same OTA types, generated from the working document (point 8). `SupplierIssue.provider` lists the one value `amadeus` today, and OBE-188 opens it; that an opened enumeration counts as new values is the lead's reading for OBE-188 (Proposed (lead)). A breaking change still needs an ADR (README §4).
+
+**Rule 4.2, item 17 (in the state of rule 3.0) and the lead's ruling S16.** The second sentence, which SDK-021 and README §9 also quote:
+
+> The changed meanings of `FlightOffer.source`, `netPrice`, `recordLocator` and the extras lists of `AncillaryCatalogue` and `BookingAncillaryOptions` ship in the minor SDK version 1.1.0.
+
+A change of meaning changes no type, and the values and members added with these changes are additive (rule 4.1), so the contract test rejects none of them; item 17 is the ADR that README §4 asks for (Part 3). That they ship in 1.1.0 is the lead's ruling S16: Proposed (lead); accepted with the owner's go for wave 71 on 2026-11-27 (ADR-0030 item 26). SDK-021 documents them in the CHANGELOG's section `1.1.0 (unreleased)` and in README §9; OBE-185 writes the line for the extras lists. SDK-020 is the task that writes the integrators' notes of item 24; it merged on 2026-11-25 with the notes of SDK 1.0.0.
