@@ -217,7 +217,7 @@ journey by hand (for example `repo:tools/e2e/specs/portal-signup.e2e.ts` or
 | Command | What it checks / does | Expected |
 |---|---|---|
 | `pnpm plan:lint` | The three task plans (`### ID · Title` blocks, fields, done markers ` ✅`, dependencies, cycles) | `ERRORS: 0`, summary blocks |
-| `node tools/plan-lint/plan-lint.mjs --remaining` | Ready tasks of the lowest open milestone, critical path first | A short list or `remaining: none, every task is done` |
+| `node tools/plan-lint/plan-lint.mjs --remaining` | Ready tasks of the lowest open milestone, critical path first; while M7 has open tasks and is not that milestone, a second block with M7's ready and waiting tasks (X-053), never M8's | A short list or `remaining: none, every task is done` |
 | `node tools/ci/check-package-json.mjs` | Exact versions, test packages dev-only, packages never depend on apps, actions pinned to SHAs | Silent, exit 0 |
 | `node tools/ci/check-no-hardcoded-hosts.mjs` | No `localhost`, `127.0.0.1`, `:5432`, `:6379` in app/package code | Exit 0 |
 | `node tools/ci/check-pci-refs.mjs` | Every reference of `ota/docs/pci/*.md` still points at its line | `… references checked, 0 problems` |

@@ -32,7 +32,7 @@
     {
       "title": "Seed the platform, then the demo OTA",
       "actor": "Developer",
-      "body": "`pnpm --filter @velexis/platform-backend dev:seed` then `pnpm --filter @velexis/ota-backend dev:seed`. **Copy the three keys printed once**: `Publishable test key`, `Secret test key`, `Console automation test key`.",
+      "body": "`pnpm --filter @velexis/platform-backend dev:seed` then `pnpm --filter @velexis/ota-backend dev:seed`. **Copy the four keys printed once**: `Publishable test key`, `Secret test key`, `Console automation test key` and, since X-055, the second test OTA's `Own Amadeus console automation test key`.",
       "expect": "Tenant `demo` (`tenant_demo`, \"Demo Travel\") active on `demo.ota.example.com`, with an Amadeus test connection (office DEV1A00xx), a `velexis` Stripe test connection, and the keys. A second run changes nothing and prints no keys."
     },
     {

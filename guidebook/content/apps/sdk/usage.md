@@ -52,9 +52,9 @@ expect: Unit + contract tests green; dist/velexis-sdk.mjs, dist/velexis-sdk.iife
 
 ```try
 command: pnpm --filter @velexis/ota-backend dev:seed
-command: SDK_SMOKE_PUBLISHABLE_KEY=pk_test_… SDK_SMOKE_SECRET_KEY=sk_test_… SDK_SMOKE_CONSOLE_KEY=sk_test_… pnpm --filter @velexis/ota-sdk test:smoke
+command: SDK_SMOKE_PUBLISHABLE_KEY=pk_test_… SDK_SMOKE_SECRET_KEY=sk_test_… SDK_SMOKE_CONSOLE_KEY=sk_test_… SDK_SMOKE_OWN_CONSOLE_KEY=sk_test_… pnpm --filter @velexis/ota-sdk test:smoke
 url: http://127.0.0.1:4000/health/live
-expect: Both smoke files pass against the demo OTA (tenant_demo) and the Amadeus stub
+expect: Both smoke files pass against the demo OTA (tenant_demo), the second test OTA (tenant_demoown, for the raw Amadeus reads) and the Amadeus stub
 ```
 
 Development data (development only):
@@ -62,6 +62,7 @@ Development data (development only):
 | What | Where | Notes |
 |---|---|---|
 | Three test keys of the [[demo-ota]] | printed **once** by `pnpm --filter @velexis/ota-backend dev:seed` (`repo:ota/backend/src/dev/dev-seed.command.ts`) | `Publishable test key` (`pk_test_…`, no allowed origins), `Secret test key` (`sk_test_…`, scope `storefront`), `Console automation test key` (`sk_test_…`, scopes `console:automation`, `amadeus:read`) |
+| Console key of the second test OTA `demoown` (since X-055) | printed **once** by the same `dev:seed` as `Own Amadeus console automation test key` | `sk_test_…`, the same scopes; the smoke test's raw Amadeus reads (`SDK_SMOKE_OWN_CONSOLE_KEY`) |
 | OTA admin service key | `ota/admin/.env.example` and `ota/backend/.env.example`: `OTA_ADMIN_SERVICE_KEY=sk_dev_ota_admin_service_key_change_me` | Development only; only the OTA admin's server uses it |
 | Smoke settings | `OTA_API_URL` (default `http://127.0.0.1:4000`), `SDK_SMOKE_*`, `REDIS_URL`, `DATABASE_MIGRATOR_URL` | Read by `repo:ota/sdk/test/smoke/smoke-env.js` from the environment, then `.env.local` of `ota/sdk` and the root; never printed |
 
@@ -281,7 +282,7 @@ tenant_demo.notifications ORDER BY created_at DESC LIMIT 5;`.
 | `PermissionError 403 ORIGIN_NOT_ALLOWED` in a browser page | Page origin not in the publishable key's `allowed_origins` (the API opens this refusal to the page's origin, so the SDK reads it after one request) | Add the origin in the portal (API keys) |
 | `403 SCOPE_NOT_ALLOWED` on `console.*` | `pk_` key, or `sk_` scoped `storefront` | Use a `console:automation` key or the OTA admin |
 | `ServerError 501 NOT_IMPLEMENTED` | A [[deferred-operation]] | Expected in the MVP; `details.milestone = "deferred"` |
-| Smoke run stops at once | API not reachable on `OTA_API_URL` within 3 s, or a missing `SDK_SMOKE_*` | Start `pnpm --filter @velexis/ota-backend dev`; set the three keys |
+| Smoke run stops at once | API not reachable on `OTA_API_URL` within 3 s, or a missing `SDK_SMOKE_*` | Start `pnpm --filter @velexis/ota-backend dev`; set the four keys (since X-055 also `SDK_SMOKE_OWN_CONSOLE_KEY`, the second test OTA's console key) |
 | Smoke sign-up `RateLimitError` | Sixth token-mode run within an hour (127.0.0.1) | Wait an hour or empty the API's Redis locally |
 | `generate` changes `operations.js` | OpenAPI document changed without regenerating | Commit the regenerated table and fix the namespace and `@throws` |
 | `build` fails on size | ESM bundle above 25 KB min+gzip | Split `console` into its own entry (ADR-0019 follow-up) |

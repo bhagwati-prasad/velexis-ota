@@ -23,7 +23,7 @@
   ],
   "local": {
     "command": "pnpm --filter @velexis/ota-sdk test",
-    "notes": "A library: nothing to start. Unit and contract tests run offline against a fake fetch; build with pnpm --filter @velexis/ota-sdk build (dist/velexis-sdk.mjs, dist/velexis-sdk.iife.js, dist/types). Smoke tests (test:smoke) call a running OTA API on http://127.0.0.1:4000 with the three keys the OTA backend's dev:seed printed. The storefront (Vite) and the OTA admin use src/ through the development export condition."
+    "notes": "A library: nothing to start. Unit and contract tests run offline against a fake fetch; build with pnpm --filter @velexis/ota-sdk build (dist/velexis-sdk.mjs, dist/velexis-sdk.iife.js, dist/types). Smoke tests (test:smoke) call a running OTA API on http://127.0.0.1:4000 with the four keys the OTA backend's dev:seed printed (since X-055 the fourth is the second test OTA's console key, for the raw Amadeus reads). The storefront (Vite) and the OTA admin use src/ through the development export condition."
   },
   "production": {
     "host": "npm package @velexis/ota-sdk 1.0.0 (not yet published; owner approval pending); clients call api.ota.example.com or /api on a storefront host"

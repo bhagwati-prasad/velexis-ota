@@ -11,10 +11,10 @@
       "expect": "The stub terminal shows it listening on port 4900; `psql postgres://velexis_ota_app:dev_ota@127.0.0.1:5432/velexis` connects (development only)."
     },
     {
-      "title": "Seed and keep the three keys",
+      "title": "Seed and keep the four keys",
       "actor": "Owner",
-      "body": "`pnpm --filter @velexis/platform-backend dev:seed`, then `pnpm --filter @velexis/ota-backend dev:seed`. Copy the lines **Publishable test key**, **Secret test key** and **Console automation test key**: they are printed once.",
-      "expect": "Three keys `pk_test_…`, `sk_test_…` (scope `storefront`), `sk_test_…` (scopes `console:automation`, `amadeus:read`). Lost them? Delete the demo OTA's `platform.api_keys` rows locally and seed again."
+      "body": "`pnpm --filter @velexis/platform-backend dev:seed`, then `pnpm --filter @velexis/ota-backend dev:seed`. Copy the lines **Publishable test key**, **Secret test key**, **Console automation test key** and **Own Amadeus console automation test key** (the second test OTA's, since X-055): they are printed once.",
+      "expect": "Four keys `pk_test_…`, `sk_test_…` (scope `storefront`), `sk_test_…` (scopes `console:automation`, `amadeus:read`) and the second OTA's `sk_test_…` with the same scopes, which makes the raw Amadeus reads. Lost them? Delete the demo OTA's `platform.api_keys` rows locally and seed again."
     },
     {
       "title": "Start the OTA API",

@@ -7,7 +7,7 @@
   "duration": "25 min",
   "prerequisites": [
     "An active OTA of yours and the OTA API on port 4000.",
-    "`curl` and `jq`. For the SDK smoke tests: the three keys printed by the OTA's `dev:seed` ([[journey:run-the-stack]])."
+    "`curl` and `jq`. For the SDK smoke tests: the four keys printed by the OTA's `dev:seed` ([[journey:run-the-stack]])."
   ],
   "steps": [
     {

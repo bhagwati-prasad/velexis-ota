@@ -14,7 +14,7 @@
       "title": "Seed the platform and the demo OTA",
       "actor": "Developer",
       "body": "`pnpm stub:amadeus &`, then `pnpm --filter @velexis/platform-backend dev:seed` and `pnpm --filter @velexis/ota-backend dev:seed`.",
-      "expect": "The demo OTA \"Demo Travel\" (`tenant_demo`, EUR, `en`) is active on `demo.ota.example.com` with a test Amadeus office and a `velexis` Stripe test connection; three test keys printed once."
+      "expect": "The demo OTA \"Demo Travel\" (`tenant_demo`, EUR, `en`) is active on `demo.ota.example.com` with a test Amadeus office and a `velexis` Stripe test connection; three test keys printed once, and since X-055 a fourth, the console key of the second test OTA `demoown`."
     },
     {
       "title": "Start the stack",

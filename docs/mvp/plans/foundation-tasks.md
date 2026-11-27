@@ -1386,8 +1386,8 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 | K. Reconciliation | X-067, X-068 |
 | L. Proof and launch readiness | X-069, X-070, X-071, X-072, X-073, X-074 |
 
-### X-051 · Write the contract annex of ADR-0030: hiding rules, source values, changed meanings, version rule
-- **Status:** todo
+### X-051 · Write the contract annex of ADR-0030: hiding rules, source values, changed meanings, version rule ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M7
 - **Depends on:** —
@@ -1407,12 +1407,13 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - Part 3 gives each changed field, today's extras lists (OBE-185) included, its members, one sentence that a description can quote as it stands, and its task. Part 4 gives the version rule in one sentence and names the minor version 1.1.0.
   - No OpenAPI document, generated file or other record changes.
 - **Verify:** `grep -q 'Annex A: contract rules' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'FlightSearchAdvancedQuery' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'ConsoleBookingSummary' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'AncillaryCatalogue' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -q 'BookingAncillaryOptions' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && grep -qF '1.1.0' docs/mvp/adr/0030-suppliers-supply-sources-and-ingestion-engine.md && git diff --exit-code -- ota/backend/openapi packages/api-types`
-- **Note (2026-11-25):** The new schema of part 2 and the split of the references are the lead's proposal for OBE-153, whose step 1 follows the annex, so that `AmadeusFlightOfferSource` keeps describing Amadeus's own payloads. Proposed (lead); confirm in the pull request.
+- **Note (2026-11-25):** The new schema of part 2 and the split of the references are the lead's proposal for OBE-153, whose step 1 follows the annex, so that `AmadeusFlightOfferSource` keeps describing Amadeus's own payloads. Proposed (lead); confirm in the pull request. 2026-11-27: accepted with the owner's go for wave 71.
 - **Note (2026-11-25):** OBE-152, OBE-154 and SDK-021 quote Part 3 and Part 4 word for word (the lead's ruling S14), and OBE-185 quotes Part 3's sentence on today's extras lists (the lead's ruling S16). Part 4's sentence on the changed meanings and the version 1.1.0 are Proposed (lead), the lead's ruling S16; the wave proposal confirms it.
 - **Note (2026-11-25):** Rests on ADR-0030, question 9: the airline's reference, or none until a ticket number exists, as item 17 drafts it. The wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-27, merged):** done in wave 71 (docs(adr): write the contract annex of ADR-0030: hiding rules, source values, changed meanings and the version rule [X-051]). The owner's go for wave 71 also accepted the lead's ruling S16 for SDK 1.1.0 and the draft of ADR-0030 question 9 that the notes above name; the annex records both (rules 3.3 and 4.2).
 
-### X-052 · Write the privacy pack for the owner's counsel on hidden suppliers
-- **Status:** todo
+### X-052 · Write the privacy pack for the owner's counsel on hidden suppliers ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M7
 - **Depends on:** —
@@ -1431,10 +1432,11 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - No application file changes, and no record marks the counsel question as answered.
 - **Verify:** `test -f docs/mvp/privacy/README.md && test "$(ls docs/mvp/privacy/*.md | wc -l)" -ge 6 && test -z "$(grep -L 'Draft for counsel. Not legal advice.' docs/mvp/privacy/*.md)" && grep -q 'privacy/' docs/mvp/README.md`
 - **Note (2026-11-25):** The pack prepares question (43d), counsel on Velexis's role (ADR-0030 question 4; PADR-0021 question 1), which the owner asked the lead to explain on 2026-11-25. It decides nothing. Counsel's answer is an outside step, and no supplier is hidden in live use before it (PADR-0021 item 11, proposed).
-- **Note (2026-11-26):** On 2026-11-26 the owner relayed counsel's answer to the main question of step 2 for Velexis supply (ADR-0030 question 4; PADR-0021 question 1); whether it names Velexis's own role, and counsel's own date, are ADR-0030 question 19. The lead proposes, for the go of wave 71, that the pack keeps the rest. Its questions are now the follow-up questions of ADR-0030 questions 19 and 20, with the facts of step 2 that counsel needs for them. Its drafts stay for counsel to approve: the notice text block, the clause for the OTA terms, the disclosure procedure of step 3 and the template of the dated recipients list. The acceptance line "no record marks the counsel question as answered" now means that the pack itself marks nothing as answered: the records hold the relayed answer, and only the owner records counsel's words (step 5). As the lead reads it, the condition of the counsel gate of step 5 (PADR-0021 item 11, proposed) is met for Velexis supply (its dated note of that day); the pack changes nothing there. Proposed (lead); the wave proposal names it; the owner's go for the wave accepts it.
+- **Note (2026-11-26):** On 2026-11-26 the owner relayed counsel's answer to the main question of step 2 for Velexis supply (ADR-0030 question 4; PADR-0021 question 1); whether it names Velexis's own role, and counsel's own date, are ADR-0030 question 19. The lead proposes, for the go of wave 71, that the pack keeps the rest. Its questions are now the follow-up questions of ADR-0030 questions 19 and 20, with the facts of step 2 that counsel needs for them. Its drafts stay for counsel to approve: the notice text block, the clause for the OTA terms, the disclosure procedure of step 3 and the template of the dated recipients list. The acceptance line "no record marks the counsel question as answered" now means that the pack itself marks nothing as answered: the records hold the relayed answer, and only the owner records counsel's words (step 5). As the lead reads it, the condition of the counsel gate of step 5 (PADR-0021 item 11, proposed) is met for Velexis supply (its dated note of that day); the pack changes nothing there. Proposed (lead); the wave proposal names it; the owner's go for the wave accepts it. 2026-11-27: accepted with the owner's go for wave 71.
+- **Note (2026-11-27, merged):** done in wave 71 (docs(privacy): write the privacy pack for the owner's counsel on hidden suppliers [X-052]), as the re-scope note of 2026-11-26 has it. The pack marks nothing as answered, and the counsel gate stays as PADR-0021 item 11 records it.
 
-### X-053 · Make `plan-lint --remaining` list the open M7 tasks beside the lowest open milestone
-- **Status:** todo
+### X-053 · Make `plan-lint --remaining` list the open M7 tasks beside the lowest open milestone ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M7
 - **Depends on:** —
@@ -1453,9 +1455,10 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - An M7 task with an open dependency is listed as waiting. The second block lists no M8 task.
   - On the real plans the command exits 0 with `ERRORS: 0` and names M7.
 - **Verify:** `node --test tools/plan-lint/test/ && out="$(node tools/plan-lint/plan-lint.mjs --remaining)" && printf '%s\n' "$out" | grep -q 'M7' && printf '%s\n' "$out" | grep -qx 'ERRORS: 0'`
+- **Note (2026-11-27, merged):** done in wave 71 (feat(plan-lint): list the open M7 tasks in a second --remaining block [X-053]). plan-lint now ends with `process.exitCode`, so a pipe gets the whole output. The integrator brought `docs/mvp/plans/README.md`, the roadmap's §2.0 and §4.3, the multi-supplier plan's paragraph "Milestone M7" and the guidebook up to the two blocks.
 
-### X-054 · Let `x-milestone` take `M7` and `M8` in the contract generator, its tests and the contract documents
-- **Status:** todo
+### X-054 · Let `x-milestone` take `M7` and `M8` in the contract generator, its tests and the contract documents ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M7
 - **Depends on:** —
@@ -1474,9 +1477,10 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - The four documents of step 3 name the same list.
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/api-types test && pnpm --filter @velexis/ota-backend test openapi-extensions route-parity && grep -q 'M8' ota/backend/openapi/README.md && grep -q 'M8' packages/api-types/README.md && grep -q 'M8' ota/docs/api-changes.md`
 - **Note (2026-11-25):** Files of the OTA group (the lead's ruling G4): two contract tests, the document's description, its README and `api-changes.md` pin or name the same list as the generator, so they merge together; the Verify runs those tests.
+- **Note (2026-11-27, merged):** done in wave 71 (feat(api-types): let x-milestone take M7 and M8 [X-054]). `[OBE-075 AC2]` in the route-parity test still pins the 19 pending operations, so a task that adds a pending M7 or M8 operation amends that count in its own pull request (the dated note on ruling G1 of the multi-supplier plan's Annex D; ruling T).
 
-### X-055 · Give the test stacks an OTA with its own Amadeus connection and move the tool suites to it
-- **Status:** todo
+### X-055 · Give the test stacks an OTA with its own Amadeus connection and move the tool suites to it ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M7
 - **Depends on:** —
@@ -1496,7 +1500,8 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Verify:** `pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/console test/integration/m4 test/integration/dev && pnpm --filter @velexis/e2e test && pnpm --filter @velexis/ota-sdk test && node --test tools/ci/*.test.mjs && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/pnr-import.e2e.ts specs/ota-admin/a11y-headers.e2e.ts && pnpm --filter @velexis/ota-sdk test:smoke`
 - **Note (2026-11-25):** Files of the OTA backend and the OTA SDK (the lead's ruling G4): each suite moves with the helper that serves it; the Verify runs both components' tests. Step 4 follows the lead's ruling on OBE-106.
 - **Note (2026-11-25):** The size stays M (the lead's ruling S12): if the pull request outgrows it, step 4 (the smoke stack) moves into OBE-106, and the lead moves its files there. OBE-149 and X-075 later extend these helpers with the supply source (the lead's ruling S14).
-- **Note:** Workflow file: the owner approves this change with the wave.
+- **Note:** Workflow file: the owner approves this change with the wave. 2026-11-27: approved with the owner's go for wave 71.
+- **Note (2026-11-27, merged):** done in wave 71 (test: run the Amadeus tool tests on OTAs with their own Amadeus connection [X-055]), with the one line of `.github/workflows/e2e.yml` approved by the owner's go. `dev:seed` now prints four keys: the second test OTA `demoown` (`tenant_demoown`, "Demo Own Amadeus Travel") has its own console automation key, which the nightly smoke step passes as `SDK_SMOKE_OWN_CONSOLE_KEY`. Known limit: for the end-to-end OTA, the acceptance proof checks the stored row (`tenant`, `active`), not `ConnectionResolver.resolve()`. Until OBE-106 lands, the demo OTA's console key can also make the raw reads, so the smoke test cannot tell the two keys apart; OBE-106 step 6 adds the refusal case (its dated note of this day). The comment above the smoke step in `e2e.yml` still says three keys; it changes only with a workflow change that the owner approves.
 
 ### X-056 · Add the recording tool `pkfare:record` with allow-list scrubbing for PKFare sandbox answers
 - **Status:** todo
@@ -1684,6 +1689,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Note (2026-11-25):** Files of the OTA backend, the platform backend and the end-to-end harness (the lead's ruling G4): each test moves with the builder that serves it and the seeds write what the builders write; Verify runs the tests of each. The task extends X-055's helper and second OTA (phase B). PBE-106 (milestone M8) then makes the source NOT NULL and drops the `DEFAULT 'amadeus'` of `provider` (the lead's rulings S2 and S16).
 - **Note (2026-11-25):** X-055 is listed because this task extends its integration helper, its end-to-end twin and its second dev-seed OTA (the lead's ruling S16).
 - **Note (2026-11-25):** Every test written after X-075 writes the platform's supplier rows (connections and supply sources) only through X-075's builders: the module of step 1 and the row builders of step 2 (the lead's ruling S18). PBE-106's grep checks this for connections.
+- **Note (2026-11-27, after PBE-078):** `applyOwnLiveCredentials` and its test twin `applyOwnTestCredentials` of X-055 (`tools/e2e/support/seed.ts`, both through `applyOwnCredentials`) switch a `velexis` connection to `tenant` with raw SQL and do not clear `supply_source_id`. That is safe today: the harness migrates an empty database, and no writer sets `amadeus_accounts.supply_source_id` before PBE-080, so its accounts and their `velexis` connections have no source. Once PBE-080 gives accounts their source, and until this task moves the harness to the builders (step 4), the switch hits the composite foreign key `supplier_connections_supply_source_fk`: a `tenant` row cannot keep the Velexis source. The dated note of this day on PBE-080 says the same.
 
 ### X-063 · Prove end to end that an OTA on Velexis supply sees no supplier name anywhere
 - **Status:** todo

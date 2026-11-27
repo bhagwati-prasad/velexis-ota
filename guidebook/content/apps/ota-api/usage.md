@@ -58,7 +58,8 @@ Seeded data (development only):
 | What | Where it comes from | Notes |
 |---|---|---|
 | [[demo-ota]] `demo` ("Demo Travel", `tenant_demo`, storefront `test`) | `repo:ota/backend/src/dev/dev-seed.command.ts` | On `demo.ota.example.com`; Amadeus test connection through the Velexis account (an office `DEV1A00xx` of the [[office-pool]]); Stripe connection in `velexis` mode |
-| Three test keys | the same seed, **printed once** | `Publishable test key` (`pk_test_…`, no origins), `Secret test key` (`sk_test_…`, scope `storefront`), `Console automation test key` (`sk_test_…`, `console:automation` + `amadeus:read`). Lost: delete the key rows locally and seed again |
+| Second test OTA `demoown` ("Demo Own Amadeus Travel", `tenant_demoown`, no storefront host, no payment connection; since X-055) | the same seed | Its own Amadeus test connection on the stub (`tenant`, `active`, office `OWN1A0001`) |
+| Four test keys | the same seed, **printed once** | `Publishable test key` (`pk_test_…`, no origins), `Secret test key` (`sk_test_…`, scope `storefront`), `Console automation test key` (`sk_test_…`, `console:automation` + `amadeus:read`) of the demo OTA, and `Own Amadeus console automation test key` (`sk_test_…`, the same scopes) of the second OTA. Lost: delete the key rows locally and seed again |
 | Tenant defaults | provisioning seeds `repo:ota/backend/src/provisioning/seeds/index.ts` | `storefront_settings` (`issue_after_payment`, booking queue 50/0, airline card off), Default markup rule 0 % priority 1000, notification templates |
 | Staff | none for `demo` | Create your own OTA in the [[app:portal]] and "Open console" ([[sso]]) to get a staff session |
 | Customers | none | Sign up on the storefront; verification links arrive in Mailpit http://127.0.0.1:8025 |
@@ -229,7 +230,7 @@ seq-search-price
 | Command | Should happen |
 |---|---|
 | `node dist/cli.js help` | Lists the commands; unknown command exit 1 |
-| `pnpm --filter @velexis/ota-backend dev:seed` | Demo OTA (above); `APP_ENV=production` exits 1 and writes nothing |
+| `pnpm --filter @velexis/ota-backend dev:seed` | Demo OTA and the second test OTA (above); `APP_ENV=production` exits 1 and writes nothing |
 | `node dist/cli.js amadeus:ping --tenant demo --env test` | Resolves the connection, gets a token, one MAD-BCN search; last line `ok`, exit 0; failure prints the code (`SUPPLIER_NOT_CONFIGURED (credentials_refused)`) |
 | `node dist/cli.js tenants:report-migrations --report <file>` | Publishes `tenant.migrated` / `tenant.migration_failed` per schema of a fan-out report |
 | `node dist/cli.js secrets:rewrap [--tenant <key> \| --all] [--dry-run]` | Re-wraps every tenant ciphertext to `MASTER_KEY_CURRENT` (key rotation runbook) |

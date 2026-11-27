@@ -3390,9 +3390,10 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && git diff --exit-code -- packages/api-types && pnpm --filter @velexis/ota-backend test amadeus-tools staff-auth route-parity && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/console test/integration/m4 && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/ota-sdk test:smoke && grep -q 'item 21' ota/docs/adr/0011-console-access-staff-sessions-and-environments.md`
 - **Note (2026-11-25):** `console.bookings.findByRecordLocator` (the PNR lookup screen) and `console.bookings.retrieve` (the order tab) read an Amadeus order and are not among the 15, so this task leaves them as they are. Phase G closes both, contract first (Proposed (lead), plan §4.7; the lead's ruling S14): OBE-149 refuses the PNR lookup with `403 FEATURE_DISABLED` for an OTA without its own active Amadeus connection, and OBE-152 answers the order read with `409 BOOKING_NOT_MODIFIABLE` for a Velexis-supplied booking. Neither is a question for the owner. SDK-020 is added: step 1 rewrites the sentences that SDK-020 adds to the tag and to the shared paragraph.
 - **Note (2026-11-25):** Rests on ADR-0030, question 8: staff Shopping goes with the other Amadeus screens. The wave proposal names it; the owner's go for the wave accepts it. The SDK's smoke test and README change with the refusal (the lead's ruling G4); the Verify runs the SDK's tests and its smoke test on the local stack of ota/sdk/README.md §8.1.
+- **Note (2026-11-27):** X-055 is merged (wave 71). `dev:seed` creates the second test OTA `demoown` (`tenant_demoown`) on its own Amadeus test connection, with its own console automation key, and the nightly smoke step passes that key as `SDK_SMOKE_OWN_CONSOLE_KEY`. Until this task lands, the demo OTA's console key can also make the raw reads, so the smoke test cannot tell the two keys apart: the refusal case of step 6 is what makes it tell them apart.
 
-### OBE-107 · Write the PKFare facts file, the question list for PKFare and the index of the saved reference
-- **Status:** todo
+### OBE-107 · Write the PKFare facts file, the question list for PKFare and the index of the saved reference ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M7
 - **Depends on:** —
@@ -3452,6 +3453,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - preciseBooking_V5 has no JSON page either. The newest set includes Penalty V4. The release note dates five of the image's seven versions to 2024; it gives no date for the JSON Shopping_V4 or orderDetail_V9.
   - The notes left out facts that the facts file holds and later blocks need: PKFare advises polling OrderDetail every 5 to 10 minutes beside the push (OBE-173). A code can mean different things in different calls: B022 is a child's age in PreciseBooking but a short balance in Ticketing, and B024 a time-out in PrecisePricing but an order already paid in Ticketing, so X-057's B022 and B024 are Ticketing's (OBE-169, OBE-172, X-057). Under Signature V2 the body is signed as sent and never serialised again or compressed, every request and retry gets a new timestamp, request id and signature, and neither the secret nor `X-PK-Signature` is logged (OBE-159, PBE-083). `solutionId` is opaque and stored whole (OBE-161, OBE-162). WalletBalance and RequestTicketing are in the facts file too, though neither the owner's list nor the image names them.
   - The facts file also says which facts of plan §9.2 the pages answer, for example: OrderDetail finds an order only by PKFare's order number, not by our reference; a sub-buyer's wallet is separate from the main buyer's or shared with it; and PKFare gives the production host after testing.
+- **Note (2026-11-27, merged):** done in wave 71 (docs(ota): write the PKFare facts file and its questions for PKFare [OBE-107]), as the notes of 2026-11-27 re-scope it: no `docs/pkfare-api/`, and `docs/pkfare/README.md` is the index. The facts file holds 124 facts (87 `stated`, 37 `assumed`, none `observed` yet), the API versions of the image and of the pages, and 37 questions for PKFare. Which version set the build uses stays ADR-0030 question 21, and whether `docs/pkfare/` joins `decisions.md` §3 stays question 22.
 
 ### OBE-108 · Measure PKFare's sandbox response times and limits and record them in the facts file
 - **Status:** todo
@@ -3475,8 +3477,8 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
 - **Verify:** `grep -q 'Sandbox measurements' ota/docs/suppliers/pkfare-facts.md && grep -q 'checkout.complete' ota/docs/suppliers/pkfare-facts.md`
 - **Note (2026-11-25):** OBE-107 is added: this task writes into its facts file.
 
-### OBE-109 · Record a golden baseline of today's Amadeus search, pricing and upsell
-- **Status:** todo
+### OBE-109 · Record a golden baseline of today's Amadeus search, pricing and upsell ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M7
 - **Depends on:** —
@@ -3496,9 +3498,10 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - No file under `ota/backend/src` and no existing test changes.
   - The golden files hold no token, secret or card number, and no token request.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int golden-shopping`
+- **Note (2026-11-27, merged):** done in wave 71 (test(ota-backend): record a golden baseline of today's Amadeus search, pricing and upsell [OBE-109]): 40 scenarios under `ota/backend/test/supply/golden/`. The review added the check of acceptance 4: before it compares, the test fails when a golden text would hold the test account's client id or secret, an API key, the token request, a token or a card number, so a recording with `-u` cannot write one either.
 
-### OBE-110 · Define the supplier adapter interface, capabilities, outcome sets and neutral offer types
-- **Status:** todo
+### OBE-110 · Define the supplier adapter interface, capabilities, outcome sets and neutral offer types ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M7
 - **Depends on:** —
@@ -3518,6 +3521,7 @@ The supplier ingestion engine with its adapters (Amadeus, PKFare), the platform 
   - The neutral offer carries a supplier offer reference; no exported name contains a supplier's name.
   - The fake adapter implements the interface and is in no build output. No caller changes.
 - **Verify:** `pnpm --filter @velexis/ota-backend test supply/interface && pnpm --filter @velexis/ota-backend typecheck`
+- **Note (2026-11-27, merged):** done in wave 71 (feat(ota-backend): define the supplier adapter interface, capabilities, outcome sets and neutral offer types [OBE-110]). The owner's go for wave 71 accepted ADR-0030 item 16 and OADR-0019 items 8 and 9 (their dated notes). The module's comments and the README still call items 8 and 9 proposed; the records hold the acceptance, and the code stays as it is.
 
 ### OBE-111 · Move the Amadeus client into `supply/adapters/amadeus/` and make the supplier call log common
 - **Status:** todo

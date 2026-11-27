@@ -16,7 +16,7 @@ pnpm db:migrate && pnpm db:seed:reference
 mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025 &
 pnpm stub:amadeus &                                  # the platform seed needs it
 pnpm --filter @velexis/platform-backend dev:seed     # keep the printed admin password and TOTP URI
-pnpm --filter @velexis/ota-backend dev:seed          # after the platform seed; keep the three printed keys
+pnpm --filter @velexis/ota-backend dev:seed          # after the platform seed; keep the four printed keys
 pnpm dev                                             # the six apps; not Mailpit or the stub
 ```
 
@@ -86,16 +86,16 @@ Start the [[amadeus-stub]] first: the platform seed verifies its test Amadeus ac
 ```bash
 pnpm stub:amadeus &                                      # 127.0.0.1:4900
 pnpm --filter @velexis/platform-backend dev:seed         # platform admin, test Amadeus account, 40 test offices
-pnpm --filter @velexis/ota-backend dev:seed              # demo OTA tenant_demo with three test API keys
+pnpm --filter @velexis/ota-backend dev:seed              # demo OTA tenant_demo and second OTA tenant_demoown, four test API keys
 ```
 
 | Seed | Creates (each only if missing) | Prints once |
 |---|---|---|
 | Platform `dev:seed` (`repo:platform/backend/src/dev/dev-seed.command.ts`) | The platform admin `admin@example.com` (active, verified, `is_platform_admin`, TOTP MFA on); the Velexis **test** Amadeus account pointing at the stub, verified to `active`; forty test offices `DEV1A0001` to `DEV1A0040` in the [[office-pool]] (`available`) | The admin's **random** password and its `otpauth://` TOTP set-up URI |
-| OTA `dev:seed` (`repo:ota/backend/src/dev/dev-seed.command.ts`) | The tenant `demo` ("Demo Travel", plan `early_access`, EUR, storefront `test`), its sub-domain `demo.ota.example.com`, an Amadeus test connection on one test office, a Stripe test connection in Velexis mode, then `tenant_demo` provisioned by the worker's real provisioning code and set `active` | `Publishable test key`, `Secret test key` (scope `storefront`) and `Console automation test key` (`console:automation` with `amadeus:read`) |
+| OTA `dev:seed` (`repo:ota/backend/src/dev/dev-seed.command.ts`) | The tenant `demo` ("Demo Travel", plan `early_access`, EUR, storefront `test`), its sub-domain `demo.ota.example.com`, an Amadeus test connection on one test office, a Stripe test connection in Velexis mode, then `tenant_demo` provisioned by the worker's real provisioning code and set `active`. Since X-055 also a second test OTA, `demoown` ("Demo Own Amadeus Travel", `tenant_demoown`, no storefront host, no payment connection), whose Amadeus test connection is its own credentials on the stub (`tenant`, `active`, office `OWN1A0001`), provisioned and set `active` the same way | `Publishable test key`, `Secret test key` (scope `storefront`) and `Console automation test key` (`console:automation` with `amadeus:read`) of the demo OTA, and `Own Amadeus console automation test key` (the same scopes) of the second OTA, which the SDK's smoke test makes its raw Amadeus reads with |
 
 ```warning
-Copy what the seeds print **when they print it**. The admin password, the TOTP URI and the three keys are stored
+Copy what the seeds print **when they print it**. The admin password, the TOTP URI and the four keys are stored
 nowhere in clear and a second run prints nothing (it changes nothing either). Lost the admin's password or
 authenticator? Run `pnpm --filter @velexis/platform-backend exec node dist/cli.js admin:reset-mfa admin@example.com`
 (MFA off, sessions revoked), reset the password with the portal's "Forgot password", sign in to the portal, turn MFA on

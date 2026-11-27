@@ -30,7 +30,7 @@
     "url": "http://localhost:4000",
     "port": 4000,
     "command": "pnpm --filter @velexis/ota-backend dev",
-    "notes": "Builds once, then runs tsc --watch, the API (dist/main.js, 127.0.0.1:4000) and the worker (dist/worker.js, health 127.0.0.1:4001). Needs PostgreSQL, Redis, Mailpit, the Amadeus stub (pnpm stub:amadeus, :4900), the key files of pnpm dev:keys, ota/backend/.env.local from .env.example, and the platform dev:seed followed by this package's dev:seed (demo OTA tenant_demo, three test keys printed once). Try: curl -H 'X-Api-Key: pk_test_…' http://localhost:4000/v1/storefront."
+    "notes": "Builds once, then runs tsc --watch, the API (dist/main.js, 127.0.0.1:4000) and the worker (dist/worker.js, health 127.0.0.1:4001). Needs PostgreSQL, Redis, Mailpit, the Amadeus stub (pnpm stub:amadeus, :4900), the key files of pnpm dev:keys, ota/backend/.env.local from .env.example, and the platform dev:seed followed by this package's dev:seed (demo OTA tenant_demo and, since X-055, the second test OTA tenant_demoown on its own Amadeus test connection; four test keys printed once). Try: curl -H 'X-Api-Key: pk_test_…' http://localhost:4000/v1/storefront."
   },
   "production": {
     "host": "api.ota.example.com (and /api/* on every storefront host, e.g. demo.ota.example.com)"

@@ -1404,7 +1404,7 @@
     "term": "Dev seed",
     "aliases": ["admin@example.com", "dev:seed"],
     "category": "engineering",
-    "definition": "The development-only `dev:seed` CLI commands of both backends, refused in production. The platform's creates the admin `admin@example.com` (random password and TOTP URI printed once), the Velexis test Amadeus account and 40 test offices `DEV1A0001` to `DEV1A0040`; the OTA backend's creates the [[demo-ota]] with three test API keys. The e2e stack runs both and discards their output.",
+    "definition": "The development-only `dev:seed` CLI commands of both backends, refused in production. The platform's creates the admin `admin@example.com` (random password and TOTP URI printed once), the Velexis test Amadeus account and 40 test offices `DEV1A0001` to `DEV1A0040`; the OTA backend's creates the [[demo-ota]] with three test API keys and, since X-055, a second test OTA `demoown` on its own Amadeus test connection with one console automation key. The e2e stack runs both and discards their output.",
     "apps": ["platform-api", "ota-api", "platform-admin", "packages"],
     "related": [
       "demo-ota",
@@ -3084,7 +3084,7 @@
     "term": "Plan lint",
     "aliases": ["plan-lint.mjs", "pnpm plan:lint", "done marker"],
     "category": "process",
-    "definition": "The linter and progress report of the agent task plans (`tools/plan-lint/plan-lint.mjs`, `pnpm plan:lint`): it checks task blocks, their fields, dependencies and the done marker ` ✅`, and `--remaining` lists the ready tasks of the lowest open milestone (ADR-0025).",
+    "definition": "The linter and progress report of the agent task plans (`tools/plan-lint/plan-lint.mjs`, `pnpm plan:lint`): it checks task blocks, their fields, dependencies and the done marker ` ✅`, and `--remaining` lists the ready tasks of the lowest open milestone, then, while M7 has open tasks and is not that milestone, a second block with M7's ready and waiting tasks (X-053; ADR-0025).",
     "apps": ["packages"],
     "related": ["check-package-json", "ci-workflow", "repository-guards"],
     "see": ["tools/plan-lint/plan-lint.mjs", "docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md"],

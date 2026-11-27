@@ -13,7 +13,7 @@
       "id": "ready",
       "label": "Ready: every dependency done",
       "kind": "normal",
-      "detail": "Shown by `--remaining` for the lowest open milestone, critical path first."
+      "detail": "Shown by `--remaining` for the lowest open milestone, critical path first, and in a second block for M7 while it is not that milestone (X-053)."
     },
     {
       "id": "inprogress",

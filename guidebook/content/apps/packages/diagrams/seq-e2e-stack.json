@@ -65,7 +65,7 @@
     {
       "from": "stack",
       "to": "apps",
-      "label": "E2E_WITH_OTA=1: platform dev:seed, OTA dev:seed (demo OTA tenant_demo); stdout discarded",
+      "label": "E2E_WITH_OTA=1: platform dev:seed, OTA dev:seed (demo OTA tenant_demo and, since X-055, tenant_demoown); stdout discarded",
       "kind": "call"
     },
     {
