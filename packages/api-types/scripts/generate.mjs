@@ -117,10 +117,11 @@ function optionalBoolean(operation, key, where) {
 }
 
 /**
- * The values of `x-milestone` (ota/docs/api-changes.md §1): the shared milestones M0–M6 of the MVP, or `deferred`
- * for an operation the MVP does not build (its route answers `501 NOT_IMPLEMENTED`).
+ * The values of `x-milestone` (ota/docs/api-changes.md §1): the shared milestones M0–M6 of the MVP; M7, the
+ * multi-supplier launch scope; M8, the release after the launch; or `deferred` for an operation the MVP does not
+ * build (its route answers `501 NOT_IMPLEMENTED`).
  */
-const MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "deferred"];
+const MILESTONES = ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "deferred"];
 
 /**
  * The fields of an index entry, in output order: the property name, its TypeScript type in `ApiOperation`, its

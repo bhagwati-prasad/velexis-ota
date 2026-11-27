@@ -48,10 +48,11 @@ const DOCUMENT_TIMEOUT_MS = 60_000;
 const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"] as const;
 const STATE_CHANGING = new Set(["post", "put", "patch", "delete"]);
 /**
- * The values of `x-milestone` the OTA document uses (api-changes §1: `M0` to `M6`; health is M0, the M5 webhooks M5,
- * OBE-099's review closure M6).
+ * The values of `x-milestone` (api-changes §1): `M0` to `M6` of the MVP (health is M0, the M5 webhooks M5, OBE-099's
+ * review closure M6), `M7` and `M8` of the multi-supplier work (X-054: M7 is the launch scope, M8 the release after
+ * the launch), or `deferred`.
  */
-const MILESTONE_PATTERN = /^(M[0-6]|deferred)$/;
+const MILESTONE_PATTERN = /^(M[0-8]|deferred)$/;
 
 type Milestone = "M2" | "M3" | "M4" | "deferred";
 
@@ -310,7 +311,7 @@ function responseExample(operationId: string, status: string): unknown {
 }
 
 describe("x-milestone (scope §3)", () => {
-  it("gives every operation of the document an x-milestone, M0 … M6 or deferred, and the index the same [OBE-009 AC2]", () => {
+  it("gives every operation of the document an x-milestone, M0 … M8 or deferred, and the index the same [OBE-009 AC2]", () => {
     expect(workingOperations.length).toBeGreaterThanOrEqual(96);
     for (const { operationId, spec } of workingOperations) {
       expect([operationId, spec["x-milestone"]]).toEqual([

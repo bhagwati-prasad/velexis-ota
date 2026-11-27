@@ -16,7 +16,7 @@ Related: [ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) (workflow
 | `x-edge-only: true` | operation | Only the storefront edge may call it; keys and the service key get `403 SCOPE_NOT_ALLOWED` |
 | `x-internal: true` | operation, security scheme | Not for SDK users; excluded from the SDK and the public reference ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md)) |
 | `x-sdk-exclude: true` | operation | Public, but used as a plain URL (images, downloads), so no SDK method; the SDK parity check skips it |
-| `x-milestone` | operation | `M2`…`M6`, or `deferred` (route answers `501 NOT_IMPLEMENTED`); drives the route-parity allow-list |
+| `x-milestone` | operation | `M0`…`M6` (the MVP), `M7` (the multi-supplier launch scope) and `M8` (the release after the launch), or `deferred` (route answers `501 NOT_IMPLEMENTED`); drives the route-parity allow-list |
 | `x-permission` | console operation | The `StaffPermission` the operation needs, read by the scope guard |
 
 ## 2. (a) Cookie session mode for the hosted storefront

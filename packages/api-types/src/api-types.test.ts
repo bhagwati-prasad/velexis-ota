@@ -387,6 +387,8 @@ const MVP_EXTENSIONS_OTA = smallDocument("Scratch OTA with the MVP extensions", 
       "x-permission: bookings:read",
     ],
   },
+  { path: "/v1/supplier-things", lines: ["operationId: listSupplierThings", "x-milestone: M7"] },
+  { path: "/v1/own-supplier-things", lines: ["operationId: listOwnSupplierThings", "x-milestone: M8"] },
   { path: "/v1/plain", lines: ["operationId: plainThing"] },
 ]);
 
@@ -428,9 +430,9 @@ const BROKEN_OPERATIONS = [
     error: 'ota GET /v1/broken: "x-sdk-method" must be a non-empty string',
   },
   {
-    problem: "an x-milestone outside M0 … M6 and deferred",
-    lines: ["operationId: brokenThing", "x-milestone: M7"],
-    error: 'ota GET /v1/broken: "x-milestone" must be one of M0, M1, M2, M3, M4, M5, M6, deferred',
+    problem: "an x-milestone outside M0 … M8 and deferred",
+    lines: ["operationId: brokenThing", "x-milestone: M9"],
+    error: 'ota GET /v1/broken: "x-milestone" must be one of M0, M1, M2, M3, M4, M5, M6, M7, M8, deferred',
   },
   {
     problem: "an x-milestone that is not a string",
@@ -662,11 +664,14 @@ describe("contracts:generate (scripts/generate.mjs)", () => {
         edgeOnly: false,
         permission: "bookings:read",
       },
+      // M7, the multi-supplier launch scope, and M8, the release after the launch (X-054).
+      { operationId: "listSupplierThings", milestone: "M7", edgeOnly: false, permission: null },
+      { operationId: "listOwnSupplierThings", milestone: "M8", edgeOnly: false, permission: null },
       { operationId: "plainThing", milestone: null, edgeOnly: false, permission: null },
     ]);
     // The interface types the milestone as the closed list, so a misspelt value does not compile.
     expect(files["operations.ts"]).toContain(
-      '  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "deferred" | null;',
+      '  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "deferred" | null;',
     );
     expect(files["operations.ts"]).toContain("  readonly edgeOnly: boolean;");
     expect(files["operations.ts"]).toContain("  readonly permission: string | null;");

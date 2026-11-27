@@ -33,7 +33,7 @@ export interface ApiOperation<TId extends string = string> {
   /** `x-internal: true`: webhook receivers and internal endpoints, never part of the SDK (ADR-0006). */
   readonly internal: boolean;
   /** `x-milestone`: the MVP milestone that implements it, or `deferred` (route-parity allow-list, `501`); `null` when the operation has none. */
-  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "deferred" | null;
+  readonly milestone: "M0" | "M1" | "M2" | "M3" | "M4" | "M5" | "M6" | "M7" | "M8" | "deferred" | null;
   /** `x-edge-only: true`: only the hosted storefront edge may call it; keys get `403 SCOPE_NOT_ALLOWED`. */
   readonly edgeOnly: boolean;
   /** `x-permission`: the `StaffPermission` a console operation needs, or `null` when the operation has none. */

@@ -167,9 +167,9 @@ info:
     - `x-sdk-exclude: true` (operation): public, but used as a plain URL (images, downloads), so it has no SDK method;
     the SDK parity check skips it.
 
-    - `x-milestone` (operation): the MVP milestone that implements it, `M0` to `M6`, or `deferred`. Until its handler
-    exists, and for good when it is `deferred`, the route answers `501 NOT_IMPLEMENTED` with `details.milestone` (the
-    route-parity allow-list).
+    - `x-milestone` (operation): the milestone that implements it, `M0` to `M6` of the MVP, `M7` (the multi-supplier
+    launch scope), `M8` (the release after the launch), or `deferred`. Until its handler exists, and for good when it
+    is `deferred`, the route answers `501 NOT_IMPLEMENTED` with `details.milestone` (the route-parity allow-list).
 
     - `x-permission` (console operation): the `StaffPermission` the operation needs; a staff member or key without it
     gets `403 FORBIDDEN` (`details.requiredPermission`). Every console operation has one; `none` marks the four
