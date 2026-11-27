@@ -1,0 +1,18141 @@
+# Shopping V7
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.0.1
+info:
+  title: ''
+  description: ''
+  version: 1.0.0
+paths:
+  /json/shoppingV7:
+    post:
+      summary: Shopping V7
+      deprecated: false
+      description: >
+        ##  Function
+
+
+        Through Shopping API, users can check flight availability and its price
+        by using relevant parameters. Shopping service supports one-way trip,
+        round trip and open jaw (2 journeys max).
+
+
+        ##  Versioning
+
+
+        |Version|Sandbox Invoking Address|Update|
+
+        |:----|:----|:----|
+
+        |Shopping|[https://api.pkfare.com/shopping](https://api.pkfare.com/shopping)|   
+        |
+
+        |Shopping_V2|[https://api.pkfare.com/shoppingV2](https://api.pkfare.com/shoppingV2)|Add
+        BaggageMap and MiniRuleMap, only for reference.|
+
+        |Shopping_V3|[https://api.pkfare.com/shoppingV](https://api.pkfare.com/shoppingV2)3|Support
+        infant（without seat) tickets.|
+
+        |Shopping_V4|[https://api.pkfare.com/shoppingV](https://api.pkfare.com/shoppingV2)4|Add
+        solutionId to enhance tracebility and visibility |
+
+        |Shopping_V4(json format)|https://api.pkfare.com/json/shoppingV4|Add
+        solutionId to enhance tracebility and visibility; Support json formatted
+        requesting structure; Support journey-wise airline search ; Support
+        multiple airlines search |
+
+        |Shopping_V7(json format)|https://api.pkfare.com/json/shoppingV7|Support
+        virtual interlining content on one-way journeys |
+
+
+        *Below is the most updated version*
+
+
+
+
+
+
+
+        ##  Error Code List
+
+
+        |erroCode|erroMsg|Description|
+
+        |:----|:----|:----|
+
+        |0|ok|Request has been processed successfully.|
+
+        |S001|System error.|System error.|
+
+        |B002|Partner is not exists.|PartnerID does not exist.|
+
+        |B003|Illegal sign.|Illegal sign. Please check your signature.|
+
+        |P001|XXX is illegal.|The field of XXX is illegal.|
+
+        |P002|XXX is missing.|The field of XXX is missing.|
+
+        |P004|The maximum number of passengers with seat is 9.|Wrong parameter.
+        The maximum number of passengers with seat is 9.|
+
+        |P005|There should be at least one adult.|Wrong parameter. There should
+        be at least one adult.|
+
+        |P009|The number of infant passengers can not exceed the number of adult
+        passengers.|Wrong parameter. The number of infant passengers can not
+        exceed the number of adult passengers.|
+
+        |B013|Interface is limited, please contact the system administrator.|The
+        route that you request is limited, please contact system administrator.|
+
+        |B014|Shopping failed.|Shopping failed caused by other reasons.|
+
+        |B024|Time-out, please try later.|Time-out. You can try the second
+        searching after a few seconds.|
+
+        |B034|Shopping interface is offline.|Shopping service is limited.|
+
+        |B035|Concurrency limited. Please contact PKFARE API support team for
+        assistant.|Concurrent users control. Please contact PKFARE API support
+        for assistant.|
+
+        |B038|Departure date must be today to a year.|Wrong parameter. Departure
+        date must be today to a year.|
+
+        |B039|Can't find the related data of XXX.|Wrong parameter. Can't find
+        the related data of XXX, like illegal city/country/area/airline.|
+
+        |B046|Interface is limited, the routing is offlined by PKFARE.|Look to
+        book control. If you need this routing, please contact PKFARE API for
+        assistant.|
+
+        |B059|Shopping failed from upstream.|Shopping failed, shopping error
+        from upstream. Please contact PKFARE API support.|
+
+        |B060|Interface is limited, please contact PKFARE.|Interface is limited,
+        due to restriction rules, please contact PKFARE API support.|
+
+        |B009|Supplier is offline|Supplier is not at working time, please
+        contact PKFARE API support.|
+
+        |B066|Only 2 journeys can be supported, please check your
+        itinerary.|System support maximum 2 journeys shopping at this moment.|
+      tags:
+        - API Reference/APIs with all versions/Shopping
+      parameters:
+        - name: Accept-Encoding
+          in: header
+          description: ''
+          required: false
+          example: gzip
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                Authentication:
+                  type: object
+                  properties:
+                    partnerId:
+                      type: string
+                      description: Partner Id
+                    sign:
+                      type: string
+                      description: Signature
+                  x-apifox-orders:
+                    - partnerId
+                    - sign
+                  required:
+                    - partnerId
+                    - sign
+                  x-apifox-ignore-properties: []
+                search:
+                  type: object
+                  properties:
+                    adults:
+                      type: integer
+                      description: Number of adult passenger
+                    children:
+                      type: integer
+                      description: Number of child [age 2-12/14] passenger
+                    infants:
+                      type: integer
+                      description: Number of infant [age 0-2, no seat] passenger
+                    nonstop:
+                      type: integer
+                      description: Only search for non-stop flight[0= No; 1=Yes]
+                    airline:
+                      type: string
+                      description: >-
+                        Search for specific airline; Support multiples airline
+                        (each seperated by comma) ; IATA airlines code
+                    solutions:
+                      type: integer
+                      description: Suggested quantity of returned solutions
+                    searchAirLegs:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          cabinClass:
+                            type: string
+                            description: >-
+                              Cabin class
+                              [Economy；PremiumEconomy；Business；First] default :
+                              Economy
+                            x-apifox-mock: '@string("Business")'
+                          destination:
+                            type: string
+                            description: Destination [IATA airport/city code]
+                          origin:
+                            type: string
+                            description: Origin [IATA airport/city code ]
+                          departureDate:
+                            type: string
+                            description: Departure date [yyyy-MM-dd]
+                          airline:
+                            type: string
+                            description: >-
+                              Airline for this journey only. Only support one
+                              airline. Enable to specify different airlines for
+                              different journeys. Will report error If both
+                              airline under search and airline under
+                              searchAirlegs have values.
+                        x-apifox-orders:
+                          - cabinClass
+                          - destination
+                          - origin
+                          - departureDate
+                          - airline
+                        required:
+                          - destination
+                          - origin
+                          - departureDate
+                        x-apifox-ignore-properties: []
+                  required:
+                    - adults
+                    - searchAirLegs
+                  x-apifox-orders:
+                    - adults
+                    - children
+                    - infants
+                    - nonstop
+                    - airline
+                    - solutions
+                    - searchAirLegs
+                  x-apifox-ignore-properties: []
+              required:
+                - Authentication
+                - search
+              x-apifox-orders:
+                - 01HV31DVKDM71QBVW07EP7D7VT
+                - search
+              x-apifox-refs:
+                01HV31DVKDM71QBVW07EP7D7VT:
+                  $ref: '#/components/schemas/Authentication'
+              x-apifox-ignore-properties:
+                - Authentication
+            example:
+              authentication:
+                partnerId: ''
+                sign: ''
+              search:
+                adults: 1
+                children: 0
+                infants: 0
+                nonstop: 0
+                airline: ''
+                solutions: 0
+                searchAirLegs:
+                  - cabinClass: ''
+                    departureDate: '2024-12-15'
+                    destination: BKK
+                    origin: HKG
+                    airline: SQ
+                  - cabinClass: ''
+                    departureDate: '2024-12-17'
+                    destination: HKG
+                    origin: BKK
+                    airline: SQ
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  errorCode:
+                    type: string
+                    description: Error code, refer to error code list
+                  errorMsg:
+                    type: string
+                    description: Error message
+                  data:
+                    type: object
+                    properties:
+                      searchKey:
+                        type: string
+                        description: Unique identification
+                      shoppingKey:
+                        type: string
+                        description: Unique identification
+                      solutions:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            solutionId:
+                              type: string
+                              description: Unique identification
+                            solutionKey:
+                              type: string
+                              description: Unique identification
+                            category:
+                              type: array
+                              items:
+                                type: string
+                                description: >-
+                                  Product type. e.g. VI[means virtual
+                                  interlining]
+                              description: Product type, e.g. VI[means virtual interlining]
+                            fareType:
+                              type: string
+                              description: Fare type [ PUBLIC or PRIVATE]
+                            currency:
+                              type: string
+                              description: currency
+                            adtFare:
+                              type: number
+                              description: adult fare
+                              default: 0
+                            adtTax:
+                              type: number
+                              description: adult tax
+                              default: 0
+                            chdFare:
+                              type: number
+                              description: children [age 2-12/14] fare
+                              default: 0
+                            chdTax:
+                              type: number
+                              description: children [age 2-12/14] tax
+                              default: 0
+                            infFare:
+                              type: number
+                              description: infant [age 0-2, no seat] fare
+                              default: 0
+                            infTax:
+                              type: number
+                              description: infant [age 0-2, no seat] tax
+                              default: 0
+                            qCharge:
+                              type: number
+                              description: >-
+                                Q charge, bunker adjustment surcharge, for
+                                reference only
+                              default: 0
+                            tktFee:
+                              type: number
+                              default: 0
+                            baggageMap:
+                              type: object
+                              properties:
+                                ADT:
+                                  type: array
+                                  items:
+                                    type: object
+                                    properties:
+                                      segmentIndexList:
+                                        type: array
+                                        items:
+                                          type: integer
+                                        description: >-
+                                          segment index list for baggage. Index
+                                          begins with '1'. If 1st segment has same
+                                          baggage allowance with 3rd segment,such
+                                          as [1,3]
+                                        nullable: true
+                                      baggageAmount:
+                                        type: string
+                                        description: >-
+                                          ree baggage amount allowance. '1PC' for
+                                          1 piece
+                                        nullable: true
+                                      baggageWeight:
+                                        type: string
+                                        description: free baggage weight allowance
+                                        nullable: true
+                                      carryOnAmount:
+                                        type: string
+                                        description: >-
+                                          free carry-on baggage amount allowance.
+                                          '1PC' for 1 piece
+                                        nullable: true
+                                      carryOnWeight:
+                                        type: string
+                                        description: free carry-on baggage weight allowance
+                                        nullable: true
+                                      carryOnSize:
+                                        type: array
+                                        items:
+                                          type: string
+                                        description: >-
+                                          Carry-on Baggage Dimensions [Length,
+                                          Width, Height] in centimeters
+                                        nullable: true
+                                    x-apifox-orders:
+                                      - segmentIndexList
+                                      - baggageAmount
+                                      - baggageWeight
+                                      - carryOnAmount
+                                      - carryOnWeight
+                                      - carryOnSize
+                                    x-apifox-ignore-properties: []
+                                  description: ' Including ''ADT''、''CHD'' and ''INF''. If the request does not include children or infants, ''CHD'' or ''INF'' would be NULL.'
+                              description: >-
+                                baggage rule. For reference only. Including
+                                'ADT'、'CHD' and 'INF'. If the request does not
+                                include children or infants, 'CHD' or 'INF'
+                                would be NULL.
+                              x-apifox-orders:
+                                - ADT
+                              x-apifox-ignore-properties: []
+                              nullable: true
+                            miniRuleMap:
+                              type: object
+                              properties:
+                                ADT:
+                                  type: array
+                                  items:
+                                    type: object
+                                    properties:
+                                      segmentIndex:
+                                        type: array
+                                        items:
+                                          type: integer
+                                        description: >-
+                                          segment index list for penalty. Index
+                                          begins with '1'. If 1st segment has same
+                                          penalty rule with 3rd segment, such as
+                                          [1,3]
+                                      miniRules:
+                                        type: array
+                                        items:
+                                          type: object
+                                          properties:
+                                            penaltyType:
+                                              type: integer
+                                              description: >-
+                                                penalty type. [0 - refund, 1 - noShow
+                                                refund, 2 - change, 3 - noShow change]
+                                            isPermited:
+                                              type: integer
+                                              description: "allow refund/change or not. [0 - not allow, 1 - allow, 2 - unknown]\t"
+                                            when:
+                                              type: integer
+                                              description: >-
+                                                appropriate situation. [0 - Both
+                                                Outbound and Inbound are not used, 1-
+                                                Outbound Flight used, 2 - all Situation]
+                                            noShowTime:
+                                              type: string
+                                              description: >-
+                                                noShow definition. Apply with
+                                                'noShowTimeUnit'
+                                            noShowTimeUnit:
+                                              type: string
+                                              description: >-
+                                                noShow Unit. Apply with 'noShowTime'. [H
+                                                - hour, M - minute]
+                                            amount:
+                                              type: number
+                                              description: penalty
+                                            currencyCode:
+                                              type: string
+                                              description: penalty currency
+                                            percent:
+                                              type: number
+                                              description: >-
+                                                penalty percentage. Apply with
+                                                'baseType'. Penalty and penalty
+                                                percentage would not go into effect at
+                                                the same. Please take the strict one.
+                                                Unit: %
+                                            baseType:
+                                              type: integer
+                                              description: >-
+                                                apply with 'percent'. Multiply
+                                                corresponding value of 'baseType' by
+                                                'percent' would be the penalty. [0 -
+                                                fare, 1 - fare+tax+ticketingFee, 2 -
+                                                cabin basic fare]
+                                          required:
+                                            - when
+                                          x-apifox-orders:
+                                            - penaltyType
+                                            - isPermited
+                                            - when
+                                            - noShowTime
+                                            - noShowTimeUnit
+                                            - amount
+                                            - currencyCode
+                                            - percent
+                                            - baseType
+                                          x-apifox-ignore-properties: []
+                                    required:
+                                      - segmentIndex
+                                      - miniRules
+                                    x-apifox-orders:
+                                      - segmentIndex
+                                      - miniRules
+                                    x-apifox-ignore-properties: []
+                                  description: '''ADT''、''CHD'' OR ''INF'''
+                              required:
+                                - ADT
+                              x-apifox-orders:
+                                - ADT
+                              description: >-
+                                penalty rule. For partial reference, please find
+                                precise penalty rule on Penalty API.
+                              x-apifox-ignore-properties: []
+                              nullable: true
+                            platformServiceFee:
+                              type: number
+                              description: platform service fee, defaults to 0
+                              default: 0
+                            comments:
+                              type: string
+                              description: comments
+                              nullable: true
+                            journeys:
+                              type: object
+                              properties:
+                                journey_0:
+                                  type: array
+                                  items:
+                                    type: string
+                                  description: outboundtrip
+                                journey_1:
+                                  type: array
+                                  items:
+                                    type: string
+                                  description: inbound trip
+                                  nullable: true
+                              description: >-
+                                journey_0 outboundtrip, journey_1 inbound trip,
+                                refer to flightId
+                              required:
+                                - journey_0
+                              x-apifox-orders:
+                                - journey_0
+                                - journey_1
+                              x-apifox-ignore-properties: []
+                              nullable: true
+                            fareRule:
+                              type: object
+                              properties: {}
+                              description: supplier rule, not supported yet
+                              x-apifox-orders: []
+                              x-apifox-ignore-properties: []
+                              nullable: true
+                            rule:
+                              type: object
+                              properties: {}
+                              description: PKFARE API rule, not supported yet
+                              x-apifox-orders: []
+                              x-apifox-ignore-properties: []
+                              nullable: true
+                            platingCarrier:
+                              type: string
+                              description: ticketing airline
+                            merchantFee:
+                              type: number
+                              description: payment transaction fee
+                              default: 0
+                              nullable: true
+                            afterSaleRule:
+                              type: object
+                              properties: {}
+                              description: not supported yet.
+                              x-apifox-orders: []
+                              x-apifox-ignore-properties: []
+                              nullable: true
+                            adults:
+                              type: integer
+                              description: Number of adult passenger
+                            children:
+                              type: integer
+                              description: Number of child [age 2-12/14] passenger
+                            infants:
+                              type: integer
+                              description: Number of infant [age 0-2, no seat] passenger
+                          required:
+                            - solutionId
+                            - solutionKey
+                            - fareType
+                            - currency
+                            - adtFare
+                            - adtTax
+                            - rule
+                          x-apifox-orders:
+                            - solutionId
+                            - solutionKey
+                            - category
+                            - fareType
+                            - currency
+                            - adtFare
+                            - adtTax
+                            - chdFare
+                            - chdTax
+                            - infFare
+                            - infTax
+                            - qCharge
+                            - tktFee
+                            - baggageMap
+                            - miniRuleMap
+                            - platformServiceFee
+                            - comments
+                            - journeys
+                            - fareRule
+                            - rule
+                            - platingCarrier
+                            - merchantFee
+                            - afterSaleRule
+                            - adults
+                            - children
+                            - infants
+                          x-apifox-ignore-properties: []
+                      flights:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            flightId:
+                              type: string
+                              description: flight ID, unique identification
+                            journeyTime:
+                              type: integer
+                              description: 'journey time, unit: minute'
+                            transferCount:
+                              type: integer
+                              description: transfer times
+                            lastTktTime:
+                              type: string
+                              description: last ticketing time (GMT)
+                            segmengtIds:
+                              type: array
+                              items:
+                                type: string
+                                description: ' refer to segmentId (please note the segmengtIds is a typo due to history edition)'
+                              description: >-
+                                Including segment [segmentId] array, refer to
+                                segmentId
+                            selfTransferSegmentIds:
+                              type: array
+                              items:
+                                type: string
+                              description: >-
+                                self transfer， Identifies the flight segments
+                                where passengers must self-transfer upon arrival
+                                at the airport?
+                          required:
+                            - flightId
+                            - segmengtIds
+                          x-apifox-orders:
+                            - flightId
+                            - journeyTime
+                            - transferCount
+                            - lastTktTime
+                            - segmengtIds
+                            - selfTransferSegmentIds
+                          x-apifox-ignore-properties: []
+                      segments:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            segmentId:
+                              type: string
+                              description: Segment ID, unique identification
+                            airline:
+                              type: string
+                              description: Airline code
+                            flightNum:
+                              type: string
+                              description: Flight number
+                            equipment:
+                              type: string
+                              description: Equipment
+                            cabinClass:
+                              type: string
+                              description: >-
+                                Cabin class including Economy, PremiumEconomy,
+                                Business, First
+                            bookingCode:
+                              type: string
+                              description: Cabin code
+                            availabilityCount:
+                              type: integer
+                              description: Available seats, for reference only
+                            departure:
+                              type: string
+                              description: Departure airport
+                            arrival:
+                              type: string
+                              description: Arrival airport
+                            departureTerminal:
+                              type: string
+                              description: Departure airport terminal
+                            arrivalTerminal:
+                              type: string
+                              description: Arrival airport terminal
+                              nullable: true
+                            departureDate:
+                              type: integer
+                              description: Departure date [unix time] ，deprecated
+                              format: long
+                            arrivalDate:
+                              type: integer
+                              description: Arrival date [unix time]deprecated
+                              format: long
+                            flightTime:
+                              type: integer
+                              description: 'Flight time, unit: minute'
+                            stayTime:
+                              type: integer
+                              description: 'Stay time, valid with ''stopover'' , unit: minute'
+                              nullable: true
+                            codeShare:
+                              type: string
+                              description: 'Code share or not: [Y-yes, N-no]'
+                            opFltNo:
+                              type: string
+                              description: Flight number of operated carrier
+                              nullable: true
+                            opFltAirline:
+                              type: string
+                              description: Operated carrier
+                            stopover:
+                              type: string
+                              description: Stopover airport
+                            strDepartureDate:
+                              type: string
+                              description: Departure date[yyyy-MM-dd], local time
+                            strDepartureTime:
+                              type: string
+                              description: Departure time[HH:mm], local time
+                            strArrivalDate:
+                              type: string
+                              description: Arrival date[yyyy-MM-dd], local time
+                            strArrivalTime:
+                              type: string
+                              description: Arrival time[HH:mm], local time
+                            fareBasis:
+                              type: string
+                              description: Fare basis code
+                          required:
+                            - segmentId
+                            - airline
+                            - flightNum
+                            - departure
+                            - arrival
+                            - strDepartureDate
+                            - strDepartureTime
+                            - strArrivalDate
+                            - strArrivalTime
+                          x-apifox-orders:
+                            - segmentId
+                            - airline
+                            - flightNum
+                            - equipment
+                            - cabinClass
+                            - bookingCode
+                            - availabilityCount
+                            - departure
+                            - arrival
+                            - departureTerminal
+                            - arrivalTerminal
+                            - departureDate
+                            - arrivalDate
+                            - flightTime
+                            - stayTime
+                            - codeShare
+                            - opFltNo
+                            - opFltAirline
+                            - stopover
+                            - strDepartureDate
+                            - strDepartureTime
+                            - strArrivalDate
+                            - strArrivalTime
+                            - fareBasis
+                          x-apifox-ignore-properties: []
+                    description: >-
+                      Only if the errorCode returns "0", returned data would not
+                      be null. Data is in JSON format, which contains three
+                      collection objects: solutions , flights, segments
+                    required:
+                      - searchKey
+                      - shoppingKey
+                      - solutions
+                      - flights
+                      - segments
+                    x-apifox-orders:
+                      - searchKey
+                      - shoppingKey
+                      - solutions
+                      - flights
+                      - segments
+                    x-apifox-ignore-properties: []
+                required:
+                  - errorCode
+                  - errorMsg
+                  - data
+                x-apifox-orders:
+                  - errorCode
+                  - errorMsg
+                  - data
+                x-apifox-ignore-properties: []
+              examples:
+                '1':
+                  summary: Success(One Way Journey)
+                  value:
+                    errorCode: '0'
+                    errorMsg: ok
+                    data:
+                      searchKey: HKGBKK20241215Y1000
+                      shoppingKey: f492cad7ce655916d3a19eb3a21bd478
+                      solutions:
+                        - solutionKey: cadce3d7a693476e02a0e841d586fbcb
+                          solutionId: >-
+                            DMHkxtUMupBvCYeSAZKvI2XPSDdKRK2kK27eMKAEE+F2gdW8n4ZhopICv6eJNS40/IpYhzhI2Tvo2z04wU/8nNwO624PNzeJpVTeq4Ks9ho0cymekKGhBTVe1BQzINIhLz6wpYJ/0VxsriI2fPlN32S6ATG1+ulFve4Lww4Yk3K7Oe5FK5yrrSQurNPrzLnsrZM5z3qTCDIO3mQyoyEoI/5nfvU/3aZwJC1n7dhk7Bc6TH75vgyNo/RTHzL7ucrncFQE0RlXKZxchLf66Bz1NOiNH/w6EV3gSouSrUu+drJ1NXI1O6qWWYc8kXfcjeOt
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 25.69
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 07177e6e653830b4b2e151f215c8fd19
+                          fareRule: null
+                          rule: null
+                          platingCarrier: VJ
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 75bf2aab7af8644d426561ae6c9d5868
+                          solutionId: >-
+                            FfF+cwPh9c90Wroxd8eaM0jNool2YJhdB/E5AuQMCfim68UQVLx5PcwSTCj2XAIr7GuI2d5Vb4ZEdWHt2BNlUmDbj/fDpPPxjQBXrKdugNnOx80WT4vehJ/aSmPXPEfy3RFNvqrJzVLJL44C05V4R1oroebsduFpYj3iLV/Ito+269zDkbZJj+bT3UIeyZV7aHxgpZnGHLIHtKxpLnrXwcLbrBuonJkKDAbWlS++wdP9ToQGpjgG0DmSQYC88W+uTNJxCH+25pOOtqMOFWgCV6rbIKj9GaNLR08PI5Sw3nNJBz3zzBWC47C8UcKe98bH
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 77.9
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 89d8176b22a019eeb88e2ebe21894dac
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: a3a0b97693ec1f2b0719867d78078bd6
+                          solutionId: >-
+                            FfF+cwPh9c90Wroxd8eaM0jNool2YJhdB/E5AuQMCfim68UQVLx5PcwSTCj2XAIr7GuI2d5Vb4ZEdWHt2BNlUhi6vpugmXLW7UwMS+kNGW8wwzi+7m/OGu7v+5byctgPEpKitxpHYxt6xgDc9HSD+VbEEhvXB8LQe1CgYm5ZSe6uw2zt5uOU/EeRa1UUQa9AZmFdbcNo9Rq5wC2ND+rzQZGGVQu9j99fEPBHrpXRQPVetpZQoZziKIIzbQDtqfgM9Rt04wB7y7bDiPsy0QPl+hPXhIyh6rgJg96imVACA00b4iQ3m5fy+r/LTGQGgtOz
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 77.9
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 05f68a0919c54c8c09dd0c122df79201
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 0fb6b9449bad90aea49e10510b1a007b
+                          solutionId: >-
+                            FfF+cwPh9c90Wroxd8eaM0jNool2YJhdB/E5AuQMCfim68UQVLx5PcwSTCj2XAIr7GuI2d5Vb4ZEdWHt2BNlUqvtxF9Cvnq3mKjDd2uZc0BxWhlZw2w0GukiaJd2Ew5zmrkVYNT/nYIyTWvXt02k/pjyw1BMlesjQlsreP/aZFOQvZB5PRbdghoyLEQOIAmLBVq/bB0odEheNPl66jsSJBXmotpABmWfv6hAFmsWSYcno2OZQuMAbD3LTMuHQ9p1B+cyp4oYJ1jA2VNIJaEsyrjmTxuNnKPxoa1qz3Ur9AnMqdm87/gB6eLm46UYVd6p
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 77.9
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8c24ef2bdf02dbdfab30b230187e9f7d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                          category:
+                            - VI
+                        - solutionKey: ef8efe21ef1252c08ea887d231070efa
+                          solutionId: >-
+                            GYf8g+mpWeBe2yUyJ10oaN76o5zGwhtY0sDNsjRZhFJggV1YR8Ueq+0alryl1oVhwHTkKhBbP44kl4S3fLySbl/SGS5b/+Ygqz5uzqt+Xikjek457GbwNDkWjKhiYiFfqaAHKDrG1EDA79hIBL5VXqEGzg8M+gFuksitQNzmdJbom3YBlR+QGpK0nbDga5MeXmU8EmjimtQh794OntJxIymrj1FNhvDmuht4/jQpMPt+A/SrrvtWnRYIveINIAcRxXGwZNWcaLI07MF2ldokQNlij8uhbYIeGO0a+MPBHz4BUfGiRtYo2277cCQiO9On
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 59.25
+                          adtTax: 66.02
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7c263ec8c719d1bd56e63aba6564171c
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: c5d8d1aae643a6dacfdb00c09ed8c482
+                          solutionId: >-
+                            apfb7v3kcfvrR6rPV8DRznIgjyVP2FG9HrhizjRrYlN7CqhW9DuG0JOxOX9TAivCU/4kTCZ/Ow+/iMDVaZfhxC6S0xdh3+stuN7ViAtb7pHFp3vcNKoGWxcNiU7Jl80IjAAwQseshVQ+qzXMxcQVol3g9DYze9rVGGtINKztkQEEJ8nRgnMH3/eEMtlUWMYXrNGLIW2j+5FBvdkmZdeWv7Dqw90eGiXhRfqYSkGwQhnBz6Rn/SNpmG7mGg7qMubJmZ4OM24QSSziBEiDNq2HCi+qvKEBMMWsg+fMVrETRKkA46nXYnq6e38bsZ3sSWmG
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 57.73
+                          adtTax: 66.02
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 0e1c84af72f3aa971972747f4945f4e0
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                      flights:
+                        - flightId: 8c24ef2bdf02dbdfab30b230187e9f7d
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - aaf28e13d163cc48e56f74216dac0ad3
+                        - flightId: 0e1c84af72f3aa971972747f4945f4e0
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 3cace3735ae26409515418e7a0c4ce4e
+                        - flightId: 07177e6e653830b4b2e151f215c8fd19
+                          journeyTime: 265
+                          transferCount: 1
+                          lastTktTime: null
+                          segmengtIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                            - 7292bd918a99e91c03bb3323c22d99
+                        - flightId: 89d8176b22a019eeb88e2ebe21894dac
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 74a975f21ad0ce3cfc49d11c32c168ab
+                        - flightId: 7c263ec8c719d1bd56e63aba6564171c
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - d6d1d1bf1837694138ea75ad1d1a11b4
+                        - flightId: 05f68a0919c54c8c09dd0c122df79201
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - c0492187a5331780b5d00c3de09713d7
+                      segments:
+                        - segmentId: c0492187a5331780b5d00c3de09713d7
+                          airline: FD
+                          flightNum: '505'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734264600000
+                          arrivalDate: 1734272100000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '20:10'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '22:15'
+                        - segmentId: d6d1d1bf1837694138ea75ad1d1a11b4
+                          airline: UO
+                          flightNum: '702'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: W
+                          availabilityCount: 9
+                          departure: HKG
+                          arrival: BKK
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1734251100000
+                          arrivalDate: 1734258600000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '16:25'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '18:30'
+                        - segmentId: 3cace3735ae26409515418e7a0c4ce4e
+                          airline: UO
+                          flightNum: '700'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: HKG
+                          arrival: BKK
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1734240900000
+                          arrivalDate: 1734248100000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '13:35'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '15:35'
+                        - segmentId: aaf28e13d163cc48e56f74216dac0ad3
+                          airline: FD
+                          flightNum: '509'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734230700000
+                          arrivalDate: 1734238200000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '10:45'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '12:50'
+                        - segmentId: 74a975f21ad0ce3cfc49d11c32c168ab
+                          airline: FD
+                          flightNum: '501'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734244800000
+                          arrivalDate: 1734252000000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '14:40'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '16:40'
+                        - segmentId: 5b6e4e840bb3321ca4ca21c422c99af6
+                          airline: VJ
+                          flightNum: '503'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 4
+                          departure: HKG
+                          arrival: SGN
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734272400000
+                          arrivalDate: 1734279600000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '22:20'
+                          strArrivalDate: '2024-12-16'
+                          strArrivalTime: '00:20'
+                        - segmentId: 7292bd918a99e91c03bb3323c22d99
+                          airline: FD
+                          flightNum: '665'
+                          equipment: A320
+                          cabinClass: ECONOMY
+                          bookingCode: J
+                          availabilityCount: 6
+                          departure: SGN
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734287400000
+                          arrivalDate: 1734291900000
+                          flightTime: 75
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-16'
+                          strDepartureTime: '02:30'
+                          strArrivalDate: '2024-12-16'
+                          strArrivalTime: '03:45'
+                '3':
+                  summary: Success(Round Trip Journey)
+                  value:
+                    errorCode: '0'
+                    errorMsg: ok
+                    data:
+                      searchKey: HKGBKK20241215YBKKHKG20241230Y1000
+                      shoppingKey: ad9d43d0366075e80e6fead02f04b678
+                      solutions:
+                        - solutionKey: 2969fbe2c009c37aa60ba6186ad486a4
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTrw/RYx3+LgO8l1Vh3kManDqMXQqdMlNP1doLc44o0FGDrr3aF00m5klYz8m9AOm1yU3m8KyFagoY887Or+jSJuEz9COuykfzJps7xPXoYALy6nDMfdUCrONj9UM5g68IhfJyNKAhSuGPgBoofGjTj4m+oorO+PZ4te7GWTKBEO7woAqkU5bvNR0nLs37r7ga2N3T9M/2kXqx/pK22SaErLErxwRPr95F2WIsaB2w6eExJfmcCiAtkchyhtTyn1EDU48XU+1NEUhHGsj9Se+/gSFG9gxsawZ0yMKZdA10L93PYf4oipqQpK4MykDRCJxvg==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 61c4b92a477da82490aee92382fb6fc9
+                            journey_1:
+                              - 5fb64796bcffde1c4c76af5971fa7257
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: fced92bb4dbe600b520b62e71b8b4866
+                          solutionId: >-
+                            J/eYLq7KnezyfB0y765kxTyGs+Q8WKbc2LH3jSO9/l60m+4swItuIwtlbxHR7B2Oz1d81WWEUhov3wmW1IfyYpvGEf/IG7nGCeoJzuC2c0jTI2+kFdApqu5lyz/YPmJBYdJ6vQXVqpavmMT2LK6PJL385fSLe+Qmmw/HPDcl2TvuIdp8E5i+C9FAEqyOPtaqdVvrVK5Pij13JN/cOgMMO/HhPW329aF8nM1GBWBj1nHbUef+ivQ3krXI+HQ8g+WLqRliLrC6twODWMgXQ9AF3Vfn+0iSiej6vsxjy73hMmiv//r9SetPobrWavNhjpXowcyDczVE7Ngt40cLjhTeNKJlIDhQXuZPlvVWKt5clifsKVeqhYYWMOZJ4/eepY59ub+oKQmfdaSZB6xUg6y7Dg==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 208.28
+                          adtTax: 116.29
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - ec89101a12c0b3fc3234f88e9bad505a
+                            journey_1:
+                              - d855de07e0347768f9ee439fd535ed8e
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 63cd8fa9752db260aff2faf85ab174f2
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTrw/RYx3+LgO8l1Vh3kManDqMXQqdMlNP1doLc44o0FGDrr3aF00m5klYz8m9AOm1yU3m8KyFagoY887Or+jSJsbeUfKjrf5+d6+1EG66eI3J8+JEGovb2Nc5u5mIY3nOPVbzMiHu31KL++ZJO5JvbtqIHfxVZR+pndnYpoZIIwFXi79kAYwyMc4voEcu/3rALUDn6SGQATV/ocILkleVASwd+doLhBa9y2VZv0CQ1u5gn6IzMBFvewomRiPpMsfSwn4tguK+v8XGi8AJBvoxVsCnS+GZyW1QmxGHcNJ+pVnc87eXX+pDw7vZ4ZCZ4hkiA==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 05e3ab77a8f3f59956b85836b5f7de29
+                            journey_1:
+                              - 1041fde92193865a67548d0c2d35aa2d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: eaa27d7abb2a7edc9881502cccb82c2e
+                          solutionId: >-
+                            OIeXjCDTHU3fUjSjYWOkAiZe3j/mSguP8vn1TsRJVWhkYOk6f716pzG91JH0Bw1eBPYfwO5j/DxTt9f/9Yg2JVs3falMkthtLWLalO/snveJ2SnhZmjIPRXxbCQmCpVo0nfiiROFgh9eYqUu6tQYHf60Evaap10bfByCfukiv9/cLHPeqpyYgWXLWoHZcY2paIDygE3FT/4eQQkIBDKZbIVvGkXAJTllTMnYZOhhx+ldkyTOFJCkhoyRnwNqAf6NZazmCbW1zNBf1Fh9P0wfRC9cGwZsD+fcHJvtx5RmP+wNkzN+XYG63+DueLcoY2iAZ7ZR36NT1iPWrSm8Xe+6wSrnlgYGbuvo4Oga+pxsatHUrZqPmNsmafnNNdnVZ6FXjFsMWuY1/9g/BLrk7V2Dsg==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 208.28
+                          adtTax: 113.81
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 59bae1b262f7a9bd711295901eb70728
+                            journey_1:
+                              - d639a44dda12f32c56ec01110cc49ace
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: fc31af71d5f0d4e6e9f8e72b9e684a43
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTrw/RYx3+LgO8l1Vh3kManDqMXQqdMlNP1doLc44o0FGDrr3aF00m5klYz8m9AOm1yU3m8KyFagoY887Or+jSJsxkjA5llwFVZoL4PokyxX+iWXbK2MbP+iFGmht3YSTcakgfh7W3WB8sjokRSIG06JNPEORRxwsBfV8U8japYAlalA941kh1eaRtn4zwIgiHqel15krcR7mcYVE01cs62tShk0AlOKVBthKbP1Krwaq5cfIz2CFaIlWQ4TLK67aVPLyuzwSHkk6ef9RRtO74ZNsCO/4kVXQykiyZx8mLu5DdYZOiFx6wCYMsnCyxNFihw==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 744d9d6ecbacfcad5bd9434b7246a380
+                            journey_1:
+                              - 7eeef69a819f46be84c5a16d291922b3
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 83e078d6a465e25efec74202794925df
+                          solutionId: >-
+                            OIeXjCDTHU3fUjSjYWOkAiZe3j/mSguP8vn1TsRJVWhkYOk6f716pzG91JH0Bw1eBPYfwO5j/DxTt9f/9Yg2JVs3falMkthtLWLalO/snveJ2SnhZmjIPRXxbCQmCpVo0nfiiROFgh9eYqUu6tQYHf60Evaap10bfByCfukiv9+AxZU3sJ0QM1ZZr0LLnA3OxZwBHRjiG/9LtGUDKGl6UAJmqk2afEUfIKXsx5iT+ZUXDAC8YwpgnP9AulBlpMRJtXFLinJcYaunrRVIAtGnKSCRUp10IhLunsEoy/YcQfTlhhBTlxPlkzLcWou9ppEG1+tO2ecg0jo7yj13oHetSryaBcNke3wGamcVNkI+h5hIS360F15w+oK0xJTejA3RAy5B9wzmNaTgK8RzU+9xWQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 208.28
+                          adtTax: 113.81
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 3cbf44c636edee86d32ebf9ba8f5562f
+                            journey_1:
+                              - 6f8e49493ff8a7c84872f3bbf874ab2c
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 70c317617c230e1226bf03b97f20fe00
+                          solutionId: >-
+                            nUeaZW9bbdHa0fkt9ak+Il4A0DJRAHZ0aHtlUECy5xf6/cSagf2W2D5ZtSZRJWCwJkHaStojGLr/OcFukANlUHYseDvMMgWomYE2jSt2fAtzZ6I2LgnLXrkMh2IvXKYzkD9SAivRyJypuQ+brEr7TgpNKWqubqWuEsBUFscsSBDAzKpsr5nax8NPG1K0spF4/y4pzCYh9BgHVFwzJDcaCUwD8Iw/V0ivn+3GjBEdZPFNainzIG6tZwpRGcGuvQ6OttylrjOAgnmB7InHarqb5AuUQrn2MALBnKQRJ7jowgszkK4G73SAFGCJfQ3MYxsefabvZ7p3g8ExUzEKT6pDo910WVxHUk65UI6Qr57B+fyTmGvx5zy3JkmE6FcApcZbU1YgjVuEayVbnu2NrR4+SQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 146.54
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 598d819afea1bfce3c0040cfe12163d5
+                            journey_1:
+                              - ccc3bf656d5df31986d31e6e63a9ed65
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 2fa30681536eba0fd1735b33fad28ffb
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTkAphTubxG62Q2B6K+EhZTM7dRRmW7gQA1dfJaIMqbcYSxJohP6CUUifQX1vbqe2bl0sqhDp7/4kP9if+JvDuASGrkr8BHQCPZIdGvlYULl0hSjl8af9u8SsuNKvf7IBHbL/n/Dod4bpTwvmj2Q76irYbJ2WgochOZpQeodUfVP/TpK6jKwk9wWKfLKbY+/t32SjYyHGqe9/PsNkAjnVNWfE0ZJ+dCoBXoh3lozbgEBiPWeWPfPpugcpK12rH9H9ciJUURR6gjNAT5LDQDGTfraYTmDJDRa3U6S8ldF1WQxsm2MpJ1WfFPhg50RyUAbUXQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 2c7e934176a35ff0e7505be8b77f78f3
+                            journey_1:
+                              - 45bbb77981099fb175df3c39ef306b31
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: c282ca462b7b9237aa8d6064d10aa5d7
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTkAphTubxG62Q2B6K+EhZTM7dRRmW7gQA1dfJaIMqbcYSxJohP6CUUifQX1vbqe2bl0sqhDp7/4kP9if+JvDuARsRDYN06ObQe6nSHKK5KTfaHf5UUPwYhoTI7R9Fj8fxV2Aji84HxiVBS65FPEh8dNQlGJJCCWoDJ+lIP1ZpHwMEwaWteWjvIlVk3t56+Y45ld/nJ5K6OueNoTTdWyBAEAQj3dJFSFmNFY4bGfaEGXKwtbCok2LIC2nIsGLuWraE3TvuS3Xs7DlrpTAw/w1zhLAyvT1zgxx1rJ8j6jSLkut7B6ty88s2UAEa9kEUH1FaQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 805b4e6e3c180b8e8358256bfd59d86a
+                            journey_1:
+                              - 576d0fb832e7a0ccf497c3f1920350ba
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 34eaa2db328ab747b445fc096dbd07ad
+                          solutionId: >-
+                            nUeaZW9bbdHa0fkt9ak+Il4A0DJRAHZ0aHtlUECy5xf6/cSagf2W2D5ZtSZRJWCwJkHaStojGLr/OcFukANlUHYseDvMMgWomYE2jSt2fAtzZ6I2LgnLXrkMh2IvXKYzkD9SAivRyJypuQ+brEr7TgpNKWqubqWuEsBUFscsSBBVuN8oOr9s1n4kRdwJ0CmJdlvekDlXFJQq74U9DUBmh6WMjWURtzlyuVZt9umlOpNXs4tJMAG9zfmCxR87porsXn2PYRkG1CxlpFzMI9UDfTTLyt9zHZMFmYYdLAKKdwJtEniG+Mn4LXSpwzPpNgT6L2Tni0yYv2MHy+hqNIJV03aGEmqT6GxdcCgywNw4zbzm6gF3rw0P9DwADseEMmWqO9gAItrcKbS0x97h3N+Hcw==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 146.54
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 2f1c489e9db6959c84fcb4ee6d16bbdb
+                            journey_1:
+                              - 22624ce3540fb9ac19b47f21c79f3edb
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: d4123531c755242825505192d74d2e30
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTkAphTubxG62Q2B6K+EhZTM7dRRmW7gQA1dfJaIMqbcYSxJohP6CUUifQX1vbqe2bl0sqhDp7/4kP9if+JvDuASVnTiU9AW6bbe+ebiv686apN+Tz2NZcToXE+IZDgDFchG1RF5fKvbEcZSZD9+gOnt5hFroHc37sGLm2gJfeLYiNUG6EozWI2RwhDNmCaB5Qzruce5iTj9/GuqkAmhH4h5oi23M0z9pDGaHwZyWyOCVZE2RiyPzwSbxvH5gcTgGClR4cnsV8xGLku2YAy0cK7GV76BgzJ5oZtq5u1oKxLfHsOn4bcXFRmCWoz5oPqpqDQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 29352065ee5c65b4893026297d2ae501
+                            journey_1:
+                              - d01f34cf151a0ecbe25c39f4dd65b7f2
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 26686fce6091eade005659f7e72394b8
+                          solutionId: >-
+                            ch05YLD24zTB+hUqz09BnCfXB0U0EWRuLOh825xlJaqyLSJmABZrkV7UiM1L7IbCEwbUkQKsLtE6+DtR9XyHxlcxZVMYmaxtAuzXg7a4jI0N15ZjlbsdqdAWrBd6TE9QT72p6i1Nr46w+lUjxypev/Vjk9i6HrPv0asEhMxpmwQmIPis+3hIuNM24ZbB/nNlZhaxzp+MkhclaWo2qjaNcoWE8xkZiuD9uuZvQIr8i6CqmoB6TaK6sd1t5M9LdVvOXdjZ6FKEWYJjDtN2jX6d/gu1hOdnxsVGwBuT3iljL90Y+KGKMM7VmEPuy/RmEFiCnRMtdfqpxUN8Ioi1Y1KNG3hPcdvqJLF0m3nCghtcuowW7s+yHOn/cAOr66DGFIQ2n5GfZldHPGK5Lre6qk4PiA==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 209.79
+                          adtTax: 113.81
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 42d9d20e69adf0cebe8bec418dfdb628
+                            journey_1:
+                              - 4501942fc565d499abc13f88366bd79e
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 695d1279cf4f508a80b53745eec8bbdf
+                          solutionId: >-
+                            ch05YLD24zTB+hUqz09BnCfXB0U0EWRuLOh825xlJaqyLSJmABZrkV7UiM1L7IbCEwbUkQKsLtE6+DtR9XyHxlcxZVMYmaxtAuzXg7a4jI0N15ZjlbsdqdAWrBd6TE9QT72p6i1Nr46w+lUjxypev/Vjk9i6HrPv0asEhMxpmwSkez5ZtMhprmZ9Er2DoCcEvx0MIu3nRy9fw8G4zs2+ygZ0SWcpdGX2tpPfaM0BkpvEipZckcX7c9lAK5k9OpBpSGXDcBqzuuW9n4gDGYfuGb3xWz0u+PRG9nNyCV6NktEi9VdJQlbkhsN1bE2M+claAwDzEiRDeojNX7cwUNdFpSwmF/RrZy5+RRmDJtkeRuU5hF2oSv6Wj4UBfOA0j6Bdev2uk9KUAMjYFDXoQZdm4Q==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 209.79
+                          adtTax: 113.81
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8bba5c83745c6e3d6370ef528e671fe4
+                            journey_1:
+                              - 0ef2155c54a88a83d38583b5ec5a8361
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 465a325cab48e5fa84ce3a70d2e4cd90
+                          solutionId: >-
+                            nUeaZW9bbdHa0fkt9ak+Il4A0DJRAHZ0aHtlUECy5xf6/cSagf2W2D5ZtSZRJWCwJkHaStojGLr/OcFukANlUHYseDvMMgWomYE2jSt2fAtzZ6I2LgnLXrkMh2IvXKYzkD9SAivRyJypuQ+brEr7TgpNKWqubqWuEsBUFscsSBC9RLjekfF5zAX3tocpKg7CsLBmUWXccl77xEi8Txucj0l9kqO9SvYU8VAF/1Cxt/Ttmlav5gUDtVA7DaOGoz4MhCxnwCzCv4K9N/zBWejH1w31SjSK9FB1WBcoFPXPXF2GwmLEbiP5ClVAB92kulZwOpKg1vSszYBAgQb6HPcHWXrD48gpsDP6Y9CaTOyGOgjlH4SqcZhzhC2sjjq2io9OUzxHzNH5bx+LbLvN2lMKsQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 146.54
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - e4b172efb5d77691c92c3dfe84d41840
+                            journey_1:
+                              - 037d7972836fa49968cfc14390c799e8
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 27fe5e0f1643c8aadca7b50b66d0b008
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTlE0pAnTeyfb1+4n7HKimCRMljPLJ0G8SYcMRizPQCkbiJKZzSgmpMtj9eTMUH0sO8NGi/OmUGEtN0DaiXLdofalMjwxrGhDFlFEZ2wMsJeLkR1lkniL7ZKI0zaqgG9VYEOLmtmkYQ+VKaS71NaXwC3SxHgBUZaFaM1/Bzai5h5sCuXNr8jBEmRp+OY/E6VrDQSmc1xsLmwZftf11zl2wlIW2tlLc6gLOk9tVRh8701CDlQmchtSDAG/cypmFHA/lbZPqzy++rBhA5GnHu1hfQtIZPAFUWMStXvb3RktSMNVPZsSfeS1pcwdzzBywoD0Zg==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - e83012f8494e9df54870f0b648d6f8af
+                            journey_1:
+                              - 7565545370f2b88fd0b335e6bb654a6d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: ace111dc14aa443d6b0fd4e17fa14157
+                          solutionId: >-
+                            WktEpYt+I9okyeP0XCgbsfV4NgqfVFokxeoSIoUndioET8prtNwuOV8qPNKFpgBUweXWWgTgOI2DjYzIHAFUuhk92CAN8edo8Zy/8uHLyEshTf+fowTB/CbHJWd5Y27QNzqlXaR5SUyBTZ/QQhbA4lUW12tU+ORJE6//Bjz3T78Wyc8qRu26fWP7qlm8HOAOdfjttBrcFoh5sMfrkH5peuTP/5neh40s/QYSDwBUNVfKRsUqsup3jG9rPimEW4YAy/vXgoMewtt1CVqlY3evU+d/IUlCoQGzS3W573GM0FIyretB16bwLXATiBCMwsMkYjhL+2vM4ZyAFvtjEPrh9ALYqhdlEATK5z3Aqp3Mf55VyFj4ISwDHbocNPDxftlicXF/nLIm7TKA0LLGxs9faQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 209.79
+                          adtTax: 116.29
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 47aa08cc0f17907cf6724a1b16f90ae9
+                            journey_1:
+                              - 2272298d3e23053ac2dc86dd1fd45457
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 6ace357849452533fb4db248829616a2
+                          solutionId: >-
+                            nUeaZW9bbdHa0fkt9ak+Il4A0DJRAHZ0aHtlUECy5xf6/cSagf2W2D5ZtSZRJWCwJkHaStojGLr/OcFukANlUHYseDvMMgWomYE2jSt2fAtzZ6I2LgnLXrkMh2IvXKYzkD9SAivRyJypuQ+brEr7TgpNKWqubqWuEsBUFscsSBDfNb6MqIY+mlpNe51ZnBB4hZIF/xeKoDiedylPCDb7AjB0ZCbbHjKnvNc1LJ5oS6OLr6wwcluvMJnEgMIxiKUu7cgZrUK/50bZ+2EP87Iml1g+QH0K60JX8kOetJJwC/3yGf28+oNojpAVEFGX4YyoND68vB0DEWUDNxNAywdk4cl3nyJs37RT/OiP/2ENisPC+ZunaQgG9DXkRKL8kVZc6PqZ8K/WxuoJXe8//klCkw==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 146.54
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 58fe2c080428e59112fa90e9db7e673b
+                            journey_1:
+                              - 98e8812d8885e75714f726d19c05068b
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 36efdd085246875b9f4ab1b9932771b2
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTlE0pAnTeyfb1+4n7HKimCRMljPLJ0G8SYcMRizPQCkbiJKZzSgmpMtj9eTMUH0sO8NGi/OmUGEtN0DaiXLdofYh6rQ1awU2ls/rvtDSTFI/5BCJcH2DD/DMS22bYc0NpJFznKfnpaYkrFAaelBbx7fjdOv0XMwdCLvm5bGpONpbeCSD82H7SaVq9CtPskdU8sqmgusOonOI4C0xuEKpulTr/6jkYmB5teV8aGsZVQcyEoiqFnVIsQMf1A26r+IAKsRcWKtKLx5ZIt1fZWelDi0p3+Q8sqfX5Ekxrk/VPTir0xfqSkpHbVjwNTy/j9obxg==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 020f198e43029bcd4862aeaeeffcbefe
+                            journey_1:
+                              - f9b399c9a14b8fce9433767f70b45ace
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: df13bef379b914d6bc46a054d9ec4316
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTlE0pAnTeyfb1+4n7HKimCRMljPLJ0G8SYcMRizPQCkbiJKZzSgmpMtj9eTMUH0sO8NGi/OmUGEtN0DaiXLdofZDmObxjLuirwrmtWO6sLKRro7il+OpTGu8Pn42nzvu5AK4LnI7rsgdhqUUEw2IfWompfXCavBvd8fvPHkHpR/y2qsL1TzeXcQIeym/Pf7kQOR5A1igKYW1WAcN+vuNhU944QycthSU3jNCqGUjdWoFkodOui+57J6uy5aRFNIZdWtHnMHuhuAH79T9k8JTJDEtps8CU2GfwtseJZfzrEdUf34hqxAwCJFSQOkEDLeCMQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - cc4aff4cb336d023f348f9893974f9fa
+                            journey_1:
+                              - 1c7e14d2e1e563ccb018918c86184cf5
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 2eacd768a0e9d66b389b6264d7f644a5
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTkAphTubxG62Q2B6K+EhZTM7dRRmW7gQA1dfJaIMqbcYSxJohP6CUUifQX1vbqe2bl0sqhDp7/4kP9if+JvDuATW1cqj2JAAWJXLqreoIJ1yyZJNkhs8jw7uDsO7RowPdxLVwlOs5/OWhj4R1sCIHU6ol2xNxVxjJ/CtdGOX9PW1e/1EiynSqT1YxHrtGtTEE5qCMQ1W1VtS8MYjrUygEZVHahfQm7u8u8pQfD548FTx8Ktm/2aTjiVelYFcq1SBSoTP96RYYM00aS+pMm0FeuN6pFOSkx2HUB7+m1vhtUN23PC+yrhNOSH/w0VxRZUbiw==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 41e619cb59bae25a5fdc93ed1caf7681
+                            journey_1:
+                              - 0d3eb1f22e83398bce338819a0a3c87d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 2e51d6bd6dbc26815494e8bdaa5f8e25
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTrw/RYx3+LgO8l1Vh3kManDqMXQqdMlNP1doLc44o0FGDrr3aF00m5klYz8m9AOm1yU3m8KyFagoY887Or+jSJsmR0NSCbsz8kIROaLfMA6hYyg60u1PD5giEulDfrlqoiOqRQ4K3zfjkppiLqwKjsmcHphajIyZBrblyIT5eo7h4x1+rFwx4krC8OaOQnV9ysiDHwFN32XdPkbZOvm5MgGdD/tgR1ScoTuh3kZ76+GlwsDaBZxlqmpMujEHy/83plBDZS4PSmw2RGM+s2hc9bpbxRVbFZ4gmOxETg/Of/1b38sEu3a9fxeC5iHRfbPwdQ==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 31a2e27147c2fb301780a801547761c4
+                            journey_1:
+                              - 009c52f46d7476840d0478365c51664e
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: fe59f517bc3a32dd131fd4a915d3d3fd
+                          solutionId: >-
+                            649lrOeOrQsnJ2i0st/M3A2vVFBhLAuo1LBFBMTE/4dD5viDMwqwXxDATZcFMIz1t7zwHk9W2dNv65vcCTNcTlE0pAnTeyfb1+4n7HKimCRMljPLJ0G8SYcMRizPQCkbiJKZzSgmpMtj9eTMUH0sO8NGi/OmUGEtN0DaiXLdofbE5an6zOIRjMi5i8CS7Wisge2+hBXSwit3nMmKWDh1GbFSu1N4GzvVUL/XIUxvH+0sM/lYfV42Jz9uUD/kG+c5Uu4yccZpq8cll45y/otEOxOxOq/r3BozKm4N280P9edNViMxPN8Dk1Suuxwv3SJcwr5KozdxzqJ5C/pdB2J/7kvg7ikFlMaAGCBV8uSj6Mt/boXVPBL0TbO8WPO0l1ZPbufxpiZ3WqR6IaLJTWCbcg==
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 198.75
+                          adtTax: 104.41
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 90c9aae8f9095b5559a8d152c44fe080
+                            journey_1:
+                              - 09760bcb587e5cc499451612f03408ce
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 1
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                      flights:
+                        - flightId: 45bbb77981099fb175df3c39ef306b31
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - f4606c103ce1eeadf38c201f6a57e031
+                        - flightId: 2c7e934176a35ff0e7505be8b77f78f3
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - c0492187a5331780b5d00c3de09713d7
+                        - flightId: 90c9aae8f9095b5559a8d152c44fe080
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - aaf28e13d163cc48e56f74216dac0ad3
+                        - flightId: d855de07e0347768f9ee439fd535ed8e
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - f136b71abbaf9ba0f8edbf376cb90efe
+                        - flightId: 2f1c489e9db6959c84fcb4ee6d16bbdb
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                        - flightId: 4501942fc565d499abc13f88366bd79e
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - e55532cc1aef132ab11a7e8157478338
+                        - flightId: e4b172efb5d77691c92c3dfe84d41840
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                        - flightId: 5fb64796bcffde1c4c76af5971fa7257
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - f4606c103ce1eeadf38c201f6a57e031
+                        - flightId: 6f8e49493ff8a7c84872f3bbf874ab2c
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - e55532cc1aef132ab11a7e8157478338
+                        - flightId: 8bba5c83745c6e3d6370ef528e671fe4
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - d6d1d1bf1837694138ea75ad1d1a11b4
+                        - flightId: 020f198e43029bcd4862aeaeeffcbefe
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - aaf28e13d163cc48e56f74216dac0ad3
+                        - flightId: 744d9d6ecbacfcad5bd9434b7246a380
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 74a975f21ad0ce3cfc49d11c32c168ab
+                        - flightId: 7565545370f2b88fd0b335e6bb654a6d
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - f4606c103ce1eeadf38c201f6a57e031
+                        - flightId: e83012f8494e9df54870f0b648d6f8af
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - aaf28e13d163cc48e56f74216dac0ad3
+                        - flightId: cc4aff4cb336d023f348f9893974f9fa
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - aaf28e13d163cc48e56f74216dac0ad3
+                        - flightId: 598d819afea1bfce3c0040cfe12163d5
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                        - flightId: 1c7e14d2e1e563ccb018918c86184cf5
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - e4591fa7bf8e5c27412c444983099ddb
+                        - flightId: 09760bcb587e5cc499451612f03408ce
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 4741c64240ce6f09d9042b666652977d
+                        - flightId: 47aa08cc0f17907cf6724a1b16f90ae9
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - d6d1d1bf1837694138ea75ad1d1a11b4
+                        - flightId: 1041fde92193865a67548d0c2d35aa2d
+                          journeyTime: 155
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 21a5fab1e74e990eba2a94f53210438d
+                        - flightId: ccc3bf656d5df31986d31e6e63a9ed65
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - e4591fa7bf8e5c27412c444983099ddb
+                        - flightId: 59bae1b262f7a9bd711295901eb70728
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 3cace3735ae26409515418e7a0c4ce4e
+                        - flightId: 3cbf44c636edee86d32ebf9ba8f5562f
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 3cace3735ae26409515418e7a0c4ce4e
+                        - flightId: 58fe2c080428e59112fa90e9db7e673b
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                        - flightId: 22624ce3540fb9ac19b47f21c79f3edb
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - f4606c103ce1eeadf38c201f6a57e031
+                        - flightId: 009c52f46d7476840d0478365c51664e
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 4741c64240ce6f09d9042b666652977d
+                        - flightId: f9b399c9a14b8fce9433767f70b45ace
+                          journeyTime: 155
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 21a5fab1e74e990eba2a94f53210438d
+                        - flightId: 805b4e6e3c180b8e8358256bfd59d86a
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - c0492187a5331780b5d00c3de09713d7
+                        - flightId: 41e619cb59bae25a5fdc93ed1caf7681
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - c0492187a5331780b5d00c3de09713d7
+                        - flightId: 2272298d3e23053ac2dc86dd1fd45457
+                          journeyTime: 165
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - f136b71abbaf9ba0f8edbf376cb90efe
+                        - flightId: 0ef2155c54a88a83d38583b5ec5a8361
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 8bf4a3f94253708d989bee610620a38d
+                        - flightId: ec89101a12c0b3fc3234f88e9bad505a
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 3cace3735ae26409515418e7a0c4ce4e
+                        - flightId: 7eeef69a819f46be84c5a16d291922b3
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - e4591fa7bf8e5c27412c444983099ddb
+                        - flightId: 0d3eb1f22e83398bce338819a0a3c87d
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - e4591fa7bf8e5c27412c444983099ddb
+                        - flightId: 61c4b92a477da82490aee92382fb6fc9
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 74a975f21ad0ce3cfc49d11c32c168ab
+                        - flightId: 05e3ab77a8f3f59956b85836b5f7de29
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 74a975f21ad0ce3cfc49d11c32c168ab
+                        - flightId: 29352065ee5c65b4893026297d2ae501
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - c0492187a5331780b5d00c3de09713d7
+                        - flightId: 42d9d20e69adf0cebe8bec418dfdb628
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - d6d1d1bf1837694138ea75ad1d1a11b4
+                        - flightId: 98e8812d8885e75714f726d19c05068b
+                          journeyTime: 155
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 21a5fab1e74e990eba2a94f53210438d
+                        - flightId: 037d7972836fa49968cfc14390c799e8
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 4741c64240ce6f09d9042b666652977d
+                        - flightId: 31a2e27147c2fb301780a801547761c4
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 74a975f21ad0ce3cfc49d11c32c168ab
+                        - flightId: 576d0fb832e7a0ccf497c3f1920350ba
+                          journeyTime: 155
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 21a5fab1e74e990eba2a94f53210438d
+                        - flightId: d01f34cf151a0ecbe25c39f4dd65b7f2
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 4741c64240ce6f09d9042b666652977d
+                        - flightId: d639a44dda12f32c56ec01110cc49ace
+                          journeyTime: 160
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 8bf4a3f94253708d989bee610620a38d
+                      segments:
+                        - segmentId: 8bf4a3f94253708d989bee610620a38d
+                          airline: UO
+                          flightNum: '703'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: X
+                          availabilityCount: 9
+                          departure: BKK
+                          arrival: HKG
+                          departureTerminal: null
+                          arrivalTerminal: '1'
+                          departureDate: 1735557600000
+                          arrivalDate: 1735570800000
+                          flightTime: 160
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '19:20'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '23:00'
+                        - segmentId: e55532cc1aef132ab11a7e8157478338
+                          airline: UO
+                          flightNum: '701'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: X
+                          availabilityCount: 9
+                          departure: BKK
+                          arrival: HKG
+                          departureTerminal: null
+                          arrivalTerminal: '1'
+                          departureDate: 1735546800000
+                          arrivalDate: 1735560300000
+                          flightTime: 165
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '16:20'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '20:05'
+                        - segmentId: 21a5fab1e74e990eba2a94f53210438d
+                          airline: FD
+                          flightNum: '502'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: A
+                          availabilityCount: 5
+                          departure: DMK
+                          arrival: HKG
+                          departureTerminal: '2'
+                          arrivalTerminal: '1'
+                          departureDate: 1735552500000
+                          arrivalDate: 1735565400000
+                          flightTime: 155
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '17:55'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '21:30'
+                        - segmentId: 74a975f21ad0ce3cfc49d11c32c168ab
+                          airline: FD
+                          flightNum: '501'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734244800000
+                          arrivalDate: 1734252000000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '14:40'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '16:40'
+                        - segmentId: f136b71abbaf9ba0f8edbf376cb90efe
+                          airline: UO
+                          flightNum: '705'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: X
+                          availabilityCount: 9
+                          departure: BKK
+                          arrival: HKG
+                          departureTerminal: null
+                          arrivalTerminal: '1'
+                          departureDate: 1735531800000
+                          arrivalDate: 1735545300000
+                          flightTime: 165
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '12:10'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '15:55'
+                        - segmentId: e4591fa7bf8e5c27412c444983099ddb
+                          airline: FD
+                          flightNum: '508'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: A
+                          availabilityCount: 5
+                          departure: DMK
+                          arrival: HKG
+                          departureTerminal: '2'
+                          arrivalTerminal: '1'
+                          departureDate: 1735511700000
+                          arrivalDate: 1735524900000
+                          flightTime: 160
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '06:35'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '10:15'
+                        - segmentId: c0492187a5331780b5d00c3de09713d7
+                          airline: FD
+                          flightNum: '505'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734264600000
+                          arrivalDate: 1734272100000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '20:10'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '22:15'
+                        - segmentId: 3cace3735ae26409515418e7a0c4ce4e
+                          airline: UO
+                          flightNum: '700'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: HKG
+                          arrival: BKK
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1734240900000
+                          arrivalDate: 1734248100000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '13:35'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '15:35'
+                        - segmentId: d6d1d1bf1837694138ea75ad1d1a11b4
+                          airline: UO
+                          flightNum: '702'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: W
+                          availabilityCount: 9
+                          departure: HKG
+                          arrival: BKK
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1734251100000
+                          arrivalDate: 1734258600000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '16:25'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '18:30'
+                        - segmentId: aaf28e13d163cc48e56f74216dac0ad3
+                          airline: FD
+                          flightNum: '509'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734230700000
+                          arrivalDate: 1734238200000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '10:45'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '12:50'
+                        - segmentId: 4741c64240ce6f09d9042b666652977d
+                          airline: FD
+                          flightNum: '500'
+                          equipment: null
+                          cabinClass: ECONOMY
+                          bookingCode: A
+                          availabilityCount: 5
+                          departure: DMK
+                          arrival: HKG
+                          departureTerminal: null
+                          arrivalTerminal: null
+                          departureDate: 1735524000000
+                          arrivalDate: 1735537200000
+                          flightTime: 160
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '10:00'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '13:40'
+                        - segmentId: f4606c103ce1eeadf38c201f6a57e031
+                          airline: FD
+                          flightNum: '504'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: A
+                          availabilityCount: 5
+                          departure: DMK
+                          arrival: HKG
+                          departureTerminal: '2'
+                          arrivalTerminal: '1'
+                          departureDate: 1735543800000
+                          arrivalDate: 1735557300000
+                          flightTime: 165
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-30'
+                          strDepartureTime: '15:30'
+                          strArrivalDate: '2024-12-30'
+                          strArrivalTime: '19:15'
+                        - segmentId: 5b6e4e840bb3321ca4ca21c422c99af6
+                          airline: FD
+                          flightNum: '503'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 4
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734272400000
+                          arrivalDate: 1734279600000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YRT
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '22:20'
+                          strArrivalDate: '2024-12-16'
+                          strArrivalTime: '00:20'
+                '6':
+                  summary: Success(Open Jaw Journey)
+                  value:
+                    errorCode: '0'
+                    errorMsg: ok
+                    data:
+                      searchKey: HYDSFO20240417YSFOVGA20240425Y1000
+                      shoppingKey: 17b60c9e679eb92746554eb566e4d8b1
+                      solutions:
+                        - solutionKey: c16af9f4f4b24d8b349a3b25fbecc7a2
+                          solutionId: >-
+                            x82gLTrg2fVwXJkIsJS0UJyGRVA6JufxE6YwaoDUmjdLqsTZmB7Y85PH4FCtqKsXyNqLsBEsb9Fp5/AHNhDJnuoF1Swp9iPLQmtTlmgFmt7m8oJUb8aY25K+lDUitnM7e272nXHB/hYFmgi9Bz9TKAvMBPrJmSVMeLqxCwxbHa2c50gqKTQhd1LUbuE6VmEb6ufL3SBbhjhSxYADdsFZTr7RbIsXLPUywi5bO5Pw6pihFBv58CSLeXXoTY/BghQAPwtOz8F8RWW+IjxjuqKo0jz97ujYdZzLVr7kA8LQHfMvYtFBLxHO99uCRvifeGDcJVjauGiLPlKZp0kH4gDnnbPTiKMn9vy1ls/JlhziKvKmixKgQc5pOJPlACrhlbK/4PJlQuuoZhy4eyffSeodx6z8xjxGLnSd56bAQZYRqPdMMeQaPGYVo9jgqbkP93inqUdVoyIVHbjTB5vngAocLDHsf1NM+eoR5l05OpuvDDuMekzVBTLdykV0ql2CO3DhgZlVS6KtUNRPBnICFvabN4SELRk/z272Y59nSN580Ls=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1355
+                          adtTax: 495.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - fde3f8aac84e4088ae6e00d4e218db07
+                            journey_1:
+                              - f4b6d08453c62c45a956eaf1ad2584e6
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 76741aa912169d0f44c31215881af90f
+                          solutionId: >-
+                            vuzfjqiqAxI4tFjGMclJWxAks1F+rLixsew8ODnjcJgFKbMCwJwsKc90Rku+tgOeaADgslRqiC7Zp0yDB9TKoTO5ruWlFEppUij9/g4ft8QEj6fAn/yD2bCnTvGY+l2fmqwnLKJM8dWEUvNSJkCG6KREp5wNUOm1oFw1+G15E2ESQLG5x/7Bo5xKiiI6/ev7wy/6WwfFvFMhiUTwlDNMLyX8OqNsoOVThswOzjaUn0nGp37EkgUGsiCV0corDL+SyMioRDWr7TOQ4lM/OY6uQUtPD1rYQCtZRqR7Q+VVE8dUhBIt2ekL7y9jQ7F58n9BtmaO/A1E21VF465U5xiElxEb1BBz63xxobuWg9YZiNIRdhukhEmzQ96UDNS9IMYoSv7WGATsZNsz4sbHclu1yEMhTRTCTWCrQJdCLHLsuVhogH6NaswQfRLVitzUNMPd/1vaGia4Wr5ifvKTiv7JpaaKwGqbBwyvY5k4UnilLbhYr9v78jeZuJV4uwVaN9sLCAroRHevrcGrTzBKrnYty0k+v07LS4ZKHQB8x+SO0GgcAuk14zzv3QW7Gz7ovSOmjE8IpYYdjGvJKtOYl6BTqi2NtujvxGKfhWpwjudvMmRAd0bQccMxRcV4tV34sZyw
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1720
+                          adtTax: 518.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - e1b9754d65fa6f7ea02579a5cc7892b1
+                            journey_1:
+                              - 1ad733c267678c81a9ffb6df44c313ea
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 495b70196b19ca7421da827d91f5ae27
+                          solutionId: >-
+                            LF3QoxvVJZneVu9G0J8wCIwA0JhvjW+PwBu04tIsWthzJzULXQJv+CpWfEUsZC1XrejuTqjNnwCuEvbKzGlgTeSqpwVdmHvvpsS43vFc86/gxJVOOuwNWzxrt2/UJA4YjFvqMUKYR/iJrA5FOzhnN3frGtjYqrcKDZnDb0NHUxB+w27O+7ki1+/wZeku8Qqj1D9Cayfp9LVFc84ANdhNJjCJyHv6BUZAcKSUAb3F7JMw90NBtv8Ip/UCgNxM3+lPPglZEWkAduiUv+Yn1RRTpHMUaqel1kspd9Zzjfgnr15JWzZt2CZD3Ejxq1JgIWR94XIR3KNuL1QYwJNLaOWjsklqlyU7BzMJw5AhVeu+RhOa45B9jERgG1+8vZSEdEafw/JHjJ6mxG+VUg1PMMsxRlPpUGbrVItbOJf3ZE/76fRMd+iyNYkv/Dvr7TJV9sat3d8qZbQdA9QlEg0Ud3Y8VCfNH+n7SwGrwZzRw/iZmZYOATUxfwL20VxVLtcmI2ZylPPIRigAIW+UUW4A4ZXIrtkNaN7xCW3HxevYXpkA4W22+hEDZjZP//w8AOWIJkdHRQJti1Jw/7NUmm9tx9eW1TJ+M73JO9VY/oZgkvTa3afk+RVr6r2QjaA8jPBwU0v817Tn9uzYOltq3M+ZHwcNmn2lMxViK1hF5qidXxbnlVQ/oemYnhQ6CbhcbKeZbdt7
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1467
+                          adtTax: 866.66
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 315c3ee993efe644649dd6d21f1c2cad
+                            journey_1:
+                              - c6a586859ed25632efdb0dfda7bfc302
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 6
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                  - 3
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 4
+                                  - 5
+                                  - 6
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 7c1c7c150602bf76f292934b424b9580
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53aQdSrIsAseuHATdIuo+K9+zqKyyRZjkpwAEkxK3VRmvwFkFH1oiOEVle4xlQOG1DLu43K59YvQz7tPHDrL6ccS34kQw8aP5FHQDQfw7zWA6UNhWqQunjr7wkaWuB6SfGaMtzmDfGf9tQY0ANY7AywhDlLOVMLc2+q++pDL8LDnr1y+o3ijVPGG0/aJzzyKc9W9iA7vvOS4WmzLd0bc1j7bVE0rrw2eqM4zAOKgxqzKEC2/uSjg47wjMr/5YBdC4jFj/8MOyeurCXIvJXtaXzAb0lPNCy2V43pBemWaOuXd30Sg/lZPaQsUowzc2XBdo+ILG/D094VT36b/PGgL/m4JE3yLZSyS39hGuqA3UdHD/QNTg+IeViWqUBfMpMpZQTKXTLr/yzs0OVPZ7W6M/R0Xt1Pmu3D4pplJpxbr1JfBn0XNcN2JLWyIVl4+QLnZeqsw9FrQqTAwUAfmeLRsH3r0=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7703f22ba8862ae393de6b8a2a2bbd0d
+                            journey_1:
+                              - 2c78ea6f6ce3e307c117d601c97ee044
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 8d285b0b5925ab1df4c9e953388a736a
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53cALuHZJU8QnsFkG6MzjeoGre4PDyB6fVYTi/Rw7XtbOYGbfCfISCw0XDsuEsWMc0PuxmsHGkg6MRMkISSJ+1ybZeykpnDIAldUNOLQb9BbDq8Jn0xIVBbZ4T32KMcwvzFMkVkPy1EOsUEIX0TFjsIy+1UfD5Rw//f/4spibskJwig+pPZl2uiNVwdL1fxUg+R/EWVx7aWgXqxCZsUgd05dbY6MYyucngYFz+i2+CIjNQxIGRqWdbdSHK25VR5YzZd6oclPf8Rl/oDjsmzBF8BO1FRmcRi5z5P/QKNQS9B4eB6JCDoiG0+jCArHdWjsv5KG/iYR64cFsDwWfVeDa4fL6b5GM6GvC6QgZndStgpw6r/MANTmXJoWlZBg6zZkWdkA52y7QNEsm7Q7k1O5vU7HKl4YOHQzuT9rq1/1WsHm0BMJmut9wmsuq3VZKINtAwAnkffvpMTGp7QyHrk0KiP0=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - d25e085db3b9a1ff147d592074096682
+                            journey_1:
+                              - ace38b40ab20732d9a16619b1df0245c
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 855d2b5666da67129a83aaaa1b08319a
+                          solutionId: >-
+                            OUUQi03WjYsjhRmdHta7oIqBqCJ/i50XUfH032L4FdSzsxA9tISolgtODWtdQmqYxGHryqBE3rEBR7g5sXBpN+n0B7h+qG22jnCQeOoqZEoJkVUNtF6gMtMxvg8TT/UOhuwU3ufqSJSOU9vaAcFdjtylSsWoBr9tgQdwYjZzVn5F6O5aVwMdocYH9UB4PQuolxau4LykqSFul/UpnUcq92AJahooJyB2KibbnQUDHVweg7hXVBOs41RBGIWlbpaWUzO/e8UD8iP0FmaPSJVUpUzBQaRbUCNQdMDETGcyUudjklBznyUTf8w5PMirITUcmpj2bVSn4dy7kVAZ4HkO355HUOwiL9/oj3XkmQppIVd9db1JkmZtm1nZrGLevzQ7F58GUUdQatKGafV8egOhJB0xQTwfpFx5/F6N2pqtNoHCdXj0ai/Zrn4S0sYJ+Ewy3PnOGvPoD4RIJdEa9WlTLlNrlAplky2tRJrt2inWx40KeVSEtHCpfSBqJolz9/n0wtsk3zv9AnuSq97TuP4pk1uWLyvSMb/IFqjAdd3lvI/fvT0XU0/lDfXW1+Fvh8zdMTlek8Z2Zu6dt7KpAMuxi7TTW5jvDu+q3sxWN2duLz0NUhT71sTHw4PJldxgoM9O
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1690
+                          adtTax: 518.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7b076ba210809462c83697fa315e9673
+                            journey_1:
+                              - a73bc07807c4e312be859b5e6b3c45ae
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 6a52b88c2096b7646b30aca00ed60c99
+                          solutionId: >-
+                            vuzfjqiqAxI4tFjGMclJWxAks1F+rLixsew8ODnjcJgFKbMCwJwsKc90Rku+tgOeaADgslRqiC7Zp0yDB9TKoTO5ruWlFEppUij9/g4ft8QEj6fAn/yD2bCnTvGY+l2fmqwnLKJM8dWEUvNSJkCG6KREp5wNUOm1oFw1+G15E2ESQLG5x/7Bo5xKiiI6/ev7wy/6WwfFvFMhiUTwlDNMLyX8OqNsoOVThswOzjaUn0nGp37EkgUGsiCV0corDL+SbU7pJg4iHD9si6cQ5N1RV9Ig0ZDrK6IJm0FXEWcMWbJ7TLFQlxWNrDbkoXpaIMNBiLXDWpoUYkt3XzUwWfCZOSPywLbmgHHm2NW6eFLIuovOfPMmnCLMee5egb90b+Ann0+T0fwWMguO7VFKn4alEMONuVW1VTGgIH4svVuy4F04kUPPdErWUMdSjYx25KDiq0anttrYwsPBG/tRmbP1BNlLkSx3CCAsHUr/AGfjvGz8L/ELYK5/5AFwjBmAwPW+7eArm89LUybTWIBhQ/+6JCbu0cuE/1/SK32vqD34PyyV0QB8IXM+ZlvfjIDbwwqEc1O11zIHnlWtt3uMa+PFhBvFr/7MKuH/XwKXJTBavNWBfsgcu6u639R3u8stjuZw
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1720
+                          adtTax: 518.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - c6ceaed60d895a4de37b698bfbb7b429
+                            journey_1:
+                              - be21a3b28924e74e6f859e7bfd6690e6
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 91bc83d618edc67c0ce7c24049e12022
+                          solutionId: >-
+                            XL9fm8axwO/IaejnvhsUnq+RIBtaJqa5Vcf3+4c+rfC2Y8/8Ynah+w49EGlSmmnqgaOWdhfi7xh57WM+FawyI0VOZFsJAgyqvK5czP3xDnDSBWUuFOHuK/m3l2ZXV1XPY6o/NjdKCLLC7UWDinty/LC+BE0yHqncbJUSOhIwvbDLIEVoh5LRwh80sPSAjWoWastqy2zHbaK0Oc0PFYDR2RVQng2tsOiIBfNtxEqWuZMq94SrZu03BCoxnXhfhrgLawMlj7z/Bo3W9K/Q6Ld2SURXbugP/hix085Z6UEVqZryhnD5Jw3DSjXx1u9Km8NYx3wucwrtaoUIf7lk0GVnVRT7DZLDuy5bLFJQIA7TN1/0F/GcjGmq23AQl7CtBjB8vIcW23OFwu/jAEgxEklPfSkYGJh4YvNqKTKmOEp8uqf9fgBQ/HKplcuYvDCTmlc7EWHvbJlLx1N4XBecR8c/v7OdXBL44+70sgwtRwmZJoOSbZPeCTxxhbZ8h1gqiig9JeRjXrk2rKxXM1EAPAtpKH/s9jFPZlrFYa77wOTdv2Y=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1206
+                          adtTax: 489.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - aa83529a4a89ae293eebf47455c1052a
+                            journey_1:
+                              - dc04f752fec7edf2afea37762667b112
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 1c01681b82205305312b5c4962c2bc7b
+                          solutionId: >-
+                            Fam6Fu2fI+N+HZ+oWeOXwO+Zi2J7MWm71c1DQyusAroy/y9XdZrE470aUsbznarEMPDpI1XN1AHLZ6KfxchVUaEFdxDdbJQdSHGv8ZBkuGd7UKbjiv3C8UkqbN40DbSa2F19aM+bfnuTk5Suo4EVHosgWmSOFvCw0HzROqOrhTTBF42cbP+XXRxUXfmK+o2HgORtDwIjylJXksBMXeMoSmxmFkCBjp2J9eTXQZpxWGT7bbMV/l/MMwjonmGZSxClR/y6ARWB00VQRz6z5UqCmNeDWH3FjmHXW2o29O78l54Y1U5yhZAPJU6I5LzAHSR6pMPrVOonx8JTUS/r+fRzJs1AcjFY/K7GcaJZQzjer8YT1gZWDezjOY8t8QCwBO4e0CSiZJSCzAkBkGpn6mqMbEnKnZHPisuwNYg4ucWlLzraRtofFrTL2lMSOUtzZZegWZsJ5Bpd3IYQjJ98JRossDh8eAiZXbstBrHLU9psRqq86/FDLIzQE95qaM2DLIGWJf7tDbc+IFv8iIqlce7TGpZvrYmMP9bhV5K2CjkiLYYeS5H1z27SEGRIjkkX6MSiL93T+Bn90yaNyvmton2TNRw9Xh9t5bP3koYaU8cGXSDz08I0XMYdyTLXKBKsbm5y
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1173
+                          adtTax: 836.06
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - b2b73d67fb17d569322a352f0be7ef04
+                            journey_1:
+                              - 8e137acfe99ab36a6a06e5afec9ab25f
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: a4f0e56b16c3d75d348474534879e6f3
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53XXxETWrJCUJX1QsIfUfD6TYLpcalOHCAM+6kkZXvnd6hSX4AES+jmKjrVzjLERDmfse0ZbI1oMglWtOCpO/oatU7tUm0+bbTmKDLea0+TbrCEJqGPTms3aXrZKjqzRncPZ9ILk1cUuMlwrsx2So9lE5I/sB2jcVIvUJNIWObcWLexX7qiKjWLJeTraXKBAMuWODRO7Ms8EViQ4oCfQkNSYZd0mkX/CPGAzr6KC9f8/dnkjJT6rqxnw0FcWkQZnAqk4/II1LmpBm/lFOfSDpX8+4smxt51DinsrSqpDny3wc7kQLJna1kepobfwGaBzTOl2wLsH9gBOk6a6FWqPCDaTNU/MgjbJYuWL5lDsX9j0tnerU6C0zVhGByjAQUUAit3sMqVUIt6rng/pyQypRERB+QoE2ZxF6LptkBHnLnfTxedu/QGL3g4I7xwGaEBxQwE5ro8B9btd2VAy35uymuM4=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 564b80038b6e3414c9c75dd40a616941
+                            journey_1:
+                              - eed8bc4b3a26c49e36268f470580676f
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 4c4b27612ea68a36e5f6b69d42d6b219
+                          solutionId: >-
+                            2LDjaI7zvByDMC9Eb/9UesadFneB6Zbor/LA88EewsWLKAcFXJF/W7sSxOdr+xXEFSQy5Jv83Of6zFH3BHGzuoAfEgJLLC7myfVT9sTE9DmV5WEBidla4FeHFC4qCQnHE9uF+UwD+rsHXRkv9dAJ5UfcuXeXTN7aLpDd/znDwgSjNMHF+/Yra1201OwMg1YyByiX68e3UBRAiVnfPvcU045RP92YIFOrsz3cLKUHHR1+JBD+GcemEy5CxcTpzpbeHNSBY6VHQbqxxA0RTpRux03tyF+ucK8yXaEjE8nFnFdsvh4dRX13adC0rzTG2/DAvLzz4vr9S7vqFSAoQRffrm0QGBB+QggLm81oXdROsVSMoUBMJuHwtdi3V9iQuP4HOZZeabIXezioJXZ18cVHGTtauRQRMiRWTIcUFhHJ+L3KMSaAJ7rNR+aieo8vEW9h56IPtRamkeabyVP7tOW+iQOOYmtUV0BPmdJD4kyAxHMavNCQa7CE7yFAKKVZ/oBm17/EOrbzFl67nYomIZ8eihRDzAFWjaa+VEM6SYcbsnSf8TxvteFNcHLqZWHgoJJ3v3r1PaZqC9HXke1DASKNhXq2RgNaJjmopTRNlWqKIz8nj41L4zODM//GASrdA6tS
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1572
+                          adtTax: 512.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 464ae0d739d4d166ae261078b923d4bd
+                            journey_1:
+                              - 49b00f6c3d557f518d8c98424918472c
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 28f28719ca4addd082207098e7fbd435
+                          solutionId: >-
+                            XL9fm8axwO/IaejnvhsUnq+RIBtaJqa5Vcf3+4c+rfC2Y8/8Ynah+w49EGlSmmnqgaOWdhfi7xh57WM+FawyI0VOZFsJAgyqvK5czP3xDnDSBWUuFOHuK/m3l2ZXV1XPY6o/NjdKCLLC7UWDinty/LC+BE0yHqncbJUSOhIwvbDLIEVoh5LRwh80sPSAjWoWastqy2zHbaK0Oc0PFYDR2RVQng2tsOiIBfNtxEqWuZMq94SrZu03BCoxnXhfhrgLawMlj7z/Bo3W9K/Q6Ld2SURXbugP/hix085Z6UEVqZryhnD5Jw3DSjXx1u9Km8NYFCxSdYpopi69cKunYqX9WGNeRkpHAk/ePGi5uNF/8daHNSGr5vyRJRW1/S/EH53DRGPnNs6ihC3oKFLS8h0ZcCVwZwlMFwmYqrT5j2jwR+y9lVibVynVZqR/JOg+zhuXYufurUrpIpiGEcRmRv5k1PKW9Jg2Z9tops8lTtEQ2kl6GTOoxayMQr4tQDyhOmUsVRK46neNL6RkasAjtn8ip2gG35N/slRkwseEvlFZ4Io=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1206
+                          adtTax: 489.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 316b9f6b05465ca1fc7ee201ed361998
+                            journey_1:
+                              - 6473348b569e3d1d50c25d2088be67de
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: bd3597aa3c22c0ed58b1b76b601005a8
+                          solutionId: >-
+                            IeLMNKY3Lt4wXGwExUUJBB7aOf+8Fpi9DAN8nWqTJAbMC++ZLS0utijeeM6yguB616DoRX5Y4o/kUkSnw1jXqwziP2FvAbPtte/715R1ya+YjDmjA0TyTUEFalf1uIfQv7YCWvRpYwSE+HFywAnLLoJO4nv17NwRw30g/Q0htLSQcUBoKkaL+wRxcEbaDxTba7q7QZq328PidyFkeY4a+hy9shLrW3WXHFy+AQPIlAI6cUPzgwjikeI1NkZS4sMR1QyhI/Edf8zxeaLal5TEl9LkJFGuG/fa9BHvmeyqRFz5OtcczbWIOWgslqK2gyrv5WBfnkGN6umzwsHtYRFCklv60KAWjguTEx3k0kzmb08ISVDFo3cUsj6Us8z5PcvDhCalu1YLJVIi4jIYwx9ZReqSXxWxhJSHl0RuG9eJO7l0rfHftsyvp3SJznDJyDmavTrrIw6wzIEAeQUpD3so1jBvD0i8S1CHdTTuoAEIJwx3Cu6ZcYRVOrVZ7xIWPt8wybtPAs3hxYbad3849ROgROMag2FSyApLpBwNQ3gTTP+qr0ypCcB+7QfTVGI9hX/qKmIBoI1RzNNQDzD9gfEQdZhmIRUAX0Q6DLGmOhthXI8KlRhYvB1V8dnX/q8DiaH6
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1443
+                          adtTax: 849.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 827a845834fc8e3d208932aabc837afc
+                            journey_1:
+                              - a7c6d228e55397a0c232b877e3735efb
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: b1f29517f4e7d2dd458fd52085be6b4b
+                          solutionId: >-
+                            XL9fm8axwO/IaejnvhsUnq+RIBtaJqa5Vcf3+4c+rfC2Y8/8Ynah+w49EGlSmmnqgaOWdhfi7xh57WM+FawyI0VOZFsJAgyqvK5czP3xDnDSBWUuFOHuK/m3l2ZXV1XPY6o/NjdKCLLC7UWDinty/LC+BE0yHqncbJUSOhIwvbDLIEVoh5LRwh80sPSAjWoWastqy2zHbaK0Oc0PFYDR2RVQng2tsOiIBfNtxEqWuZMq94SrZu03BCoxnXhfhrgLrOO5wQuaW9Re0WQtzymUb0AzFf+6R91wUcqOBFBagHi2FunZiptaXCtxtAmmk/orTJoRhz3EoBTloXjrWDlp/KLmP1is2VeSW5N8j8w3mYdRbJL/7IGvP6vOafeeFgiJU9LrHHzNb4nREA2cLEpYFGHIZRCzKUmjKHYrr12c78tLxxSiQrhxfXSHL5g9R4xFubTuREdoNP4N0LgTZYNoGT639CCq7FOjc/rjkgExJvQDwwyLWLQ2sPv0ULhSoF1bCGDr0EdTlTNAIApylT/oJhdqGy/zJmhX1dWWtLtqmd8=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1206
+                          adtTax: 489.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - e883168969696fddb5ff740b760b3750
+                            journey_1:
+                              - 8b7138e9be0b8dbfe8af996432817329
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: d980e422e72ab0ff4c21fd1cee9fdaff
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53S/r+8O7GC/b+7GCqrx0nmKAVjIcAQ12+OeaR7YfbyJJztn2tJofbCOtEhqDsMA4sQrEYVV1q4poFhIVccHtXN8Y7Ev6Pykew6b6flFmSzc6L98nrvVmIMUXuiRY/59MMNjfih98GSBi62ORD+T+HUfbHxY8WQuF5/k3VtujHb+szaAY4Z/MCmYxSt7gNGJy+BrpOLrPgWGjNMsw4FbBvVN3xRj1yiNZpd8YXJiJ6HO4vLEQKYRQ6gDydimo0L0VlsvJ5+FAbTvYdPuUSeZ2ww8TDLfCoffLkcfq0j7Kia+pipd5OQUe+s+udBK7UhrT5XrcGCJCQO/SRpCA3/rRG22tu/bslOJuqrA1sSNfz3pcIriInGpYqn996NwZBHOXRl3S0fZnKp44RAyj+ExoJRMUJyRB1n/Y3SwkWCoW5U88K0ZLtaEpFKQVwy971tLgXhnSxOmZaUaNYTxjNfe9YQE=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - c43a6e3fcf0acfd007ec018ff52345f5
+                            journey_1:
+                              - 180b9374038ac1e1340bccf5be035705
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 88124ea79016f7b3b11f9d4b17b9f959
+                          solutionId: >-
+                            XsbakYIu6IHJnDw9CoEfaH98xPDaxpJHG0OCjKEDJzWficBV5XGnUvlfq3I5djQpK/akem9ytBV7fr5N+3xsXNUW/KqV0NR8qX5tiZMDooYzZdM2f0EEKe+9pdS8FDSoqpCZRtQm5+mz70njAJk0EqreD9klZOP5Qt9EwjIj5PhH+nGO9y0DtgCc0ZWQK/4GjVnkC7SgYgc5UTN0WO16UO+4Zu1xsJRFtLGAUOcV7kenV5mbXl6l1DC1WQpiFQ6lSDOc7vxRx9mZ8B9Mcj+zIaUkkCYaISwf450grLm3ZtajCEvsrRkIKFh4kzJlqWrTWYFgFa8xyz2ANUqx9tJzjUyGSS8tuKxHOYiPbh6pVuWqQkXW/rKraJnJty2bCL7kJc9Td7Hd58vOqiePUCcArRiHKatT/vFuzQuaEDkJRQZydz5mO0W/SQACmAdaddmSIkoIY3A3DfYy79zL6bADYHJQKnqNWlUnc2i8KFPqMY3rLrDzcAiv6WVZXN5cPnzkmdYq+IvMYPC79ym108mH8BzK4igMr97wEwbhD0EuJ70=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1325
+                          adtTax: 495.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - cb7b86a2dda71e4fad5eace2f3f15dd8
+                            journey_1:
+                              - ad13fd5f617c96128c88174bf76931a6
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 8a0ed64ee3328e94c4b22f3285d0808f
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53Xhw7PDDuRmEtGgexM+G0YYc/yXO/IEzzSGptkyBXPdXLQObmyk6Nq51pLDbXnguN/9OC6Ubn2MQkqYiC/gUbfnuLs9g+1qdFaD5QU5R1a3znYRV4yeOp3Vzev/x0n8hythUFPxXcoiXH2PL1C2d2n+7Z+Zedl07Ri4wHEYhncEfiQ5dNG7NB3O8KPzOvsFb7b7nduEHQbVW55auzeUyB51K+br/N8VvDIJ/wo9rfkIQLr2O2D+1DEO7CjQjjpDZpSmgqgQN4jxV8hRmYYec3lJgE3GH2G8A/oSgkGILhKmfZJueKmZfG5Gnzqp+U4JiV/kdaYTfX0/9OZltclACshAcLVKLlUO8d9Sv39YpVY+AV4U/U4aHePwVIbHhVE5+QqWIULW2fhaykKqMDORfoPzcD0zhCin39/W42FO7Oi+TbyUEOEMx7nO9S+PIvjnfumUHEy9lmAYFr/2WQt9ujmc=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - d2374dedb78a73fa620a0cc8b3feac9a
+                            journey_1:
+                              - 985355c9adad5e60210e0f1592b5baf3
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: c84520da083d4564d21414ea7377c267
+                          solutionId: >-
+                            mYTdc27S/9ZXRVlVRf7uF0AHZ1r4XTiwknaOeutj1Ct4qPiyJM4vf8sKdDX6EImG1Gc/nB/OawYgbGiP5iEFKFrLFoaUfjFFnxjpW7M/ciOFFcgippeMzCk2MYMeNhapVtXPaD2yocAxzs3yJYfFkN+rmWTAtAuN+lzs5NwlsKk9ZZ1hYKMQP50jA9v8koMpnBYvvOyhcbdcd+xRDMa839S8UMuXsecUj4DMHP0RYZrl1eAb/GmGAEW1rEk9j60/9MPBqQe2yrgv4bcl4v7xOI+V7Z2zMMp6Xx2hoi/NRv8nDQqoiVfOxouwpUONb1jhOIz1NCYODlt88jwIUmi/bcaPNOZ6UQ2Op0Pu0q2cOdKcHVWr6oHa3if0vco7yATaHDDWqKDr0VlBA4gU1i4S5HKNzS9ylCa3+RpQfDx6JMXzd4Dr0wGvcMu8HAE2VgMuQ1AuqKObwZnpD1oNvC6kL3WWRqdf3x0JPNwyNzz0LtWjtv65fTkqMa7RJ8kCC8SODdqTyYM3u04gXIR4bemELlQfqkFxF/s85CtZG5qnCMra4X6Rimu2+4cztaMXVHbZGWwHdZsxUGRuqtnoV3D3SP8poyItoY3NAXn0umPmrGQ81gv7Co036JxhtrwRFYKI
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1462
+                          adtTax: 862.14
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 2e363a21a6f32e2ba0b4d011cb303ce9
+                            journey_1:
+                              - 9affcc19ca9860accf95fd7963a8c63d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 218
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 218
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 3f6c3766392edd52ccaa64b7e17b51df
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53S/r+8O7GC/b+7GCqrx0nmKAVjIcAQ12+OeaR7YfbyJJztn2tJofbCOtEhqDsMA4sQrEYVV1q4poFhIVccHtXN8Y7Ev6Pykew6b6flFmSzc6L98nrvVmIMUXuiRY/59MMNjfih98GSBi62ORD+T+HUfbHxY8WQuF5/k3VtujHb+szKUfx5bn/0eCQmNstZqd6aAW52qU2lLfBUPkf0kH8NkKj+Uwg43XmA9loVLDkkEizT4wSKAoCV0M5QRltuLaRPeI/GXFxypCnApw+SUVKWMmBinWB5UaQWlOtowaVqcVgG9/3sSrD16HrbU/R6WJDoGShTd9hZ/oAK4/IoScPXGyTbsq8tG3C+l//8r0jrUBJk9bVPuGuL4cc908D0afy5FpdCD988V6r1d8CzuivNA722vKyyoptRrPTn+TOSWroDO6m8170E4P2c3PZvLmbYgQCJ7a1pYn0jVnpissneU=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 11cd575310b1fd9778cf508ce4491b90
+                            journey_1:
+                              - 14fdd308d1dbe896fb8261cb9aaf48b7
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 19c7ef51e29d6e7f8895f337e84e1738
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53Xhw7PDDuRmEtGgexM+G0YYc/yXO/IEzzSGptkyBXPdXLQObmyk6Nq51pLDbXnguN/9OC6Ubn2MQkqYiC/gUbfnuLs9g+1qdFaD5QU5R1a3znYRV4yeOp3Vzev/x0n8hythUFPxXcoiXH2PL1C2d2n+7Z+Zedl07Ri4wHEYhncEfKD3mJ3qpMSECrYT754LmHiH1VGEhjgCySplem80qiyMZ/MGaQeRiv9t9fJkp0kG/p7gAdXgRN2pMV3xIjwWv43m6eK1kqTpVOFt52lmxab4GBUP7XDzPQQsgbUBME3OGT3Pry52kvXU17VvvJMvYIhcTa9SuLtGDKEfidDggeBDNoRzoojvMRGgvzte5l0cWgNLBDz0CH0AX/2nx5z/qexj5I1prOoFphPHmK29hYWOI+8mBUGBuIktGOG5beJPLvuql6EsfYck+9joYMwyNmXDQdIvczozpyoh3NmAmDDs=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7397fa553c9b04cc7e0cee0f138ba322
+                            journey_1:
+                              - 93953934239e0d571cdc7a016d3c033a
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 9a0b001c6c81f79e9aadbdc2eb67aa0e
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53aQdSrIsAseuHATdIuo+K9+zqKyyRZjkpwAEkxK3VRmvwFkFH1oiOEVle4xlQOG1DLu43K59YvQz7tPHDrL6ccS34kQw8aP5FHQDQfw7zWA6UNhWqQunjr7wkaWuB6SfGaMtzmDfGf9tQY0ANY7AywhDlLOVMLc2+q++pDL8LDnr1y+o3ijVPGG0/aJzzyKc9W9iA7vvOS4WmzLd0bc1j7bVE0rrw2eqM4zAOKgxqzKEzdBCYV+cfpWKpwjYn25XqgrUQyJDKOB2GMdH0K8JEw7nz16pFuEJx35A2MNm4eFndLOSxZvK8moMc8J14sxwzxWsHA938IHfy1MRG6yOOYpZvsd6qvV3gn9ikWduB+2nfSMfDwDCls9cIbpnDR4SXcAjcOAyAv6XBBrYj7z6Mrk9W9LAUustyYrphLBZrw+9lOMV7MCq0lG0O8Ft7R3BZNRtCzEYfChJfqAMjAIXkMg=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 6c177c433ff39841dbea5601e605ce05
+                            journey_1:
+                              - eb8a791854bf811cca530c9b74c29af4
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 70a408571dee3612bb976bc099f3da71
+                          solutionId: >-
+                            Fam6Fu2fI+N+HZ+oWeOXwO+Zi2J7MWm71c1DQyusAroy/y9XdZrE470aUsbznarEMPDpI1XN1AHLZ6KfxchVUaEFdxDdbJQdSHGv8ZBkuGd7UKbjiv3C8UkqbN40DbSa2F19aM+bfnuTk5Suo4EVHosgWmSOFvCw0HzROqOrhTTBF42cbP+XXRxUXfmK+o2HgORtDwIjylJXksBMXeMoSmxmFkCBjp2J9eTXQZpxWGT7bbMV/l/MMwjonmGZSxClR/y6ARWB00VQRz6z5UqCmNeDWH3FjmHXW2o29O78l54Y1U5yhZAPJU6I5LzAHSR6pMPrVOonx8JTUS/r+fRzJs1AcjFY/K7GcaJZQzjer8YT1gZWDezjOY8t8QCwBO4e0CSiZJSCzAkBkGpn6mqMbP2Nqy7iw4V1QB9Pobw6lxqMVnzQkHTdtIIzW5kyATVTxYlnzGR262QhsaML5OjTHx26z8SqtuEDeaONNgg3U8ghPZASUtPKBzYjHh4y6WmeDpWzSR9xMYyps2teBSbLWEBUOLMei9QS/gJFfm3X5a6LxEMrzsLL6Reec6zeXpOEhBkFWqbCjkftze+jJWCOV9/reQPbW/AbjATtH9w6GGUzj78buHKAJaKGHPaQCK3g
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1173
+                          adtTax: 836.06
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8c8b5fe03688025facb247b00c4b1832
+                            journey_1:
+                              - 9dafac708ce443da54ea2d712165f1d1
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 2b0363ead6688bff4c67f83dfd962d18
+                          solutionId: >-
+                            x82gLTrg2fVwXJkIsJS0UJyGRVA6JufxE6YwaoDUmjdLqsTZmB7Y85PH4FCtqKsXyNqLsBEsb9Fp5/AHNhDJnuoF1Swp9iPLQmtTlmgFmt7m8oJUb8aY25K+lDUitnM7e272nXHB/hYFmgi9Bz9TKAvMBPrJmSVMeLqxCwxbHa2c50gqKTQhd1LUbuE6VmEb6ufL3SBbhjhSxYADdsFZTr7RbIsXLPUywi5bO5Pw6pihFBv58CSLeXXoTY/BghQAzVStNyrPU1HuBCeNSb7dS0zHgGNSIadPsjWk8kb9TTu9GOaKDl95Jrp5Ijw2KA7mumZoJp+qk3bkAVrMe7ZIzj8xjI9of2X6z9wkmsel40+WT1LHPj2tMMtvnrpth5taWBnBuo7kRcfKoPGslPqFKDkiZzPzWJarXZ2HwgwYwOsLUetOYCtLVrNu2gkPONVCW6imiPMVgGgg7SUQBI68yQ0NS9LKAocXkBDsvKEUApxlufMWAG2RsN+8Sk1vGNAFd8D6xcMH8KcZ5tfvN6hk/gOr6/M79P5u6xRAvuHqVLs=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1355
+                          adtTax: 495.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7d2365e5369429968f9f200c62356006
+                            journey_1:
+                              - 67311f12a3da598f2616b97038bee1e9
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 1ab302d65f94ae3611e9a65a1aff0ff0
+                          solutionId: >-
+                            LF3QoxvVJZneVu9G0J8wCIwA0JhvjW+PwBu04tIsWthzJzULXQJv+CpWfEUsZC1XrejuTqjNnwCuEvbKzGlgTeSqpwVdmHvvpsS43vFc86/gxJVOOuwNWzxrt2/UJA4YjFvqMUKYR/iJrA5FOzhnN1n/UWLBUBZBMHAljnLjiX6SoQ7Pz+uPs31DEnZEh/05Aw37JyjFjansPE08YVoXrW475zlu0uoKefTC1EWx7DRWAP1uAiOdBSUXTbFYcXMb9FhVLKVw0EWw6O/JnMlvc1SyZJc1UFhEUCO89ZHMYqmOgi81X5Mw2ji1F+CkIBTuD4WRW+RvlKnXJjCQ0tpsYYWlVog3DEAhbX8TuCJjXd84cAPCMVt4dshY0xlrpMxTqt7LznZLaleoyhV96DmGda85YONmBNoh5tytAuvgg0hxIlAquaQ+G1AOeuHGpwFWMWScZ+0ZR3mnAFr0P2b4tQf6+hX9eu8ILbsgwWH3zw5dvlrI/gR7+m6HXuT/IJ7+Rkl9321VdPoFSnZkSjs6QRARTOVgpv9CzFTJyGjdvkW0IxoaofIAfmHvDFvJFkeMtMecLaIDoGWgTEDFE9MG9ks5c/eOWO9LKoIW6SZDZE7XcUckwundd+szSoNgP0rVlIHD9Gt9CZiEr0JAqAK77f8sr6kCd4o5sQpAMANdNR4vIdvsgoDIElCnUptItT+g
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1467
+                          adtTax: 866.66
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 25432709842b55809c08ae90fdb6d4c0
+                            journey_1:
+                              - 3405100ff5c6755cbd00853b202ccb2a
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 6
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                  - 3
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 4
+                                  - 5
+                                  - 6
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 9194d48ad69538930301fd1db962bd3c
+                          solutionId: >-
+                            XL9fm8axwO/IaejnvhsUnq+RIBtaJqa5Vcf3+4c+rfC2Y8/8Ynah+w49EGlSmmnqgaOWdhfi7xh57WM+FawyI0VOZFsJAgyqvK5czP3xDnDSBWUuFOHuK/m3l2ZXV1XPY6o/NjdKCLLC7UWDinty/LC+BE0yHqncbJUSOhIwvbDLIEVoh5LRwh80sPSAjWoWastqy2zHbaK0Oc0PFYDR2RVQng2tsOiIBfNtxEqWuZMq94SrZu03BCoxnXhfhrgLrOO5wQuaW9Re0WQtzymUb0AzFf+6R91wUcqOBFBagHi2FunZiptaXCtxtAmmk/or+HDRqvlF//PbPjoed6rmdfaxb/BCJXVE0Bn+DkUKNOELPc5YJkrBooNwMzJlD8gF1dYgMWQemXff5c2a0t5WGi2Fh+Ft/lakpHVqbog2eCiaMsnDXocnEcof3LTzkClXYiTYhC8mDyjn1QYs0o1wNnU+P0vlJXJ5CrmrDfLa9qMYaSnWGdNJtACAboL0dUSfuTtdT1MKLX9dpMwzgdo0i2NxykQRplTnUF3+aSEZbqM=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1206
+                          adtTax: 489.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - a2b72bbbe32e249fa497bfa241396c51
+                            journey_1:
+                              - 32064e27384430ffa0bc726e4322912a
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 73530b6b1890bb857d3a0c828c61ae0b
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53XXxETWrJCUJX1QsIfUfD6TYLpcalOHCAM+6kkZXvnd6hSX4AES+jmKjrVzjLERDmfse0ZbI1oMglWtOCpO/oatU7tUm0+bbTmKDLea0+TbrCEJqGPTms3aXrZKjqzRncPZ9ILk1cUuMlwrsx2So9lE5I/sB2jcVIvUJNIWObcWLexX7qiKjWLJeTraXKBAMuWODRO7Ms8EViQ4oCfQkNSYZd0mkX/CPGAzr6KC9f8/d4bGJd/nBnWP3G1jzqPIm3KwYXSYTw5EpC3RW25sKf9dQFF6wIDpbsqoixgvKUJ47rzgqCS9K+G66pkjucT0C5fUl2WCKX4F3+M/BscEc5ZZvll+yfjoBCFSdq4AcarG8WQkKsAgFZ/GfG30mYwzyJhepNe2O76MFlbpT8wZHxknaKpcniTeVXR/idvJg0ay3PCNnkxIqoBcISj2LUHyGmJzgnBse7bYrPX7rqVNaZ2s=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 1898e7b1b59a552df39a6e164d4ef9ce
+                            journey_1:
+                              - 7df138999002bfb99cdbb62fa82592e2
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 24199becb9bb5e6c54f361382784d485
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53cALuHZJU8QnsFkG6MzjeoGre4PDyB6fVYTi/Rw7XtbOYGbfCfISCw0XDsuEsWMc0PuxmsHGkg6MRMkISSJ+1ybZeykpnDIAldUNOLQb9BbDq8Jn0xIVBbZ4T32KMcwvzFMkVkPy1EOsUEIX0TFjsIy+1UfD5Rw//f/4spibskJw2jbzVtClQ5d/eJdgDQyMoyDscieKxFJw5Xk54v9MhKn51218AIhuyTaE5IFOzMA+6wGXTrF/jJz8/Icq1Vw3whkPEBrMF6bUy31fOmT1Qb2M5qOLXfDdm4GFR9F7DolDxNLdr02OTARxrYffc8mHWVNbOgo1NnqrhLpmPKYsGvoYWNsGvgwewZwLoknsHh1BwzTCvgSN6HiAHURohAswmYxeBERBbIajlVNUcvrSOQx57CRzNhncyXYac+Inu1hb99dI79u28H4e/DMuaywgPSRWrTZQ4gZTYvvkMAvoBRA=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - b6c3d50cf6ba0221be549997b334f061
+                            journey_1:
+                              - b7ddd78c302ff18c5e7de629d02f039e
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: a13601ea9d866ea91581bb8560385606
+                          solutionId: >-
+                            XsbakYIu6IHJnDw9CoEfaH98xPDaxpJHG0OCjKEDJzWficBV5XGnUvlfq3I5djQpK/akem9ytBV7fr5N+3xsXNUW/KqV0NR8qX5tiZMDooYzZdM2f0EEKe+9pdS8FDSoqpCZRtQm5+mz70njAJk0EqreD9klZOP5Qt9EwjIj5PhH+nGO9y0DtgCc0ZWQK/4GjVnkC7SgYgc5UTN0WO16UO+4Zu1xsJRFtLGAUOcV7kenV5mbXl6l1DC1WQpiFQ6lK/WbATokQthjZhlM6l4R2YMr0uFjODqsoiOBcRYn6EmSSlju8W9RIbn7X/18wO2EK4wLrG2A01Unqw+LhSi3/5e+EHUFkyX0fkHVkRV5ZMTWMUDlKH95rZSWR67FXktuzgM0pSxXFz+D2ilAQzy11EX/2zzysedH7GiQfSq2oaJmArKwaJQX4JGP8Qm0CmOmZ2tLPVhgmBVGyKlOhUIr3yuBzqkb/mcJ/j/aQqal5PdDH0AMP3M5Rs2scCH4uYp7I2l0kp0hY/z8ASDW5PkAOuq26XEEc9V4uWhxbrSB1jc=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1325
+                          adtTax: 495.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - b46c0f9b70c26dd12370a0d9eea432fb
+                            journey_1:
+                              - d927a0b571c70c711ed34e2c982e0581
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 673ecd99773dee516c694ec9c9a65152
+                          solutionId: >-
+                            mYTdc27S/9ZXRVlVRf7uF0AHZ1r4XTiwknaOeutj1Ct4qPiyJM4vf8sKdDX6EImG1Gc/nB/OawYgbGiP5iEFKFrLFoaUfjFFnxjpW7M/ciOFFcgippeMzCk2MYMeNhapVtXPaD2yocAxzs3yJYfFkN+rmWTAtAuN+lzs5NwlsKk9ZZ1hYKMQP50jA9v8koMpnBYvvOyhcbdcd+xRDMa839S8UMuXsecUj4DMHP0RYZrl1eAb/GmGAEW1rEk9j60/9MPBqQe2yrgv4bcl4v7xOI+V7Z2zMMp6Xx2hoi/NRv8nDQqoiVfOxouwpUONb1jhOIz1NCYODlt88jwIUmi/bcaPNOZ6UQ2Op0Pu0q2cOdKcHVWr6oHa3if0vco7yATaHDDWqKDr0VlBA4gU1i4S5E9ERuXD/fQSI9Vfc7pGwV7SioClcwtTgq1mWPeciR3AXm5yFlI+iwoDUL0pjC0W2EhCIO2SDriKXzJVvDwPvfF47wNlT1ziYoUoCjTApP82ip2gPrTC3m7SWumDvoag8ffjZAKrTa6ygBKBdS9tQqiSmkrX4bJQd2Q9ar3H8nEohUFlRfe6ngUcswdS2m5NXgjXh7G6M8vwUh6Sx90mWAl2pQYPI5W/KGGPaaPtv4RC
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1462
+                          adtTax: 862.14
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - bbcc074b53871a53c273a518e165828a
+                            journey_1:
+                              - ab82161e3ee08a566ce08e1e8f964f6a
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 218
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 218
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: fe2908ae4580f60bd8dc9b958988d59f
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53S/r+8O7GC/b+7GCqrx0nmKAVjIcAQ12+OeaR7YfbyJJztn2tJofbCOtEhqDsMA4sQrEYVV1q4poFhIVccHtXN8Y7Ev6Pykew6b6flFmSzc6L98nrvVmIMUXuiRY/59MMNjfih98GSBi62ORD+T+HUfbHxY8WQuF5/k3VtujHb+szKUfx5bn/0eCQmNstZqd6aAW52qU2lLfBUPkf0kH8NkKj+Uwg43XmA9loVLDkkEijclpHUDryHlwxDvc+quY89282uojrH8UextVjQAb8+X7g1YYCGEhSKCklWSvLaUaKqE2khMB5AUS0qdNPzOwvsMhc03Wiht2KVF6hlXcmKaNPuBZSsufS/t6Haa+qLMftoLWNIafZ3MDK62/0LSOEWmX9qxMYI75PISewgjDPZOuz/hjLi7xv9xb6jjzY1586Dqa8DAMB+o2aMtb0P605jzvIbsxEInvG4hGQ7AdJSw=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - db699f44995733eac9dc8e6123d83285
+                            journey_1:
+                              - b47d62d43b58153e1be8745cf5ea6d81
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 184811bf7882f2a3e8bc93562f1eedbd
+                          solutionId: >-
+                            OUUQi03WjYsjhRmdHta7oIqBqCJ/i50XUfH032L4FdSzsxA9tISolgtODWtdQmqYxGHryqBE3rEBR7g5sXBpN+n0B7h+qG22jnCQeOoqZEoJkVUNtF6gMtMxvg8TT/UOhuwU3ufqSJSOU9vaAcFdjtylSsWoBr9tgQdwYjZzVn5F6O5aVwMdocYH9UB4PQuolxau4LykqSFul/UpnUcq92AJahooJyB2KibbnQUDHVxNyxOuQZSbWrv3wwVDJAeKTTocx0zXBKt9/0oVgQQIzATNKF5jNhA/qq67pPptEBIeUOiYlFtcmE0yrpQ7/pTiyFu3e+zkxrVOmfMMFs2Me8fYj8HzhDwDzQViWa6UD378Aw4q3ry7eEXSwIAy24v/UT6Rt0jCL8tQKmmtWaX3lPcWwoUuVOTBbJwp7DHmT0aWn9e/s1MGNelEbbxinQz4393Qt/ZH7OzQo1pdpMbYgirWTeV/e58hq8LtdAFN6zHcGl+44e2W2xCVtXGC+17n0SV9E0ktY2e6kxa5H36rI8oS0XXoZG3uDu/kBkOyDdLwnysII75fC0pXkAvu/lINMMd6SPkeNYYQjer7OchaambNyAjXzKTykapMgvaUMJGQGrTLfDUnwkHR+hFm3uxl
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1690
+                          adtTax: 518.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 4d865a020b6cde38d0fd741a8845cb7e
+                            journey_1:
+                              - 018272aa65d15c7e795f2a8e809181cd
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 6eeb58eaf60693c7bbb6aeb8d3707955
+                          solutionId: >-
+                            Fam6Fu2fI+N+HZ+oWeOXwO+Zi2J7MWm71c1DQyusAroy/y9XdZrE470aUsbznarEMPDpI1XN1AHLZ6KfxchVUaEFdxDdbJQdSHGv8ZBkuGd7UKbjiv3C8UkqbN40DbSa2F19aM+bfnuTk5Suo4EVHosgWmSOFvCw0HzROqOrhTTBF42cbP+XXRxUXfmK+o2HgORtDwIjylJXksBMXeMoSmxmFkCBjp2J9eTXQZpxWGS5St5t+Nk+uLUz/OjiesQJcU5a4I/Zr/gnCkNSHxHyUk8jq3mT9C+Hht1+5PM/UbyCmeieIgJnNT0CWg0mcmHgvUYSWwbG7OS1qCAifuhXbj6JwAvLYhdvjJR7ZVhQth1EcEW1YR7LnKzdoyaf5Q8mRkpo8jHL+F/21nkU2Zi+E4UM4u+1/KwhYRTBh9DftCugB1BhvuUfEY9xOWxZJyc9q1Ypolq8Mw5TsYdalLjciS9Lhiub3xn2nOdrFsCK5UmzL3gsFtyMg8Ye9XCFAFKEopGXGQzgE2dtPjJZraHbYRXE7CoRlqVHty/r+0dp/oCvMy7nUNiP6/axD1dJLHsqdpvxceSsh9+RiTFk+IjoqFF/36l5kYQM7KuIz3ikkswGWrvpchOpaZKxf7pSGuYi
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1173
+                          adtTax: 836.06
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - a740700c80564d0c8a1ee96245777e7d
+                            journey_1:
+                              - 2575260a841d1ae1d3d8224b9e4d1aee
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 8a1451b32810f4fcb175c60d1092de2e
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53Xhw7PDDuRmEtGgexM+G0YYc/yXO/IEzzSGptkyBXPdXLQObmyk6Nq51pLDbXnguN/9OC6Ubn2MQkqYiC/gUbfnuLs9g+1qdFaD5QU5R1a3znYRV4yeOp3Vzev/x0n8hythUFPxXcoiXH2PL1C2d2n+7Z+Zedl07Ri4wHEYhncEfKD3mJ3qpMSECrYT754LmHiH1VGEhjgCySplem80qiyMZ/MGaQeRiv9t9fJkp0kG/YvROcNM9LeiOS2Nv0EdtnBHcyhq8tOMOKFkHGIp2tNSxCKq+JDKi8bn2xV60J1CgRCelHrLXOKQ/++EveZR3EslFIIfePxZLSPz16ly5uZr7BTv/7GZA9XVXTOiEBmBDt32hqe85gG+3sy7ilCKBjYVGSS8E2F3K/+XExH47y++M+T3shNmUs0IwkSb9LIAM8MKHaU9omGFGPuKH4SlrqEvDhFw0FivSHHj4Uvi3ZNc=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 4ed4a603868f6dbdc223058e4da05fc9
+                            journey_1:
+                              - 0107c90a48093a2484c2d6faf11ff1b1
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 978fbfd0789665405c711af1410d7d80
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53TZVvq60q6wp/0+UdxN2AkgYycaxCRTnxygr9/L1aaYsZV9ggGcR+nw3V4wx3Cf1eJHQgsE3VVygwIpVjF7r5gzxGbir5dv+7jwfHYN2SLI7Y8bhqQ74caculFcLAM0lo9m08tvnD0Xyim6JU11W3LWsCeBZ8BTz3Bo/CstC2JCO7hFKyXbDiX0Z9+26otFYaUh59K4YsUNynldfpgjAChQNLKErM9KvSJm3dKQCMHV+oCwOGGHGFhom0uX6AmdL1ndgB588tdUvIOGKiLksOCMgAMlnwbapFRQpDk/oXoTcywGy3wqSi4Ceneh2YIh3ZnAwep44/NLxFQrtkf/QUz57zLTCkBAbU1TZpUeigwC2V7MziMH0bqdswAAsj7TMLSTJVI0PkJe/h7e6KQhAcqniFCokIa59PO4p3vMA+sqSC+Q4sIsHeMz7iZWV5CHf6zpqqp/MqmwsZtuoGXm2VkI=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - dc1b02e6770372f9a9b7748e4ba4f848
+                            journey_1:
+                              - f791cb339c916867b21b0ff555053fce
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 95c24bcea4df6aabb1291fa2fa235420
+                          solutionId: >-
+                            LF3QoxvVJZneVu9G0J8wCIwA0JhvjW+PwBu04tIsWthzJzULXQJv+CpWfEUsZC1XrejuTqjNnwCuEvbKzGlgTeSqpwVdmHvvpsS43vFc86/gxJVOOuwNWzxrt2/UJA4YjFvqMUKYR/iJrA5FOzhnN7LzsXcV7swH6yBXlglcXCquA8lObIVv9eNaQiHBXnphpsQm75xGmcMn8TTF+DFPDG78GcDjKCz5Z3Rx0AFtU01O53B2yHnsTw50ssCAffn+njHwoLOVZOYEjj0ISvkuVt03/jWPMLxYMDqlZLZJoVBjMAlBLjXwGM6WQ+OCEKxmo0hTfdKVsEruwKlca8xvz9auUKKoAvjzSKOJhhdMTDMrJqD3y+FpD1p8mS1pWm40s0gTTv3yMV+GY11/RagQmEfGj3mBcLUUFzr97fx+9+OvFaxDMAN2V7xl8v2xyvsOc7OEt77RC6Pb3bE1mIo0t3noYZmyJOr3+S1Fdr3j5bLwkjbcnv02SeYJ1HJixyHafwHBSfqNcR6DMeBH7xywXzs3zsI01vP3EsK0MGc+jKSbVoK5+46gNAwAg/gWpCus6wYwHWvtIpXa+eWkQjVx8KIHbX+Un9XPP7V/kb9p217vGVofsBrTQ4uRT/wjWulXQdZU6qLmsSx617O7Aklks/T7w8zt1bkgIPX8dBbV7L2Elg1CU4Bo42e2AGeUl9ZD
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1467
+                          adtTax: 866.66
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 72383d9edd39ab61ea9e124ec9b0c517
+                            journey_1:
+                              - df5b3f93f08b8f94933ebf570aa4796f
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 6
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                  - 3
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 4
+                                  - 5
+                                  - 6
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 0d350458d26e5f7c415224b8588708bf
+                          solutionId: >-
+                            ONzUhbkFTHeZarzy6CC4HznZGI96nxDqfAhiiDx1kherabRCGa2mTO4UEBZBZ5Px8gk5/WZePVGmqm7gIW3g34ij6txIFDmR9Sf+WoROws+Wb79c1SXOi7nyXod/AnuKA1RhZUXSKSxIsbTxO4i2P42+OFlyE2XCX4ZIEk+Josp4UD1DgNd0PbDD0QNK81Dokqlc5pu5QAcTORHhzbP3qtWP4QI6OOLcIpz5KVOFfh1j+hOcse2IiH8rYfeY3HFH+KsKuKUyDEpahcIk1FxKJLj6NENzF2ONors7B8PfHfD9njEbetVQlr6XyWqcFPpI4WH7iqUXGyE23HduH6YvXsHGe7DnKQE+2B5vRpmgfmCMIoKSDsoq91n3Ih72oW5f5zLepgStQo5cAb1q/xuY5FUxEzKGUy7BpAQ4NQwnOq+gyEu7E8fPD+B1UhgUwLTkaOiI3imVjZaoVrwxT+u5ZTGOj6eCl776AIsqhCBA57GxlIYU8t47eARKOsIzYmAAr4zw9wOozpg34NquVSgeIVMpVnKF0Y9GUXtbZ+jFSBVsCy1oPFHatO6/XNs0VjsIF36tt+6aiJHbkB66tVKxpLY5xXzYRy5TcQxobALrB7oCX0UoAk/+sZy9xuGDQT1m
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1347
+                          adtTax: 850.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - feefaa5dedfce1cd79120136f08e7ae7
+                            journey_1:
+                              - eff3729cf6860add6da2fcc359dafa79
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: a92e5caed2cf8285473186376bfbdad0
+                          solutionId: >-
+                            Zz+6m4a5nkMGwnBkDayEEGUxaA3wd/cqLpXrus9fHbjD01QzN3efi8Fvd/jt2k5k2SWDfun/Y8WoU1xB6EzMZq7FR5r+Vq80Ul/r8Ym7bDFVHRthY6Wf/dhQcotbl6rlZK4NbLQwfoEJ6FaZB8V1gFWgoxn0RqiNcVpWZV6kQ4HC7KlfZkMta2PO+0s7N8TsqqYkIIlYDOjgMpMfWOE+GzdWJmfkA3cPqp8Z9sBzrY9CgGN/8lzWbWQB70sAnQpNzfwDdBjDCjncWfi5a1dO6f3ZD+g6VWrf/xNr69sc4D/HFgAs4HifWIK6KDiF1q9mmoPyd4hwFtkXLpEYkAdf+rmmlDFpYy9lt58KQt9ProACI6L+K5RUIGjUiLTtR7CCirgKQEDo0nNz7uwjsoL7vpkk3b5AOsLKVv/KbRQIbJQkpPv271fbLAq7tdIa16hc13mSZ9E1BdjnXii1N+qwgdHuGAaHoRIvbWLNPYTn3zJP0q3tIoq7+NIF7hi3Q50ZRQKJEeO3DANaQsq8hfxZcXEKLGvh8TF1Ld1O2rWD+4M=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1460
+                          adtTax: 502.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - fe5b3eea447c1981b2c902860e19e08b
+                            journey_1:
+                              - d1e52bb8dab896bcf9408c79b829502c
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 971b7089b773c5bc1a56d0f95b80ef78
+                          solutionId: >-
+                            x82gLTrg2fVwXJkIsJS0UJyGRVA6JufxE6YwaoDUmjdLqsTZmB7Y85PH4FCtqKsXyNqLsBEsb9Fp5/AHNhDJnuoF1Swp9iPLQmtTlmgFmt7m8oJUb8aY25K+lDUitnM7e272nXHB/hYFmgi9Bz9TKAvMBPrJmSVMeLqxCwxbHa2c50gqKTQhd1LUbuE6VmEb6ufL3SBbhjhSxYADdsFZTr7RbIsXLPUywi5bO5Pw6pihFBv58CSLeXXoTY/BghQAzVStNyrPU1HuBCeNSb7dS0zHgGNSIadPsjWk8kb9TTu9GOaKDl95Jrp5Ijw2KA7mzcGio7pCev4ypzOa1rszGcRfICuIhH3YN+BJKrtYGfDsTCyyeV7q/Y/SP8Dv0e8pW8V72wkFS8c219X3h1931q62X7vGBeHi0ydEtm9EYELhctaw7K90eOw9405sIH2rjepUAW+BYQfS4IauVWBhK3DwPyG0ohjrQhpPx+e8K0UqB3PIXSMhgF79zGNzFNuIL4QSSdaR7g3+5uHwrGgjs05rOyGmLJhrIM4xPdo0MN4=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1355
+                          adtTax: 495.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8196c592ea38a51ef27a38758e7d5bae
+                            journey_1:
+                              - 7893324070554a28d9e70be472a73fee
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: c08cbb9a9f51fcc171a69bda08826bb2
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53aQdSrIsAseuHATdIuo+K9+zqKyyRZjkpwAEkxK3VRmvwFkFH1oiOEVle4xlQOG1DLu43K59YvQz7tPHDrL6ccS34kQw8aP5FHQDQfw7zWA6UNhWqQunjr7wkaWuB6SfGaMtzmDfGf9tQY0ANY7AywhDlLOVMLc2+q++pDL8LDnrJslrBO004cuK/ESNEhqtK/XnLfNHLJ7IAuW1IcU+ArQ/LrZgBcyJzkFpiSZA+zXZ4UiytMzgiDedFfLuK0Z+OjkLeThPMwbccbZuhjR2ukP7K0Cd2zxriQIYDYlNhP4AcsGT7dumlXPEfDXL/DxpuMwnZvu6oXcwtWl75q0HOARnzzNunn9kAibJOaUJN5GkspCY6gpvg9jW8XWLGz+SBPjWCwSke+DQohhmvVizfcCqAyv8WhxHZ4cWUZE0Uub5t+rUL0TiDoocdeuQY/J/CLucQuvrhMtXO9Ng2GNGkm0=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - c1fc924a551e076a637e0df826a4d022
+                            journey_1:
+                              - 927e5abeace36587cd0c5429f65a24a7
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 08a5bdb94ab931b32d7357020b95946d
+                          solutionId: >-
+                            ONzUhbkFTHeZarzy6CC4HznZGI96nxDqfAhiiDx1kherabRCGa2mTO4UEBZBZ5Px8gk5/WZePVGmqm7gIW3g34ij6txIFDmR9Sf+WoROws+Wb79c1SXOi7nyXod/AnuKA1RhZUXSKSxIsbTxO4i2P42+OFlyE2XCX4ZIEk+Josp4UD1DgNd0PbDD0QNK81Dokqlc5pu5QAcTORHhzbP3qtWP4QI6OOLcIpz5KVOFfh1j+hOcse2IiH8rYfeY3HFH+KsKuKUyDEpahcIk1FxKJLj6NENzF2ONors7B8PfHfD9njEbetVQlr6XyWqcFPpI4WH7iqUXGyE23HduH6YvXsHGe7DnKQE+2B5vRpmgfmCMIoKSDsoq91n3Ih72oW5f5zLepgStQo5cAb1q/xuY5B1nOmwNfUAxM+ya6GkPkwYpCmORuUWlqZTPhFE9kIJkwuq9mgUA0CIlCQZVVre0MKPw/LjSmmBjCO9jRHme7aSJBK5FtiIujv6DbYVTa4NbQKcGw1utN3jq/My2ZACc6r7Q2pTaiPLuM2B72tO2IDf6GxuvPbVhbRPkMb1HZCHAneCW2EACHTPPqyMYhch+6hcqhAAwrI30Z8jYkQnPysoXSWartQZEXZgHNkqKVhQ1
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1347
+                          adtTax: 850.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 0e10ac2496d1d6adb6d24d29d4abc57e
+                            journey_1:
+                              - 4227f81cbd55efe216d60e618934bb51
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 9cbe976a6580f326c6702d6dbc524107
+                          solutionId: >-
+                            Zz+6m4a5nkMGwnBkDayEEGUxaA3wd/cqLpXrus9fHbjD01QzN3efi8Fvd/jt2k5k2SWDfun/Y8WoU1xB6EzMZq7FR5r+Vq80Ul/r8Ym7bDFVHRthY6Wf/dhQcotbl6rlZK4NbLQwfoEJ6FaZB8V1gFWgoxn0RqiNcVpWZV6kQ4HC7KlfZkMta2PO+0s7N8TsqqYkIIlYDOjgMpMfWOE+GzdWJmfkA3cPqp8Z9sBzrY9CgGN/8lzWbWQB70sAnQpNzfwDdBjDCjncWfi5a1dO6f3ZD+g6VWrf/xNr69sc4D/HFgAs4HifWIK6KDiF1q9m40Ldxwq939SU2+MrpOhWKnwSR7yTD+0fAcYctlauO86uYaXOa/ktZ1kEseIN2LX65YFN0ihoRiVGJiL/HcxFnj7mhLYcAg+50+E3ZNkdqiLhiBVrBveF9faNT6SWNMjMzVZ9fuQGlG2nOHN2uU/lzwlGwVtC4TVUyYL3XMUdpXjOxje15HYa74wX2tWhuvZrYVYTbOjtTJBaFbOVBmyouat4GOITHpDZSoWc4vgz9f8=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1460
+                          adtTax: 502.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 2688b3a9edd82d60988c68f48d038c73
+                            journey_1:
+                              - 605d2c11a1f109b391766d6c39a5172f
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 1998682566716ae3117eb7cc08251ef1
+                          solutionId: >-
+                            2LDjaI7zvByDMC9Eb/9UesadFneB6Zbor/LA88EewsWLKAcFXJF/W7sSxOdr+xXEFSQy5Jv83Of6zFH3BHGzuoAfEgJLLC7myfVT9sTE9DmV5WEBidla4FeHFC4qCQnHE9uF+UwD+rsHXRkv9dAJ5UfcuXeXTN7aLpDd/znDwgSjNMHF+/Yra1201OwMg1YyByiX68e3UBRAiVnfPvcU045RP92YIFOrsz3cLKUHHR1fTbeC/kysu74L3Rjw31hc1zcFB7dbkQUBYlOqs+d9wTPkJEDE+Mioh06xr4iCNXgNFZkFPtkAM7Pb91bXHWcyuoFxQpj1bcp/KRWHxJnSlV46EdqM6tlSmAGBdK/+xEBDeEo/fCGjkW6Ab5I0D5724s64HTaNpRI8GywXKH9V0kneK3gp1LDYvxTttlDG5vPUFprI9wrIm5hZ2Fx56e5OzvFNHL3ODMFAkxrpC07kerh4S26tt5Pn72ApbzpYD2W2oxEO245vAQ84SN865i2Sce3SkHLy+bOzoyZJT3lGNCBb2LNNEiYWLoCII5fCLOo7+8DjkwTJRoKUuf/6LZhH9OyVmvd9RGZcqcHaKCC/gAp0ImufYX8ZcFSM/apboLyEp34EfRJ77Y+NMSRTDLzl
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1572
+                          adtTax: 512.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - fcec20b608f4f883fa9624da9215bba9
+                            journey_1:
+                              - f71695a800af7efc771ff9971fee3729
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 45982c9d95b033eb7bc96e56d642f507
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53XXxETWrJCUJX1QsIfUfD6TYLpcalOHCAM+6kkZXvnd6hSX4AES+jmKjrVzjLERDmfse0ZbI1oMglWtOCpO/oatU7tUm0+bbTmKDLea0+TbrCEJqGPTms3aXrZKjqzRncPZ9ILk1cUuMlwrsx2So9lE5I/sB2jcVIvUJNIWObcWLb950WmiPaSCDYJKqbAAr8pTOLMXHzCorrjIihBFpJ8JdGAGXGshzZQxmah3f5vazqee7tfDuWkRJV0bcRRHwN83vEe2dfkjohvdJYwSZb1BC43xggvQxOMPizwHG68QlSek1TtrtLjdqEnJE3vyY8OZ1rYBRTVOh/ka9Y6L9C57P1UwmwQ1/ux440XlETFbPCw+iqRw3ZaQxbmnDnPdyd5FxH4cvN/VQVP9B3WVzqW0800HIy2rnP/NLTiARxmZdagrw6mNSRNh/hj77TdjDysFrwxXBvAddujpUHrWNM4s=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8623a56c0dd7997eee3e96e3c2db170d
+                            journey_1:
+                              - 7cf00a24575f1ef0379eefa6611d5ed9
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: aa6ae483519513fef7322d76354129e5
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53TZVvq60q6wp/0+UdxN2AkgYycaxCRTnxygr9/L1aaYsZV9ggGcR+nw3V4wx3Cf1eJHQgsE3VVygwIpVjF7r5gzxGbir5dv+7jwfHYN2SLI7Y8bhqQ74caculFcLAM0lo9m08tvnD0Xyim6JU11W3LWsCeBZ8BTz3Bo/CstC2JCO7hFKyXbDiX0Z9+26otFYaUh59K4YsUNynldfpgjAChQNLKErM9KvSJm3dKQCMHV+OCcWtot5dkvzpGjRlSvG4AhEuVoZ2rSgXBRYZekNeCKKVMofz/7fDMJF/pJSpGHZkpMV7c7twag6D1oAy5X1lOYLmtfrPFLEAjVnVcpaVUzK2PTEsBZjTLgOBLNOWEz7uOzHkernd+y4F7+jmihfRxbZEfwu8V0BVR+MdK5rCNRMTLKbZDuhnNW9Omz3IveKH/C6JKwEUA6UCw0Q/cLT6R7NjrLVj/mjyLtUriV1zAU=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 9125be1e7d6f0c87b035b3a56f04feb1
+                            journey_1:
+                              - 3dbe42b8300ddd2971e5f79ad2cdc80f
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 3de256cd3515c742967b084fc41ac401
+                          solutionId: >-
+                            XsbakYIu6IHJnDw9CoEfaH98xPDaxpJHG0OCjKEDJzWficBV5XGnUvlfq3I5djQpK/akem9ytBV7fr5N+3xsXNUW/KqV0NR8qX5tiZMDooYzZdM2f0EEKe+9pdS8FDSoqpCZRtQm5+mz70njAJk0EqreD9klZOP5Qt9EwjIj5PhH+nGO9y0DtgCc0ZWQK/4GjVnkC7SgYgc5UTN0WO16UO+4Zu1xsJRFtLGAUOcV7kenV5mbXl6l1DC1WQpiFQ6lK/WbATokQthjZhlM6l4R2YMr0uFjODqsoiOBcRYn6EmSSlju8W9RIbn7X/18wO2E6uImfBkn0SsYUWLR4ehRHe3xWk0xVZBU/b3eedhAYfO8YqxsjMMnCqQTywIwUtacnThPXB8oBwaizaXahA0RK82/JSimtGW6IrPBP9b2h27aO4zldw42IlXWtVkZuCKoxAR1J5XW6QSzPiYLknLyveANTuwvIJqzAPyvsLOWICVSneO/F3KKY127/pSVGP9VbyzeVx7v9tEj/hkfiEbs6accrmgzUvahIel3gnec54s=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1325
+                          adtTax: 495.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7d671b1900ac784d2fd6d344df31a7fe
+                            journey_1:
+                              - ee25b12931b6065d36100a8aeb8eab9d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 855979df8b3dbd9daf9b4343c9c737a6
+                          solutionId: >-
+                            2LDjaI7zvByDMC9Eb/9UesadFneB6Zbor/LA88EewsWLKAcFXJF/W7sSxOdr+xXEFSQy5Jv83Of6zFH3BHGzuoAfEgJLLC7myfVT9sTE9DmV5WEBidla4FeHFC4qCQnHE9uF+UwD+rsHXRkv9dAJ5UfcuXeXTN7aLpDd/znDwgSjNMHF+/Yra1201OwMg1YyByiX68e3UBRAiVnfPvcU045RP92YIFOrsz3cLKUHHR1fTbeC/kysu74L3Rjw31hczRBFUWPHCFXwJMullWLFo+GL48Dc6xqJsD+JrOkJTK5dkf5iwSsQzagYJquUNjHk7mBxjBYXjlwffEH5K8GcAkld6BzBmU9wyyUTpfZ7d6auYg1UoxzHh0I8sEO6cT2wqTAng8ta7XOQPe5K7zucdPKbx5I1PzJ0d9zhothhIDvFqiTL88oMeLMBT4yu7hDJc9b3DnyizRfIo9cmtomWwJXMh74qdZhK5rDkv045YK/A0qLpx7RP9u+XRM0ykqBYYqwn+M3ltNvATA/6iSylrCNk9ScfalFeuVij94qLT7c+AAv+Ulleq05kQy96Or0vdL2qf2CFWZoZioh5cAbN5w6J3XgUPy1vqIKS2uzPzXBCrQ/RhXAYR/aXnH+f0TJM
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1572
+                          adtTax: 512.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 87f2e6080c4f2ef45a03c1aa5d3c3d42
+                            journey_1:
+                              - 4102a2559901c3ceb2c7d3e4a65b3daf
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: c84e92b4f3e91def3f5fe96a08ab1834
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53cALuHZJU8QnsFkG6MzjeoGre4PDyB6fVYTi/Rw7XtbOYGbfCfISCw0XDsuEsWMc0PuxmsHGkg6MRMkISSJ+1ybZeykpnDIAldUNOLQb9BbDq8Jn0xIVBbZ4T32KMcwvzFMkVkPy1EOsUEIX0TFjsIy+1UfD5Rw//f/4spibskJw2jbzVtClQ5d/eJdgDQyMoyDscieKxFJw5Xk54v9MhKn51218AIhuyTaE5IFOzMA+FggIMhW2Kc2PFoyUOATn32X7NV0FJN6EEHRCBR9z5CStTwDuSSb1M5H5JvTVUlQ8lr+/aKrNUT/HcC5gKJb+SFzDfpdm2ghyaUQwnIU6USY04x2AsfUjyxMUqVCqyaLcY4NiXCmWo8SHGuh4achXw+X40jkkBEUdMv4v5y+BrM/4MPUC7goqKyK3KyvlWNxK8vMA5XFazi5LB/7FiE7FxB1f8ztm+Vas22RF4ymRXTU=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - fa492dbf10401c522105ce768c027044
+                            journey_1:
+                              - cb151eb5aff15c7b8a6af8f00cb40da3
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 21c0bc7fe6cce7ec4636fc898c6eed82
+                          solutionId: >-
+                            vuzfjqiqAxI4tFjGMclJWxAks1F+rLixsew8ODnjcJgFKbMCwJwsKc90Rku+tgOeaADgslRqiC7Zp0yDB9TKoTO5ruWlFEppUij9/g4ft8QEj6fAn/yD2bCnTvGY+l2fmqwnLKJM8dWEUvNSJkCG6KREp5wNUOm1oFw1+G15E2ESQLG5x/7Bo5xKiiI6/ev7wy/6WwfFvFMhiUTwlDNMLyX8OqNsoOVThswOzjaUn0nGp37EkgUGsiCV0corDL+SbU7pJg4iHD9si6cQ5N1RV9Ig0ZDrK6IJm0FXEWcMWbJ7TLFQlxWNrDbkoXpaIMNBiLXDWpoUYkt3XzUwWfCZOSPywLbmgHHm2NW6eFLIuovOfPMmnCLMee5egb90b+Ann0+T0fwWMguO7VFKn4alEOQB6DN4PQpAEH9I6Uta0Lthr9pFRMaXhMrq80BW340IzbhqYSGkaEF77rcowRldjzoqnRRxG1crLj1wAW2PN96RGo/k7E/8TRwNt272ug5rGfUc8gF3Cq0cZMKcgJdyUrkmYz4SNodXPlib41pyNlk6ZKorwwMWOb2I+s3SRwvfvfmEWXacD1Mi3yq9UpOyEGxGVmdUExwvmbEDiD8FcblU/KWbDqw4v5Ix186pXNg0
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1720
+                          adtTax: 518.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 4f83bcef0a851115fbffed29d6ad33d8
+                            journey_1:
+                              - e66b43a604fd029004319a4422eb3daa
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: a22d17b1386c47c8067cd6ffe3c1ebbd
+                          solutionId: >-
+                            IeLMNKY3Lt4wXGwExUUJBB7aOf+8Fpi9DAN8nWqTJAbMC++ZLS0utijeeM6yguB616DoRX5Y4o/kUkSnw1jXqwziP2FvAbPtte/715R1ya+YjDmjA0TyTUEFalf1uIfQv7YCWvRpYwSE+HFywAnLLoJO4nv17NwRw30g/Q0htLSQcUBoKkaL+wRxcEbaDxTba7q7QZq328PidyFkeY4a+hy9shLrW3WXHFy+AQPIlAINpCSfPf/baRL1V1Uk1wgzU0QQMTFh31vAKdQcGpMhzkzvYCIkx4vteBPsvA7Vu31D8yvwNR5fKT/8cITNb5FYfd//BfulOHo+c3CzM29fgks9RngsBehQ0Q9SeP85oqSHBvbYHTNhq1xwZsK8Wbnc3zOoCRJU08YdHQL6igtuN2ZJHCNXcEfa8lSrTZ5e2iCZHqnMwBLSL4GBtgt7Ot6jecTn/wNnTXR51IPCqKUmdOnI/WlxZ2HzHJXn2Pdm/3qthPPcjxdxnHWQfgBJ/wn0JN1WldqIkbWVLjq+68ckXjWaI3S9SWDLajHr/MPVv4XT/X1NK08jf4hOhggjEIDA/x7YQLI3jfvyYTw3mGpRSKb9327gyp0+fcl/1yRd81lBu8fNntZooFFHBaOb1ZJl
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1443
+                          adtTax: 849.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8ac6063bb86d587cdbe3b23b83e7fef2
+                            journey_1:
+                              - c6a26dfafee9a9a498ddfec91cab00d1
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: d196a01ded0da7f8591e31cdcbf432f7
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53cALuHZJU8QnsFkG6MzjeoGre4PDyB6fVYTi/Rw7XtbOYGbfCfISCw0XDsuEsWMc0PuxmsHGkg6MRMkISSJ+1ybZeykpnDIAldUNOLQb9BbDq8Jn0xIVBbZ4T32KMcwvzFMkVkPy1EOsUEIX0TFjsIy+1UfD5Rw//f/4spibskJwig+pPZl2uiNVwdL1fxUg+R/EWVx7aWgXqxCZsUgd05dbY6MYyucngYFz+i2+CIjNAOvC47jVqH/2ontkuWKuzGlVKOlR9/LyCW6NijGUhz3yDU5KHuKd4zkBi21cAmYzmoklHHByg4FoEWNKLLvmw3jtCuaj+COvkK+LbgX1lXitKh1NAeyrXcdMWT6LVqtnux+V4FtDpzGqvetjG6O0XGnknvnJxuhbm5zgjcOJaWGs0byE5snrUecxtV8aT8cI4KhjWddxjIcPThJZ2k2Bbf/l2VPSVcVzTJDxSMCoQaw=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 6aaa4e2b4fbed310c5f7aac35096d6c1
+                            journey_1:
+                              - 5d632352d5b1ed34123a7acfce6261e0
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 2f34886408130ebda967b84bda983376
+                          solutionId: >-
+                            OUUQi03WjYsjhRmdHta7oIqBqCJ/i50XUfH032L4FdSzsxA9tISolgtODWtdQmqYxGHryqBE3rEBR7g5sXBpN+n0B7h+qG22jnCQeOoqZEoJkVUNtF6gMtMxvg8TT/UOhuwU3ufqSJSOU9vaAcFdjtylSsWoBr9tgQdwYjZzVn5F6O5aVwMdocYH9UB4PQuolxau4LykqSFul/UpnUcq92AJahooJyB2KibbnQUDHVweg7hXVBOs41RBGIWlbpaWUzO/e8UD8iP0FmaPSJVUpUzBQaRbUCNQdMDETGcyUudjklBznyUTf8w5PMirITUcmpj2bVSn4dy7kVAZ4HkO355HUOwiL9/oj3XkmQppIVd9db1JkmZtm1nZrGLevzQ7F58GUUdQatKGafV8egOhJD4W3S7HKn5BeLsV+TbkyrUgPJ/FU9WY10AkHRLsD8XJY3c5RhOtGGCLPWghNZfy1FGuKXsRkyCmn0jQqyByDUAjP8kooIQSdju5acKrbXXzRD/XDdp4/zRthvAQTHspTJ0YQN2SVqXoLDSoAVHAfZ4IdiqquyOTbJMxy/h3sUpHGyAw070q39B5ZuVDeQCx8ZAsRvYMF3D9DM/BTIITPEuSuzvTLdhyLt6GRYv4LHY2
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1690
+                          adtTax: 518.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - f885c45909cb9dc356075c0362a21093
+                            journey_1:
+                              - 727588c43a951ebafb30ff95f0caa176
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: d90035bca994fda324a2cbfa359a1d54
+                          solutionId: >-
+                            LF3QoxvVJZneVu9G0J8wCIwA0JhvjW+PwBu04tIsWthzJzULXQJv+CpWfEUsZC1XrejuTqjNnwCuEvbKzGlgTeSqpwVdmHvvpsS43vFc86/gxJVOOuwNWzxrt2/UJA4YjFvqMUKYR/iJrA5FOzhnN3frGtjYqrcKDZnDb0NHUxB+w27O+7ki1+/wZeku8Qqj1D9Cayfp9LVFc84ANdhNJjCJyHv6BUZAcKSUAb3F7JMw90NBtv8Ip/UCgNxM3+lPPglZEWkAduiUv+Yn1RRTpHMUaqel1kspd9Zzjfgnr15JWzZt2CZD3Ejxq1JgIWR94XIR3KNuL1QYwJNLaOWjsklqlyU7BzMJw5AhVeu+RhOa45B9jERgG1+8vZSEdEafw/JHjJ6mxG+VUg1PMMsxRlPpUGbrVItbOJf3ZE/76fRMd+iyNYkv/Dvr7TJV9sat3d8qZbQdA9QlEg0Ud3Y8VPuEkyfKiyT8MgbeVFFWrhbKMQ/1yKrQgCY9nSJAf7oAlzAIat/mdorXzxZaDY9TgRs68uwsf57nMWJyBjCkx21xtYdlMnS1LK2kJ+gQvVer6Eq+S9JJq2f9yq7OujGEcnLP/WYvrnqug9Ps6r8s3p8Qj0/fmnYxAhxQ1BXoEdbosfwHzI4yGuJF8mig/KHNLvkui2iL8DtfwVbstTztukFRJXmH+mtFCjEfSrEArPpJ
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1467
+                          adtTax: 866.66
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 6b427eb7de9e4869eda2d73b382a8ce2
+                            journey_1:
+                              - 826daae8d229b8cc77e2d29b65278993
+                          fareRule: null
+                          rule: null
+                          platingCarrier: LH
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                  - 5
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 6
+                                baggageAmount: 1PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                  - 3
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 4
+                                  - 5
+                                  - 6
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 164
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: dade0f6c2ea0f461d7cf3a242b56a418
+                          solutionId: >-
+                            x82gLTrg2fVwXJkIsJS0UJyGRVA6JufxE6YwaoDUmjdLqsTZmB7Y85PH4FCtqKsXyNqLsBEsb9Fp5/AHNhDJnuoF1Swp9iPLQmtTlmgFmt7m8oJUb8aY25K+lDUitnM7e272nXHB/hYFmgi9Bz9TKAvMBPrJmSVMeLqxCwxbHa2c50gqKTQhd1LUbuE6VmEb6ufL3SBbhjhSxYADdsFZTr7RbIsXLPUywi5bO5Pw6pihFBv58CSLeXXoTY/BghQAPwtOz8F8RWW+IjxjuqKo0jz97ujYdZzLVr7kA8LQHfMvYtFBLxHO99uCRvifeGDcTehsGcMbyuNmFyg4z066HlUCcdFKb/j7R8cpZ5w7BxlZYvIrPaGJWwV9sFTkzZNIDyMM89dDUOAy8nnOApN3Yq8kz//g5bA96kC5PtbdLcORqtge9NaDZ0XJbuaXg7fZrMP7fV1awpjZ1aEFvoZJAGtDwD029k/p16Uv2CFW5+51SEQMPCqdsRLYomdj5Km7NNdugt8kFdmD+g9tdJGmrM1GAAHm0I+B8Zc/v3oWWKg=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1355
+                          adtTax: 495.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - a6ddf46bed7e6610205b162d022c8b82
+                            journey_1:
+                              - 007cfa2a2e36540626f99da84b5e5987
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 62c7e2d2c9506c766662939c24917035
+                          solutionId: >-
+                            vuzfjqiqAxI4tFjGMclJWxAks1F+rLixsew8ODnjcJgFKbMCwJwsKc90Rku+tgOeaADgslRqiC7Zp0yDB9TKoTO5ruWlFEppUij9/g4ft8QEj6fAn/yD2bCnTvGY+l2fmqwnLKJM8dWEUvNSJkCG6KREp5wNUOm1oFw1+G15E2ESQLG5x/7Bo5xKiiI6/ev7wy/6WwfFvFMhiUTwlDNMLyX8OqNsoOVThswOzjaUn0nGp37EkgUGsiCV0corDL+SuKHAAWUoOa3q5gOCaM+L0xfaD45Lch7dQ2ToYtiJyg+V/o6hrn3OVggStQR1bHYtbXaAkBdTaDuW1IaAaOSmTJN5EPPIFsdJ4507nSaCEKlM5E2kWVmrrHjnApHZ+t8Pg2S/Td1K90cgKve/wd3X9rPiY27zuN+qDOYorboSWUKL1BT+Kzf6MH2NVo9vDo+QZA5EgZezXLPqFW2m+iSKFWwNYIJFv/uSaHNp+3Kg8VP349ockoXgMk1aNbj4P7m0O76QfVzY+g1nH8dK1C3BmPLCAumdayOWYd9jO0DZdW8Ejbb0GRw3rPcNDkGXNpO1mAcUaI6jyiSp2uDqV5+cJSftc3gUPi6okBI7MxnhubSUAku//qHZZ+FWJB2Y11lD
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1720
+                          adtTax: 518.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 46d5031864d6644988f42c03fd56b4b4
+                            journey_1:
+                              - 730d29e4f1bb27e57ad410ca75a25166
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 68e57b1b38f71685d12d6ffb79fa2aec
+                          solutionId: >-
+                            OUUQi03WjYsjhRmdHta7oIqBqCJ/i50XUfH032L4FdSzsxA9tISolgtODWtdQmqYxGHryqBE3rEBR7g5sXBpN+n0B7h+qG22jnCQeOoqZEoJkVUNtF6gMtMxvg8TT/UOhuwU3ufqSJSOU9vaAcFdjtylSsWoBr9tgQdwYjZzVn5F6O5aVwMdocYH9UB4PQuolxau4LykqSFul/UpnUcq92AJahooJyB2KibbnQUDHVweg7hXVBOs41RBGIWlbpaWNWKJEFNCYzWqnCOf30g2Q+zEAnh2Eq67aEe1QZ6L+omJG1h+7fapB4nYyrKFxSN6Rk6aXBBRs056oeGvBlYNLBTjebMSXA6SosF6nnRpJQni9PrlNvHmLtgoYfdx/oz+TFoiVbRhucoLOslNINB6utTbvo/koodK2Cg7bWGkMtf0SY0deRSXXMuhJRlwGzUX8KZ+TgYx5k4DUtIdQVQq8cucTq8/6TsGnt/x8XGJxNPLEKT8XlIMpxsdIRXBYZoRdqT51BzqPcfMqBrLZfaaHAI9NITntNjefLluouR1+lHgjn8aZGuh18JvkKfu58jvtjAGBf0/k9ZEC7jNxytIED+HkNvDzS2LShD1de49sl/d2jigBnbuPyOSLFdrmUHk
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1690
+                          adtTax: 518.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - aee7b60b6c6ae4c81c0e571f05f84922
+                            journey_1:
+                              - 9826f633a3cb9b3c68eff7fb9007ffd8
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: e8082478392695259b7d3fd50ed46ae8
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53aQdSrIsAseuHATdIuo+K9+zqKyyRZjkpwAEkxK3VRmvwFkFH1oiOEVle4xlQOG1DLu43K59YvQz7tPHDrL6ccS34kQw8aP5FHQDQfw7zWA6UNhWqQunjr7wkaWuB6SfGaMtzmDfGf9tQY0ANY7AywhDlLOVMLc2+q++pDL8LDnrJslrBO004cuK/ESNEhqtK/XnLfNHLJ7IAuW1IcU+ArQ/LrZgBcyJzkFpiSZA+zXZyG4O+mINU25/JGQySXrASRXyuth6zkumbd1vvxJ9Z53LRrr/+pw0VPOcE3ffNKSULcETxcelQD+tYJUFOgPAeiqljuMI7pduwCh3r5tsr/9lWwvQzjLxpar5UIlcaj0Kmwtzr0xjtpz5jJ+ooIH4eapRNZndUc9xC99sBOnZUuzYGNxWM4D0/Dlo9cPgfysK6NFky6yIlk6tTUQJWOnKXJdNudkOfR/sVaUA4TXu0DY=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - a90d5d439a81231a3eb34310274140d0
+                            journey_1:
+                              - d48b5b3fb8919e81d918bc59ef179f40
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 9d1a270b07df62f4021927b11acbdd0c
+                          solutionId: >-
+                            Zz+6m4a5nkMGwnBkDayEEGUxaA3wd/cqLpXrus9fHbjD01QzN3efi8Fvd/jt2k5k2SWDfun/Y8WoU1xB6EzMZq7FR5r+Vq80Ul/r8Ym7bDFVHRthY6Wf/dhQcotbl6rlZK4NbLQwfoEJ6FaZB8V1gFWgoxn0RqiNcVpWZV6kQ4HC7KlfZkMta2PO+0s7N8TsqqYkIIlYDOjgMpMfWOE+GzdWJmfkA3cPqp8Z9sBzrY9CgGN/8lzWbWQB70sAnQpNEesHtoxNhif8ZtpeirlfNgHKP7MaaARBAkZM1AiPx6nul+U/0ylY70a/93mHhMcwsAse2hWj8XcoHS2wsAK3TUwHwk5zH3UX7H/XzhHhx2avS38rJc7mRNYGZ7+UiXZI345yRSitbkyUBt/Cl95xCbVI4NsdfdF2VkVXhQB4gZCZaETBBQ4A/ISHFQsNb7NY68SfvX+U3qhdzXAmIlmHVRgknKe2q9ld+z2x2LOlYpn8tWRaP8Jf/5qd+gQ2o0yxbUuIxnNRS8RvbAtHnBVPEzY89H37LPXL4m6ey47lm24=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1460
+                          adtTax: 502.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 988147acd7d4dba8e64d41f7f4c0073f
+                            journey_1:
+                              - b8d4529b27490d223d2b9850ec609840
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 65511f75197ca4c617a57b646f7d7cb0
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53TZVvq60q6wp/0+UdxN2AkgYycaxCRTnxygr9/L1aaYsZV9ggGcR+nw3V4wx3Cf1eJHQgsE3VVygwIpVjF7r5gzxGbir5dv+7jwfHYN2SLI7Y8bhqQ74caculFcLAM0lo9m08tvnD0Xyim6JU11W3LWsCeBZ8BTz3Bo/CstC2JCORUriEzbfHEV4PLL4tSDZiM/3idnW4R4vNv3wfz4CqxGgc/t9fc4XPuYqTd4c6iY0TXO7y9eEmHYeRZxW8DdRnmRbXFXJQT3lqFQbXF66X7t8KmJ9a1zJRLit49ZfKHYlQRZ5+9/nEXgQoUO1tq7SbkP09oMb3RDNT9Nlr3+OBy2fbWl5qX3kUUpiS/xu5AUT/aCEivx4wnoHGzFQgrKTg8F16b+ZUniY8t/k15Vb6xvV888jVhWlz+ZrSGpzNm1+b6oyBnCQHiH140sqpdflFYtEM0xKQDNhajm81mdL0jw=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 9c46259ebb643c0f001333276610e3aa
+                            journey_1:
+                              - 95d2087cb23473c962caadd09eec6ebc
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 67d7ed30a9c122056be0998ed58f2a28
+                          solutionId: >-
+                            Zz+6m4a5nkMGwnBkDayEEGUxaA3wd/cqLpXrus9fHbjD01QzN3efi8Fvd/jt2k5k2SWDfun/Y8WoU1xB6EzMZq7FR5r+Vq80Ul/r8Ym7bDFVHRthY6Wf/dhQcotbl6rlZK4NbLQwfoEJ6FaZB8V1gFWgoxn0RqiNcVpWZV6kQ4HC7KlfZkMta2PO+0s7N8TsqqYkIIlYDOjgMpMfWOE+GzdWJmfkA3cPqp8Z9sBzrY9CgGN/8lzWbWQB70sAnQpNEesHtoxNhif8ZtpeirlfNgHKP7MaaARBAkZM1AiPx6nul+U/0ylY70a/93mHhMcwu7Rco2n2628rPpc3HBXhEvF+6Ci8JdG+qm2BsMApkD+RmIDzBsLpL7inMjcCoAe16gRIGgrU/EPRpia8z6W4uVF6DsfpCtIvyHA4/0i9E6sCWi7/EO/EZG7OAW8GNsfVM0C1KXgzkFfC/e6ZwGuP/8wyWrgpHqroVEUcyA5ZoGssasQjKzPGuc+xRnS7k1lRX0SC1kwRcnN95N/xRutsp6G+JCv1VdD3vfBe5PalDWw=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1460
+                          adtTax: 502.46
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 71eae0bc13e6663657166b173159f95b
+                            journey_1:
+                              - b24eba0a61996045fb5586d5da0ee0e4
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: fb37835a913b193bd5a6d7e457e63444
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53TZVvq60q6wp/0+UdxN2AkgYycaxCRTnxygr9/L1aaYsZV9ggGcR+nw3V4wx3Cf1eJHQgsE3VVygwIpVjF7r5gzxGbir5dv+7jwfHYN2SLI7Y8bhqQ74caculFcLAM0lo9m08tvnD0Xyim6JU11W3LWsCeBZ8BTz3Bo/CstC2JCORUriEzbfHEV4PLL4tSDZiM/3idnW4R4vNv3wfz4CqxGgc/t9fc4XPuYqTd4c6iY0/ZJe8TSeTgiTS24H7KNtP/P3P+KFkRW88lGKnGmPviOgjaXDi2k+54QzFttFRea29ts9lOlmObS+bFon5KKha5qkkEAYHgrBK7O7Ul0SyX/IE2Cr6C/EB7NW+4ldpj5zlODBUPr2rGxswWMkSb8+JTuZexc3qSTgPukWiQSl/s51/TGpApTLlVAF/LZC1CdK4Feud9naXL6lC9OvQ9i5x79LD9r+7U2zl84FKeX54GU=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 9214d13f85056a48168d5918cbb02150
+                            journey_1:
+                              - aea3db5710c8e31c3fc72d6c4392ad20
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: fa94c92a49d331d7a31ad58773bdf961
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53XXxETWrJCUJX1QsIfUfD6TYLpcalOHCAM+6kkZXvnd6hSX4AES+jmKjrVzjLERDmfse0ZbI1oMglWtOCpO/oatU7tUm0+bbTmKDLea0+TbrCEJqGPTms3aXrZKjqzRncPZ9ILk1cUuMlwrsx2So9lE5I/sB2jcVIvUJNIWObcWLb950WmiPaSCDYJKqbAAr8pTOLMXHzCorrjIihBFpJ8JdGAGXGshzZQxmah3f5vazafKHVWiuEYr3Vgxo5F0mCr2EO/EsliGeW6gwdAPTuG1EEv+NRn3x0jFEghiQhXYYd/YOQRSULVftUrpj11Ajh7LwUwifw1pJ49EVcnLdZWt0WOMBHJHhrLhUXCit8Wx53WSp4OAdxpsXLf/JQcI8oNr0300QTJpaBLitmJgJTmjL3IaXhfem4pndRry/FKmHza+bWgFKiqAvIXJiCLNAMHs/nQWty2/nQeFodLrcOy4=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - d36de4468787e8f35e98aae9e6bdb527
+                            journey_1:
+                              - 8ae9aa9809ec0981a2171872e9d3b9f6
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 301700400aa571708c0621d379a52d25
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53Xhw7PDDuRmEtGgexM+G0YYc/yXO/IEzzSGptkyBXPdXLQObmyk6Nq51pLDbXnguN/9OC6Ubn2MQkqYiC/gUbfnuLs9g+1qdFaD5QU5R1a3znYRV4yeOp3Vzev/x0n8hythUFPxXcoiXH2PL1C2d2n+7Z+Zedl07Ri4wHEYhncEfiQ5dNG7NB3O8KPzOvsFb7b7nduEHQbVW55auzeUyB51K+br/N8VvDIJ/wo9rfkIQmmyxendeo8/4NF3yvB3XbXgO5uNagtgRx+3i2UecsC6aVRfxw2PAC+9ZfWJl/IHeeEl14nZeQFY3ciVnRBTxwiDlcbYvZcL3/7ninexvxYISYUoSVk6fYbTMt+UCM77aCIEqzxCIRNCgGbhNryBmrwRt1COf1HHTlVY1DMlhFcdxsSWhNwTyKwzH0WbSXZGd0U+A23OaF9mnqmWg8g9ktrUeqolXNP2yvJCqKb7qDC4=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 9c7ecc944bf881fe50a891ad09f37be4
+                            journey_1:
+                              - 8034e8aba508618458d36c6a1afa31da
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 236059f14e3ce996b8851c7052a6fd4d
+                          solutionId: >-
+                            XsbakYIu6IHJnDw9CoEfaH98xPDaxpJHG0OCjKEDJzWficBV5XGnUvlfq3I5djQpK/akem9ytBV7fr5N+3xsXNUW/KqV0NR8qX5tiZMDooYzZdM2f0EEKe+9pdS8FDSoqpCZRtQm5+mz70njAJk0EqreD9klZOP5Qt9EwjIj5PhH+nGO9y0DtgCc0ZWQK/4GjVnkC7SgYgc5UTN0WO16UO+4Zu1xsJRFtLGAUOcV7kenV5mbXl6l1DC1WQpiFQ6lSDOc7vxRx9mZ8B9Mcj+zIaUkkCYaISwf450grLm3ZtajCEvsrRkIKFh4kzJlqWrTr5jII82XTsdSsIwQXUVoNkNyGjzEeWaNjopBSc11h6pj5/z5Mue1iEQ9k16tLc0rDrqcmYGd11xTlW5rCMTLIxbV/4sYCb61O9EMZPTrHqvHbuiiv5sTBdi+KQFrNCydCFohwl8ZfA3dPw0UhVURBlPvRqgXjWojuNmWB9gst/R2uiLwjOcIgHVfLs7XSMf+a8KNl/mLu0zeftw3aY9s+dtUnJOPxruFqxksJHBfenQ=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1325
+                          adtTax: 495.76
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 57a6b80cb0f99c54c2bb6ec811ac592c
+                            journey_1:
+                              - 24c3d42603eb600213b52a9a8a0afdab
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: b557dbeafdfb182609d1f585dcd294bf
+                          solutionId: >-
+                            jbkFpwXb8+jpTBDZGqgXWNHzGScl5yN7m4y4U3OBiSJnKtBWYNqWv7gaTZuS3Flqw/C1HJbyTQkgwqVbyAB53S/r+8O7GC/b+7GCqrx0nmKAVjIcAQ12+OeaR7YfbyJJztn2tJofbCOtEhqDsMA4sQrEYVV1q4poFhIVccHtXN8Y7Ev6Pykew6b6flFmSzc6L98nrvVmIMUXuiRY/59MMNjfih98GSBi62ORD+T+HUfbHxY8WQuF5/k3VtujHb+szaAY4Z/MCmYxSt7gNGJy+BrpOLrPgWGjNMsw4FbBvVN3xRj1yiNZpd8YXJiJ6HO45gx5DeV6VIk6IVmO0MObf0UfgoefvK5JL6s94VXYcT2WFSsbEK8JlisfW0aaTZBTuk6Jvky+Y/CVzv2IoAmvb/oljng4kMeMi1DQHuqtajBSE1gnjnQstIwf6zX1gn2EFfPgv6z0/5aYWf/Vq5MQPAE2R8jgcOT/xr1YDcxg9wmRRJsuUw7bXcHKadYsjTxuJ+Bt+EFW/aoToPi4EHWOG+lW3fsMwUY02vL8zopFhA4=
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1450
+                          adtTax: 501.96
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - e50ad91d7f6248a5dfe11b8cb333e1e9
+                            journey_1:
+                              - 255aa6aeda1a94c4334eddbbefd5a5e5
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 3
+                                  - 4
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 3f8e92c22fb35be86039b414495049f8
+                          solutionId: >-
+                            2LDjaI7zvByDMC9Eb/9UesadFneB6Zbor/LA88EewsWLKAcFXJF/W7sSxOdr+xXEFSQy5Jv83Of6zFH3BHGzuoAfEgJLLC7myfVT9sTE9DmV5WEBidla4FeHFC4qCQnHE9uF+UwD+rsHXRkv9dAJ5UfcuXeXTN7aLpDd/znDwgSjNMHF+/Yra1201OwMg1YyByiX68e3UBRAiVnfPvcU045RP92YIFOrsz3cLKUHHR1fTbeC/kysu74L3Rjw31hczRBFUWPHCFXwJMullWLFo+GL48Dc6xqJsD+JrOkJTK5dkf5iwSsQzagYJquUNjHk7mBxjBYXjlwffEH5K8GcAkld6BzBmU9wyyUTpfZ7d6auYg1UoxzHh0I8sEO6cT2wqTAng8ta7XOQPe5K7zucdOTYfd7Cg8SXHxuuL2tJJNjEI7Wa809cVQBi4W2KsPObMHnjOm2Qi/KKf8Z0NcpwkDd1or2WIYsh8zC0lDgDS7m++UYdfi190CMQQSS/+Qh6ItJ2jSLLVlaL931fpUftfo9+tF9Cp2sOFbyQbzvcjA1O0kVUxWQQldinuolwhNLI57cDMQLSHxwEynUzSLBGLq0zxEstShfAAkAQJLRyCESqyBk/hh1oflsjidRjN1JG
+                          fareType: PUBLIC
+                          currency: USD
+                          adtFare: 1572
+                          adtTax: 512.56
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - b87ffebe614cf7ae038021573adf52a3
+                            journey_1:
+                              - 220338916765b157494ae5af6c2b1e63
+                          fareRule: null
+                          rule: null
+                          platingCarrier: AI
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                  - 4
+                                  - 5
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 8KG
+                                carryOnSize: null
+                              - segmentIndexList:
+                                  - 3
+                                baggageAmount: 2PC
+                                baggageWeight: null
+                                carryOnAmount: null
+                                carryOnWeight: null
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                              - segmentIndex:
+                                  - 3
+                                  - 4
+                                  - 5
+                                miniRules:
+                                  - penaltyType: 2
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 349
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 0
+                                    isPermited: 1
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: 517
+                                    currencyCode: USD
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                      flights:
+                        - flightId: 72383d9edd39ab61ea9e124ec9b0c517
+                          journeyTime: 1438
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - cde17a5b14607b9a02724b7328bc4f0a
+                            - 16661e9342c44f77e61f17d6f50efbb4
+                            - 60ec3d948d54f9ef97ea16950aa45c5b
+                        - flightId: cb151eb5aff15c7b8a6af8f00cb40da3
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: dc04f752fec7edf2afea37762667b112
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: e66b43a604fd029004319a4422eb3daa
+                          journeyTime: 1266
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 79a5f855cc636b8b260cd1e82105ea5a
+                            - a4995ca132f22e5d0d2907f6bbcde54f
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: b8d4529b27490d223d2b9850ec609840
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 14fdd308d1dbe896fb8261cb9aaf48b7
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 6b427eb7de9e4869eda2d73b382a8ce2
+                          journeyTime: 1385
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - cde17a5b14607b9a02724b7328bc4f0a
+                            - bcf106f89dd18f211e19559633262050
+                            - 51d2a8699b3d3307f6892f1883e992fd
+                        - flightId: 3dbe42b8300ddd2971e5f79ad2cdc80f
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 6c177c433ff39841dbea5601e605ce05
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - ecfd48968e463a96342e28cca0cdaec1
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 255aa6aeda1a94c4334eddbbefd5a5e5
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: ace38b40ab20732d9a16619b1df0245c
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: b87ffebe614cf7ae038021573adf52a3
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: 827a845834fc8e3d208932aabc837afc
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: 8ac6063bb86d587cdbe3b23b83e7fef2
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: 7b076ba210809462c83697fa315e9673
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 3405100ff5c6755cbd00853b202ccb2a
+                          journeyTime: 1345
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 16d070cb91e6c763e7b7ff2eb3ecf43b
+                            - 5f7db89069636b260072d48459d83518
+                            - 722c8cc7a39525a8df8d6ba67f3e663f
+                        - flightId: 730d29e4f1bb27e57ad410ca75a25166
+                          journeyTime: 1257
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 06c76d33eaac1c7cd6d284ac98e4b709
+                            - 5cfdcdaf5f167cbecb2cd7c0911e2379
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 564b80038b6e3414c9c75dd40a616941
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - c8a0575b5e4c44fa8b7f9de50e0e139d
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: feefaa5dedfce1cd79120136f08e7ae7
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: 0e10ac2496d1d6adb6d24d29d4abc57e
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: c43a6e3fcf0acfd007ec018ff52345f5
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 039443bef764e4360092b311feedbd6f
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 927e5abeace36587cd0c5429f65a24a7
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: 4102a2559901c3ceb2c7d3e4a65b3daf
+                          journeyTime: 1266
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 79a5f855cc636b8b260cd1e82105ea5a
+                            - a4995ca132f22e5d0d2907f6bbcde54f
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: 9affcc19ca9860accf95fd7963a8c63d
+                          journeyTime: 1362
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - a9ba7edf403f4e425b32c1aeef7c09cd
+                            - 9442478410567a1a6d32bff220c91405
+                            - 6eaa87e90f7b66a2d4cd2d90b58e0549
+                        - flightId: 985355c9adad5e60210e0f1592b5baf3
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: e883168969696fddb5ff740b760b3750
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: f791cb339c916867b21b0ff555053fce
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: c6a26dfafee9a9a498ddfec91cab00d1
+                          journeyTime: 1255
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - f73c8c5c926688f17b56b6ac2fb9da1b
+                            - 3f1c17a81730f5e8cc34c7737ff3f6b6
+                            - 935fc7298cf15b2df586e1509e939413
+                        - flightId: b24eba0a61996045fb5586d5da0ee0e4
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: 7397fa553c9b04cc7e0cee0f138ba322
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: e50ad91d7f6248a5dfe11b8cb333e1e9
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 039443bef764e4360092b311feedbd6f
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 87f2e6080c4f2ef45a03c1aa5d3c3d42
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: 7cf00a24575f1ef0379eefa6611d5ed9
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 0107c90a48093a2484c2d6faf11ff1b1
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 8b7138e9be0b8dbfe8af996432817329
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 180b9374038ac1e1340bccf5be035705
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 220338916765b157494ae5af6c2b1e63
+                          journeyTime: 1261
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 79a5f855cc636b8b260cd1e82105ea5a
+                            - a4995ca132f22e5d0d2907f6bbcde54f
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 24c3d42603eb600213b52a9a8a0afdab
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: ee25b12931b6065d36100a8aeb8eab9d
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: fde3f8aac84e4088ae6e00d4e218db07
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: aa83529a4a89ae293eebf47455c1052a
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: 2575260a841d1ae1d3d8224b9e4d1aee
+                          journeyTime: 1295
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9ba0eac49027dec8c826ed54aac96737
+                            - 4b58b4e339852558ddb43f7cf495745b
+                            - b305a7ef80cc17c933bf487057099618
+                        - flightId: 9c46259ebb643c0f001333276610e3aa
+                          journeyTime: 1055
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 8cf2f44ae1dd9ff850e83d346a49fced
+                            - f2bdf5817dcd62da47d4487605afb35f
+                        - flightId: 988147acd7d4dba8e64d41f7f4c0073f
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d3c513fc08bf17218f3f56580f53fb70
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: e1b9754d65fa6f7ea02579a5cc7892b1
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 6473348b569e3d1d50c25d2088be67de
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: a7c6d228e55397a0c232b877e3735efb
+                          journeyTime: 1270
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - b13ae8eaf6402b883d0b95969b0d31b8
+                            - 3f1c17a81730f5e8cc34c7737ff3f6b6
+                            - 935fc7298cf15b2df586e1509e939413
+                        - flightId: 9826f633a3cb9b3c68eff7fb9007ffd8
+                          journeyTime: 1257
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 06c76d33eaac1c7cd6d284ac98e4b709
+                            - 5cfdcdaf5f167cbecb2cd7c0911e2379
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 727588c43a951ebafb30ff95f0caa176
+                          journeyTime: 1266
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 79a5f855cc636b8b260cd1e82105ea5a
+                            - a4995ca132f22e5d0d2907f6bbcde54f
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: 32064e27384430ffa0bc726e4322912a
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: d48b5b3fb8919e81d918bc59ef179f40
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: aee7b60b6c6ae4c81c0e571f05f84922
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: a6ddf46bed7e6610205b162d022c8b82
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 5d632352d5b1ed34123a7acfce6261e0
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 93953934239e0d571cdc7a016d3c033a
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: ad13fd5f617c96128c88174bf76931a6
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: b2b73d67fb17d569322a352f0be7ef04
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: 315c3ee993efe644649dd6d21f1c2cad
+                          journeyTime: 1385
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - cde17a5b14607b9a02724b7328bc4f0a
+                            - bcf106f89dd18f211e19559633262050
+                            - 51d2a8699b3d3307f6892f1883e992fd
+                        - flightId: 8623a56c0dd7997eee3e96e3c2db170d
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - c8a0575b5e4c44fa8b7f9de50e0e139d
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 7df138999002bfb99cdbb62fa82592e2
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 2688b3a9edd82d60988c68f48d038c73
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d3c513fc08bf17218f3f56580f53fb70
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 9214d13f85056a48168d5918cbb02150
+                          journeyTime: 1055
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 8cf2f44ae1dd9ff850e83d346a49fced
+                            - f2bdf5817dcd62da47d4487605afb35f
+                        - flightId: 4d865a020b6cde38d0fd741a8845cb7e
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: eed8bc4b3a26c49e36268f470580676f
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: df5b3f93f08b8f94933ebf570aa4796f
+                          journeyTime: 1345
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 16d070cb91e6c763e7b7ff2eb3ecf43b
+                            - 5f7db89069636b260072d48459d83518
+                            - 9dd6435bbe894b514f9c021147bdaf15
+                        - flightId: a2b72bbbe32e249fa497bfa241396c51
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: d927a0b571c70c711ed34e2c982e0581
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 7893324070554a28d9e70be472a73fee
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: b6c3d50cf6ba0221be549997b334f061
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - f95cc6d89d48f42ed8df9dd7b4ccb5bc
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 464ae0d739d4d166ae261078b923d4bd
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: 46d5031864d6644988f42c03fd56b4b4
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 71eae0bc13e6663657166b173159f95b
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d3c513fc08bf17218f3f56580f53fb70
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: d1e52bb8dab896bcf9408c79b829502c
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: bbcc074b53871a53c273a518e165828a
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: be21a3b28924e74e6f859e7bfd6690e6
+                          journeyTime: 1261
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 79a5f855cc636b8b260cd1e82105ea5a
+                            - a4995ca132f22e5d0d2907f6bbcde54f
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 9dafac708ce443da54ea2d712165f1d1
+                          journeyTime: 1280
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 95b47fc98178c87e3bf466ea038038a0
+                            - 4b58b4e339852558ddb43f7cf495745b
+                            - 935fc7298cf15b2df586e1509e939413
+                        - flightId: 8e137acfe99ab36a6a06e5afec9ab25f
+                          journeyTime: 1280
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 95b47fc98178c87e3bf466ea038038a0
+                            - 4b58b4e339852558ddb43f7cf495745b
+                            - b305a7ef80cc17c933bf487057099618
+                        - flightId: c1fc924a551e076a637e0df826a4d022
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - ecfd48968e463a96342e28cca0cdaec1
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: fa492dbf10401c522105ce768c027044
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - f95cc6d89d48f42ed8df9dd7b4ccb5bc
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: a740700c80564d0c8a1ee96245777e7d
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: aea3db5710c8e31c3fc72d6c4392ad20
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: c6ceaed60d895a4de37b698bfbb7b429
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 7703f22ba8862ae393de6b8a2a2bbd0d
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - ecfd48968e463a96342e28cca0cdaec1
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: b47d62d43b58153e1be8745cf5ea6d81
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: fcec20b608f4f883fa9624da9215bba9
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: 007cfa2a2e36540626f99da84b5e5987
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: fe5b3eea447c1981b2c902860e19e08b
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d3c513fc08bf17218f3f56580f53fb70
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: a90d5d439a81231a3eb34310274140d0
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - ecfd48968e463a96342e28cca0cdaec1
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 25432709842b55809c08ae90fdb6d4c0
+                          journeyTime: 1449
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - cde17a5b14607b9a02724b7328bc4f0a
+                            - 677048d6d6b7a043fd306bfd8f8d4881
+                            - 374f54bd6c2a0e05f0cc797163ebbce8
+                        - flightId: 57a6b80cb0f99c54c2bb6ec811ac592c
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 018272aa65d15c7e795f2a8e809181cd
+                          journeyTime: 1265
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - a1021c15f12a3b8c3f0a88287f775a4e
+                            - 5cfdcdaf5f167cbecb2cd7c0911e2379
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: d36de4468787e8f35e98aae9e6bdb527
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - c8a0575b5e4c44fa8b7f9de50e0e139d
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: cb7b86a2dda71e4fad5eace2f3f15dd8
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 8ae9aa9809ec0981a2171872e9d3b9f6
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 67311f12a3da598f2616b97038bee1e9
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: db699f44995733eac9dc8e6123d83285
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 039443bef764e4360092b311feedbd6f
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: d2374dedb78a73fa620a0cc8b3feac9a
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 8196c592ea38a51ef27a38758e7d5bae
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 49b00f6c3d557f518d8c98424918472c
+                          journeyTime: 1265
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - a1021c15f12a3b8c3f0a88287f775a4e
+                            - 5cfdcdaf5f167cbecb2cd7c0911e2379
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 1ad733c267678c81a9ffb6df44c313ea
+                          journeyTime: 1265
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - a1021c15f12a3b8c3f0a88287f775a4e
+                            - 5cfdcdaf5f167cbecb2cd7c0911e2379
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: b46c0f9b70c26dd12370a0d9eea432fb
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: f4b6d08453c62c45a956eaf1ad2584e6
+                          journeyTime: 1095
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - a7fbd67d3bc45d796b9d3550d6f99651
+                        - flightId: f885c45909cb9dc356075c0362a21093
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 11cd575310b1fd9778cf508ce4491b90
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 039443bef764e4360092b311feedbd6f
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: b7ddd78c302ff18c5e7de629d02f039e
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 6aaa4e2b4fbed310c5f7aac35096d6c1
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - f95cc6d89d48f42ed8df9dd7b4ccb5bc
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: eff3729cf6860add6da2fcc359dafa79
+                          journeyTime: 1345
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 16d070cb91e6c763e7b7ff2eb3ecf43b
+                            - 5f7db89069636b260072d48459d83518
+                            - 9dd6435bbe894b514f9c021147bdaf15
+                        - flightId: 4f83bcef0a851115fbffed29d6ad33d8
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 4227f81cbd55efe216d60e618934bb51
+                          journeyTime: 1345
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 16d070cb91e6c763e7b7ff2eb3ecf43b
+                            - 5f7db89069636b260072d48459d83518
+                            - 722c8cc7a39525a8df8d6ba67f3e663f
+                        - flightId: a73bc07807c4e312be859b5e6b3c45ae
+                          journeyTime: 1261
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 79a5f855cc636b8b260cd1e82105ea5a
+                            - a4995ca132f22e5d0d2907f6bbcde54f
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 8034e8aba508618458d36c6a1afa31da
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 316b9f6b05465ca1fc7ee201ed361998
+                          journeyTime: 1070
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 9b5b7502dd7c8d28b1295ed113579a8d
+                        - flightId: 2c78ea6f6ce3e307c117d601c97ee044
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 9125be1e7d6f0c87b035b3a56f04feb1
+                          journeyTime: 1055
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 8cf2f44ae1dd9ff850e83d346a49fced
+                            - f2bdf5817dcd62da47d4487605afb35f
+                        - flightId: ab82161e3ee08a566ce08e1e8f964f6a
+                          journeyTime: 1362
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - a9ba7edf403f4e425b32c1aeef7c09cd
+                            - 9442478410567a1a6d32bff220c91405
+                            - dc913283e89dea865564484b8b7a6182
+                        - flightId: eb8a791854bf811cca530c9b74c29af4
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 7d671b1900ac784d2fd6d344df31a7fe
+                          journeyTime: 1040
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 028cd00242b4c5bee19a46f3f958aee9
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: 605d2c11a1f109b391766d6c39a5172f
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - d32daebd11cae50a720d47af78fbc522
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: f71695a800af7efc771ff9971fee3729
+                          journeyTime: 1257
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 06c76d33eaac1c7cd6d284ac98e4b709
+                            - 5cfdcdaf5f167cbecb2cd7c0911e2379
+                            - 2c1c8947843b7980b45f1e4eacfb565f
+                        - flightId: 1898e7b1b59a552df39a6e164d4ef9ce
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - c8a0575b5e4c44fa8b7f9de50e0e139d
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 4ed4a603868f6dbdc223058e4da05fc9
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 95d2087cb23473c962caadd09eec6ebc
+                          journeyTime: 1090
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 9692d35229390f4de9c0fab5639656bf
+                            - 8bb5b52c5b4d736efcc0aa78f0616ceb
+                        - flightId: 7d2365e5369429968f9f200c62356006
+                          journeyTime: 1045
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 31c83987acb53dc01fdd2f278c22504d
+                            - 302451bf689eb5f5fbddb1172f3e5f9e
+                        - flightId: d25e085db3b9a1ff147d592074096682
+                          journeyTime: 1080
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - f95cc6d89d48f42ed8df9dd7b4ccb5bc
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: dc1b02e6770372f9a9b7748e4ba4f848
+                          journeyTime: 1055
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 8cf2f44ae1dd9ff850e83d346a49fced
+                            - f2bdf5817dcd62da47d4487605afb35f
+                        - flightId: 826daae8d229b8cc77e2d29b65278993
+                          journeyTime: 1345
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 16d070cb91e6c763e7b7ff2eb3ecf43b
+                            - 5f7db89069636b260072d48459d83518
+                            - 9dd6435bbe894b514f9c021147bdaf15
+                        - flightId: 9c7ecc944bf881fe50a891ad09f37be4
+                          journeyTime: 1075
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - af1481756ea1c0eb6ffd7244fbcc04a6
+                            - 7f4d1c193d5d46ef319b638d1c0c040d
+                        - flightId: 2e363a21a6f32e2ba0b4d011cb303ce9
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                        - flightId: c6a586859ed25632efdb0dfda7bfc302
+                          journeyTime: 1345
+                          transferCount: 2
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 16d070cb91e6c763e7b7ff2eb3ecf43b
+                            - 5f7db89069636b260072d48459d83518
+                            - 722c8cc7a39525a8df8d6ba67f3e663f
+                        - flightId: 8c8b5fe03688025facb247b00c4b1832
+                          journeyTime: 1225
+                          transferCount: 1
+                          lastTktTime: '2024-04-11 05:59:00'
+                          segmengtIds:
+                            - 21ecc80b25491f7b4e11d935444d28e1
+                            - 1c64d8f33e139802810938099b5f75bd
+                      segments:
+                        - segmentId: 7f4d1c193d5d46ef319b638d1c0c040d
+                          airline: AI
+                          flightNum: '173'
+                          equipment: 77L
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 6
+                          departure: DEL
+                          arrival: SFO
+                          departureTerminal: '3'
+                          arrivalTerminal: I
+                          departureDate: 1713383700000
+                          arrivalDate: 1713394800000
+                          flightTime: 935
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-18'
+                          strDepartureTime: '03:55'
+                          strArrivalDate: '2024-04-18'
+                          strArrivalTime: '07:00'
+                        - segmentId: a9ba7edf403f4e425b32c1aeef7c09cd
+                          airline: AC
+                          flightNum: '738'
+                          equipment: 7M8
+                          cabinClass: ECONOMY
+                          bookingCode: B
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: YYZ
+                          departureTerminal: '2'
+                          arrivalTerminal: '1'
+                          departureDate: 1714000500000
+                          arrivalDate: 1714029720000
+                          flightTime: 307
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ANCS3R
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '07:15'
+                          strArrivalDate: '2024-04-25'
+                          strArrivalTime: '15:22'
+                        - segmentId: 9442478410567a1a6d32bff220c91405
+                          airline: AC
+                          flightNum: '42'
+                          equipment: 77L
+                          cabinClass: PREMIUM ECONOMY
+                          bookingCode: A
+                          availabilityCount: 6
+                          departure: YYZ
+                          arrival: DEL
+                          departureTerminal: '1'
+                          arrivalTerminal: '3'
+                          departureDate: 1714047000000
+                          arrivalDate: 1714135800000
+                          flightTime: 910
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ANCS3R
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '20:10'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '20:50'
+                        - segmentId: 3f1c17a81730f5e8cc34c7737ff3f6b6
+                          airline: LH
+                          flightNum: '7252'
+                          equipment: '788'
+                          cabinClass: ECONOMY
+                          bookingCode: Q
+                          availabilityCount: 4
+                          departure: FRA
+                          arrival: DEL
+                          departureTerminal: '1'
+                          arrivalTerminal: '3'
+                          departureDate: 1714137300000
+                          arrivalDate: 1714177800000
+                          flightTime: 465
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '120'
+                          opFltAirline: AI
+                          stopover: null
+                          fareBasis: QNCS0D
+                          strDepartureDate: '2024-04-26'
+                          strDepartureTime: '21:15'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '08:30'
+                        - segmentId: 5cfdcdaf5f167cbecb2cd7c0911e2379
+                          airline: AI
+                          flightNum: '126'
+                          equipment: 77W
+                          cabinClass: ECONOMY
+                          bookingCode: L
+                          availabilityCount: 9
+                          departure: ORD
+                          arrival: DEL
+                          departureTerminal: '5'
+                          arrivalTerminal: '3'
+                          departureDate: 1714104000000
+                          arrivalDate: 1714193100000
+                          flightTime: 855
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LLSO2VGC
+                          strDepartureDate: '2024-04-26'
+                          strDepartureTime: '12:00'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '12:45'
+                        - segmentId: 9ba0eac49027dec8c826ed54aac96737
+                          airline: LH
+                          flightNum: '9403'
+                          equipment: 77W
+                          cabinClass: ECONOMY
+                          bookingCode: L
+                          availabilityCount: 6
+                          departure: SFO
+                          arrival: FRA
+                          departureTerminal: I
+                          arrivalTerminal: '1'
+                          departureDate: 1714023900000
+                          arrivalDate: 1714095900000
+                          flightTime: 660
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '58'
+                          opFltAirline: UA
+                          stopover: null
+                          fareBasis: LNCS7V
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '13:45'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '09:45'
+                        - segmentId: 677048d6d6b7a043fd306bfd8f8d4881
+                          airline: LH
+                          flightNum: '418'
+                          equipment: '346'
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 6
+                          departure: FRA
+                          arrival: IAD
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1713330600000
+                          arrivalDate: 1713341100000
+                          flightTime: 535
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '13:10'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '16:05'
+                        - segmentId: af1481756ea1c0eb6ffd7244fbcc04a6
+                          airline: AI
+                          flightNum: '840'
+                          equipment: 77W
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713357600000
+                          arrivalDate: 1713366000000
+                          flightTime: 140
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: KLSO2HYP
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '20:40'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '23:00'
+                        - segmentId: 8cf2f44ae1dd9ff850e83d346a49fced
+                          airline: AI
+                          flightNum: '515'
+                          equipment: '319'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: BLR
+                          departureTerminal: null
+                          arrivalTerminal: '2'
+                          departureDate: 1713318900000
+                          arrivalDate: 1713324000000
+                          flightTime: 85
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '09:55'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '11:20'
+                        - segmentId: 60ec3d948d54f9ef97ea16950aa45c5b
+                          airline: LH
+                          flightNum: '7886'
+                          equipment: '752'
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 2
+                          departure: EWR
+                          arrival: SFO
+                          departureTerminal: C
+                          arrivalTerminal: '3'
+                          departureDate: 1713348000000
+                          arrivalDate: 1713360480000
+                          flightTime: 388
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '1148'
+                          opFltAirline: UA
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '18:00'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '21:28'
+                        - segmentId: dc913283e89dea865564484b8b7a6182
+                          airline: AI
+                          flightNum: '459'
+                          equipment: '321'
+                          cabinClass: ECONOMY
+                          bookingCode: H
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714168800000
+                          arrivalDate: 1714177500000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ANCS3R
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '06:00'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '08:25'
+                        - segmentId: 8bb5b52c5b4d736efcc0aa78f0616ceb
+                          airline: AI
+                          flightNum: '459'
+                          equipment: '321'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714168800000
+                          arrivalDate: 1714177500000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LLSO2VGC
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '06:00'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '08:25'
+                        - segmentId: d32daebd11cae50a720d47af78fbc522
+                          airline: AI
+                          flightNum: '184'
+                          equipment: 77W
+                          cabinClass: ECONOMY
+                          bookingCode: U
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: DEL
+                          departureTerminal: I
+                          arrivalTerminal: '3'
+                          departureDate: 1714053600000
+                          arrivalDate: 1714155300000
+                          flightTime: 945
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ULSO2VGC
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '22:00'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '02:15'
+                        - segmentId: 95b47fc98178c87e3bf466ea038038a0
+                          airline: LH
+                          flightNum: '455'
+                          equipment: 74H
+                          cabinClass: ECONOMY
+                          bookingCode: L
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: FRA
+                          departureTerminal: I
+                          arrivalTerminal: '1'
+                          departureDate: 1714027200000
+                          arrivalDate: 1714098300000
+                          flightTime: 645
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LNCS7V
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '14:40'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '10:25'
+                        - segmentId: b13ae8eaf6402b883d0b95969b0d31b8
+                          airline: LH
+                          flightNum: '9407'
+                          equipment: '777'
+                          cabinClass: ECONOMY
+                          bookingCode: Q
+                          availabilityCount: 4
+                          departure: SFO
+                          arrival: FRA
+                          departureTerminal: I
+                          arrivalTerminal: '1'
+                          departureDate: 1714043700000
+                          arrivalDate: 1714115700000
+                          flightTime: 660
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '926'
+                          opFltAirline: UA
+                          stopover: null
+                          fareBasis: QNCS0D
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '19:15'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '15:15'
+                        - segmentId: b305a7ef80cc17c933bf487057099618
+                          airline: AI
+                          flightNum: '459'
+                          equipment: '321'
+                          cabinClass: ECONOMY
+                          bookingCode: S
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714168800000
+                          arrivalDate: 1714177500000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LNCS7V
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '06:00'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '08:25'
+                        - segmentId: 9dd6435bbe894b514f9c021147bdaf15
+                          airline: AI
+                          flightNum: '459'
+                          equipment: '321'
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714168800000
+                          arrivalDate: 1714177500000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: VNCS0D
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '06:00'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '08:25'
+                        - segmentId: 21ecc80b25491f7b4e11d935444d28e1
+                          airline: LH
+                          flightNum: '753'
+                          equipment: '789'
+                          cabinClass: ECONOMY
+                          bookingCode: U
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: FRA
+                          departureTerminal: null
+                          arrivalTerminal: '1'
+                          departureDate: 1713294600000
+                          arrivalDate: 1713315000000
+                          flightTime: 550
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: UNCS0D
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '03:10'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '08:50'
+                        - segmentId: a1021c15f12a3b8c3f0a88287f775a4e
+                          airline: UA
+                          flightNum: '476'
+                          equipment: '753'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: ORD
+                          departureTerminal: '3'
+                          arrivalTerminal: '1'
+                          departureDate: 1714056300000
+                          arrivalDate: 1714079400000
+                          flightTime: 265
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LLSO2VGC
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '22:45'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '05:10'
+                        - segmentId: f95cc6d89d48f42ed8df9dd7b4ccb5bc
+                          airline: AI
+                          flightNum: '543'
+                          equipment: 32N
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713319500000
+                          arrivalDate: 1713328200000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '10:05'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '12:30'
+                        - segmentId: 31c83987acb53dc01fdd2f278c22504d
+                          airline: AI
+                          flightNum: '9617'
+                          equipment: '320'
+                          cabinClass: ECONOMY
+                          bookingCode: H
+                          availabilityCount: 4
+                          departure: HYD
+                          arrival: BLR
+                          departureTerminal: null
+                          arrivalTerminal: '2'
+                          departureDate: 1713364800000
+                          arrivalDate: 1713369300000
+                          flightTime: 75
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '1732'
+                          opFltAirline: I5
+                          stopover: null
+                          fareBasis: HLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '22:40'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '23:55'
+                        - segmentId: 5f7db89069636b260072d48459d83518
+                          airline: AC
+                          flightNum: '50'
+                          equipment: '789'
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: YUL
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1714053000000
+                          arrivalDate: 1714139100000
+                          flightTime: 865
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: VNCS0D
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '21:50'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '21:45'
+                        - segmentId: d3c513fc08bf17218f3f56580f53fb70
+                          airline: AI
+                          flightNum: '523'
+                          equipment: 32N
+                          cabinClass: ECONOMY
+                          bookingCode: H
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713334200000
+                          arrivalDate: 1713342300000
+                          flightTime: 135
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '14:10'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '16:25'
+                        - segmentId: 51d2a8699b3d3307f6892f1883e992fd
+                          airline: LH
+                          flightNum: '9178'
+                          equipment: '739'
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 6
+                          departure: ORD
+                          arrival: SFO
+                          departureTerminal: '1'
+                          arrivalTerminal: '3'
+                          departureDate: 1713334800000
+                          arrivalDate: 1713345000000
+                          flightTime: 290
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '1634'
+                          opFltAirline: UA
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '14:20'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '17:10'
+                        - segmentId: 935fc7298cf15b2df586e1509e939413
+                          airline: AI
+                          flightNum: '467'
+                          equipment: 32A
+                          cabinClass: ECONOMY
+                          bookingCode: T
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714211700000
+                          arrivalDate: 1714220400000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: QNCS0D
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '17:55'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '20:20'
+                        - segmentId: 302451bf689eb5f5fbddb1172f3e5f9e
+                          airline: AI
+                          flightNum: '175'
+                          equipment: 77L
+                          cabinClass: ECONOMY
+                          bookingCode: H
+                          availabilityCount: 8
+                          departure: BLR
+                          arrival: SFO
+                          departureTerminal: '2'
+                          arrivalTerminal: I
+                          departureDate: 1713419400000
+                          arrivalDate: 1713432600000
+                          flightTime: 970
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: HLSO2HYF
+                          strDepartureDate: '2024-04-18'
+                          strDepartureTime: '13:50'
+                          strArrivalDate: '2024-04-18'
+                          strArrivalTime: '17:30'
+                        - segmentId: a7fbd67d3bc45d796b9d3550d6f99651
+                          airline: AI
+                          flightNum: '467'
+                          equipment: '321'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714125000000
+                          arrivalDate: 1714134000000
+                          flightTime: 150
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ULSO2VGC
+                          strDepartureDate: '2024-04-26'
+                          strDepartureTime: '17:50'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '20:20'
+                        - segmentId: 4b58b4e339852558ddb43f7cf495745b
+                          airline: LH
+                          flightNum: '760'
+                          equipment: '343'
+                          cabinClass: ECONOMY
+                          bookingCode: L
+                          availabilityCount: 6
+                          departure: FRA
+                          arrival: DEL
+                          departureTerminal: '1'
+                          arrivalTerminal: '3'
+                          departureDate: 1714108500000
+                          arrivalDate: 1714150500000
+                          flightTime: 490
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LNCS7V
+                          strDepartureDate: '2024-04-26'
+                          strDepartureTime: '13:15'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '00:55'
+                        - segmentId: c8a0575b5e4c44fa8b7f9de50e0e139d
+                          airline: AI
+                          flightNum: '418'
+                          equipment: 32A
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713346500000
+                          arrivalDate: 1713354900000
+                          flightTime: 140
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '17:35'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '19:55'
+                        - segmentId: a4995ca132f22e5d0d2907f6bbcde54f
+                          airline: AI
+                          flightNum: '126'
+                          equipment: 77W
+                          cabinClass: ECONOMY
+                          bookingCode: L
+                          availabilityCount: 9
+                          departure: ORD
+                          arrival: DEL
+                          departureTerminal: '5'
+                          arrivalTerminal: '3'
+                          departureDate: 1714017600000
+                          arrivalDate: 1714106700000
+                          flightTime: 855
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LLSO2VGC
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '12:00'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '12:45'
+                        - segmentId: f2bdf5817dcd62da47d4487605afb35f
+                          airline: AI
+                          flightNum: '175'
+                          equipment: 77L
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 5
+                          departure: BLR
+                          arrival: SFO
+                          departureTerminal: '2'
+                          arrivalTerminal: I
+                          departureDate: 1713333000000
+                          arrivalDate: 1713346200000
+                          flightTime: 970
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '13:50'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '17:30'
+                        - segmentId: 722c8cc7a39525a8df8d6ba67f3e663f
+                          airline: AI
+                          flightNum: '467'
+                          equipment: 32A
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714211700000
+                          arrivalDate: 1714220400000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: VNCS0D
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '17:55'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '20:20'
+                        - segmentId: ecfd48968e463a96342e28cca0cdaec1
+                          airline: AI
+                          flightNum: '559'
+                          equipment: 32N
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 3
+                          departure: HYD
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713306000000
+                          arrivalDate: 1713314400000
+                          flightTime: 140
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '06:20'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '08:40'
+                        - segmentId: 9b5b7502dd7c8d28b1295ed113579a8d
+                          airline: AI
+                          flightNum: '183'
+                          equipment: 77W
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: SFO
+                          departureTerminal: '3'
+                          arrivalTerminal: I
+                          departureDate: 1713424800000
+                          arrivalDate: 1713435600000
+                          flightTime: 930
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: KLSO2HYP
+                          strDepartureDate: '2024-04-18'
+                          strDepartureTime: '15:20'
+                          strArrivalDate: '2024-04-18'
+                          strArrivalTime: '18:20'
+                        - segmentId: bcf106f89dd18f211e19559633262050
+                          airline: LH
+                          flightNum: '430'
+                          equipment: 74H
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 6
+                          departure: FRA
+                          arrival: ORD
+                          departureTerminal: '1'
+                          arrivalTerminal: '5'
+                          departureDate: 1713322200000
+                          arrivalDate: 1713329700000
+                          flightTime: 545
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '10:50'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '12:55'
+                        - segmentId: 16661e9342c44f77e61f17d6f50efbb4
+                          airline: LH
+                          flightNum: '402'
+                          equipment: 74H
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 2
+                          departure: FRA
+                          arrival: EWR
+                          departureTerminal: '1'
+                          arrivalTerminal: B
+                          departureDate: 1713331200000
+                          arrivalDate: 1713339600000
+                          flightTime: 500
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '13:20'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '15:40'
+                        - segmentId: 06c76d33eaac1c7cd6d284ac98e4b709
+                          airline: UA
+                          flightNum: '2423'
+                          equipment: '777'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: ORD
+                          departureTerminal: '3'
+                          arrivalTerminal: '1'
+                          departureDate: 1714058100000
+                          arrivalDate: 1714080720000
+                          flightTime: 257
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LLSO2VGC
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '23:15'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '05:32'
+                        - segmentId: 9692d35229390f4de9c0fab5639656bf
+                          airline: AI
+                          flightNum: '174'
+                          equipment: 77L
+                          cabinClass: ECONOMY
+                          bookingCode: U
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: DEL
+                          departureTerminal: I
+                          arrivalTerminal: '3'
+                          departureDate: 1714012200000
+                          arrivalDate: 1714113900000
+                          flightTime: 945
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ULSO2VGC
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '10:30'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '14:45'
+                        - segmentId: f73c8c5c926688f17b56b6ac2fb9da1b
+                          airline: LH
+                          flightNum: '455'
+                          equipment: 74H
+                          cabinClass: ECONOMY
+                          bookingCode: Q
+                          availabilityCount: 4
+                          departure: SFO
+                          arrival: FRA
+                          departureTerminal: I
+                          arrivalTerminal: '1'
+                          departureDate: 1714027200000
+                          arrivalDate: 1714098300000
+                          flightTime: 645
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: QNCS0D
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '14:40'
+                          strArrivalDate: '2024-04-26'
+                          strArrivalTime: '10:25'
+                        - segmentId: 16d070cb91e6c763e7b7ff2eb3ecf43b
+                          airline: AC
+                          flightNum: '760'
+                          equipment: 7M8
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: SFO
+                          arrival: YUL
+                          departureTerminal: '2'
+                          arrivalTerminal: null
+                          departureDate: 1714005000000
+                          arrivalDate: 1714035900000
+                          flightTime: 335
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: VNCS0D
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '08:30'
+                          strArrivalDate: '2024-04-25'
+                          strArrivalTime: '17:05'
+                        - segmentId: 374f54bd6c2a0e05f0cc797163ebbce8
+                          airline: LH
+                          flightNum: '7530'
+                          equipment: 7M9
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 6
+                          departure: IAD
+                          arrival: SFO
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713362400000
+                          arrivalDate: 1713373440000
+                          flightTime: 364
+                          stayTime: null
+                          codeShare: 'Y'
+                          opFltNo: '2172'
+                          opFltAirline: UA
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '22:00'
+                          strArrivalDate: '2024-04-18'
+                          strArrivalTime: '01:04'
+                        - segmentId: cde17a5b14607b9a02724b7328bc4f0a
+                          airline: LH
+                          flightNum: '753'
+                          equipment: '789'
+                          cabinClass: ECONOMY
+                          bookingCode: M
+                          availabilityCount: 6
+                          departure: HYD
+                          arrival: FRA
+                          departureTerminal: null
+                          arrivalTerminal: '1'
+                          departureDate: 1713294600000
+                          arrivalDate: 1713315000000
+                          flightTime: 550
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MNCS0C
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '03:10'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '08:50'
+                        - segmentId: 039443bef764e4360092b311feedbd6f
+                          airline: AI
+                          flightNum: '541'
+                          equipment: 32N
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: DEL
+                          departureTerminal: null
+                          arrivalTerminal: '3'
+                          departureDate: 1713342300000
+                          arrivalDate: 1713351000000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: MLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '16:25'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '18:50'
+                        - segmentId: 6eaa87e90f7b66a2d4cd2d90b58e0549
+                          airline: AI
+                          flightNum: '467'
+                          equipment: 32A
+                          cabinClass: ECONOMY
+                          bookingCode: H
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714211700000
+                          arrivalDate: 1714220400000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ANCS3R
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '17:55'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '20:20'
+                        - segmentId: 2c1c8947843b7980b45f1e4eacfb565f
+                          airline: AI
+                          flightNum: '467'
+                          equipment: 32A
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: DEL
+                          arrival: VGA
+                          departureTerminal: '3'
+                          arrivalTerminal: null
+                          departureDate: 1714211700000
+                          arrivalDate: 1714220400000
+                          flightTime: 145
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: ULSO2VGC
+                          strDepartureDate: '2024-04-27'
+                          strDepartureTime: '17:55'
+                          strArrivalDate: '2024-04-27'
+                          strArrivalTime: '20:20'
+                        - segmentId: 79a5f855cc636b8b260cd1e82105ea5a
+                          airline: UA
+                          flightNum: '2661'
+                          equipment: '739'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 5
+                          departure: SFO
+                          arrival: ORD
+                          departureTerminal: '3'
+                          arrivalTerminal: '1'
+                          departureDate: 1713974940000
+                          arrivalDate: 1713997800000
+                          flightTime: 261
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: LLSO2VGC
+                          strDepartureDate: '2024-04-25'
+                          strDepartureTime: '00:09'
+                          strArrivalDate: '2024-04-25'
+                          strArrivalTime: '06:30'
+                        - segmentId: 1c64d8f33e139802810938099b5f75bd
+                          airline: LH
+                          flightNum: '454'
+                          equipment: 74H
+                          cabinClass: ECONOMY
+                          bookingCode: U
+                          availabilityCount: 9
+                          departure: FRA
+                          arrival: SFO
+                          departureTerminal: '1'
+                          arrivalTerminal: I
+                          departureDate: 1713320700000
+                          arrivalDate: 1713328800000
+                          flightTime: 675
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: UNCS0D
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '10:25'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '12:40'
+                        - segmentId: 028cd00242b4c5bee19a46f3f958aee9
+                          airline: AI
+                          flightNum: '587'
+                          equipment: '359'
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 9
+                          departure: HYD
+                          arrival: BLR
+                          departureTerminal: null
+                          arrivalTerminal: '2'
+                          departureDate: 1713359400000
+                          arrivalDate: 1713363600000
+                          flightTime: 70
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: ''
+                          stopover: null
+                          fareBasis: HLSO2HYF
+                          strDepartureDate: '2024-04-17'
+                          strDepartureTime: '21:10'
+                          strArrivalDate: '2024-04-17'
+                          strArrivalTime: '22:20'
+                '7':
+                  summary: Success(One Way Journey VI)
+                  value:
+                    errorCode: '0'
+                    errorMsg: ok
+                    data:
+                      searchKey: HKGBKK20241215Y1000
+                      shoppingKey: f492cad7ce655916d3a19eb3a21bd478
+                      solutions:
+                        - solutionKey: cadce3d7a693476e02a0e841d586fbcb
+                          solutionId: >-
+                            DMHkxtUMupBvCYeSAZKvI2XPSDdKRK2kK27eMKAEE+F2gdW8n4ZhopICv6eJNS40/IpYhzhI2Tvo2z04wU/8nNwO624PNzeJpVTeq4Ks9ho0cymekKGhBTVe1BQzINIhLz6wpYJ/0VxsriI2fPlN32S6ATG1+ulFve4Lww4Yk3K7Oe5FK5yrrSQurNPrzLnsrZM5z3qTCDIO3mQyoyEoI/5nfvU/3aZwJC1n7dhk7Bc6TH75vgyNo/RTHzL7ucrncFQE0RlXKZxchLf66Bz1NOiNH/w6EV3gSouSrUu+drJ1NXI1O6qWWYc8kXfcjeOt
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 25.69
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 07177e6e653830b4b2e151f215c8fd19
+                          fareRule: null
+                          rule: null
+                          platingCarrier: VJ
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                  - 2
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                  - 2
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                          category:
+                            - VI
+                        - solutionKey: 75bf2aab7af8644d426561ae6c9d5868
+                          solutionId: >-
+                            FfF+cwPh9c90Wroxd8eaM0jNool2YJhdB/E5AuQMCfim68UQVLx5PcwSTCj2XAIr7GuI2d5Vb4ZEdWHt2BNlUmDbj/fDpPPxjQBXrKdugNnOx80WT4vehJ/aSmPXPEfy3RFNvqrJzVLJL44C05V4R1oroebsduFpYj3iLV/Ito+269zDkbZJj+bT3UIeyZV7aHxgpZnGHLIHtKxpLnrXwcLbrBuonJkKDAbWlS++wdP9ToQGpjgG0DmSQYC88W+uTNJxCH+25pOOtqMOFWgCV6rbIKj9GaNLR08PI5Sw3nNJBz3zzBWC47C8UcKe98bH
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 77.9
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 89d8176b22a019eeb88e2ebe21894dac
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: a3a0b97693ec1f2b0719867d78078bd6
+                          solutionId: >-
+                            FfF+cwPh9c90Wroxd8eaM0jNool2YJhdB/E5AuQMCfim68UQVLx5PcwSTCj2XAIr7GuI2d5Vb4ZEdWHt2BNlUhi6vpugmXLW7UwMS+kNGW8wwzi+7m/OGu7v+5byctgPEpKitxpHYxt6xgDc9HSD+VbEEhvXB8LQe1CgYm5ZSe6uw2zt5uOU/EeRa1UUQa9AZmFdbcNo9Rq5wC2ND+rzQZGGVQu9j99fEPBHrpXRQPVetpZQoZziKIIzbQDtqfgM9Rt04wB7y7bDiPsy0QPl+hPXhIyh6rgJg96imVACA00b4iQ3m5fy+r/LTGQGgtOz
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 77.9
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 05f68a0919c54c8c09dd0c122df79201
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: 0fb6b9449bad90aea49e10510b1a007b
+                          solutionId: >-
+                            FfF+cwPh9c90Wroxd8eaM0jNool2YJhdB/E5AuQMCfim68UQVLx5PcwSTCj2XAIr7GuI2d5Vb4ZEdWHt2BNlUqvtxF9Cvnq3mKjDd2uZc0BxWhlZw2w0GukiaJd2Ew5zmrkVYNT/nYIyTWvXt02k/pjyw1BMlesjQlsreP/aZFOQvZB5PRbdghoyLEQOIAmLBVq/bB0odEheNPl66jsSJBXmotpABmWfv6hAFmsWSYcno2OZQuMAbD3LTMuHQ9p1B+cyp4oYJ1jA2VNIJaEsyrjmTxuNnKPxoa1qz3Ur9AnMqdm87/gB6eLm46UYVd6p
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 77.9
+                          adtTax: 59.39
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 8c24ef2bdf02dbdfab30b230187e9f7d
+                          fareRule: null
+                          rule: null
+                          platingCarrier: FD
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                          category:
+                            - VI
+                        - solutionKey: ef8efe21ef1252c08ea887d231070efa
+                          solutionId: >-
+                            GYf8g+mpWeBe2yUyJ10oaN76o5zGwhtY0sDNsjRZhFJggV1YR8Ueq+0alryl1oVhwHTkKhBbP44kl4S3fLySbl/SGS5b/+Ygqz5uzqt+Xikjek457GbwNDkWjKhiYiFfqaAHKDrG1EDA79hIBL5VXqEGzg8M+gFuksitQNzmdJbom3YBlR+QGpK0nbDga5MeXmU8EmjimtQh794OntJxIymrj1FNhvDmuht4/jQpMPt+A/SrrvtWnRYIveINIAcRxXGwZNWcaLI07MF2ldokQNlij8uhbYIeGO0a+MPBHz4BUfGiRtYo2277cCQiO9On
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 59.25
+                          adtTax: 66.02
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 7c263ec8c719d1bd56e63aba6564171c
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                        - solutionKey: c5d8d1aae643a6dacfdb00c09ed8c482
+                          solutionId: >-
+                            apfb7v3kcfvrR6rPV8DRznIgjyVP2FG9HrhizjRrYlN7CqhW9DuG0JOxOX9TAivCU/4kTCZ/Ow+/iMDVaZfhxC6S0xdh3+stuN7ViAtb7pHFp3vcNKoGWxcNiU7Jl80IjAAwQseshVQ+qzXMxcQVol3g9DYze9rVGGtINKztkQEEJ8nRgnMH3/eEMtlUWMYXrNGLIW2j+5FBvdkmZdeWv7Dqw90eGiXhRfqYSkGwQhnBz6Rn/SNpmG7mGg7qMubJmZ4OM24QSSziBEiDNq2HCi+qvKEBMMWsg+fMVrETRKkA46nXYnq6e38bsZ3sSWmG
+                          fareType: PRIVATE
+                          currency: USD
+                          adtFare: 57.73
+                          adtTax: 66.02
+                          chdFare: 0
+                          chdTax: 0
+                          qCharge: 0
+                          tktFee: 0
+                          platformServiceFee: 0
+                          comments: null
+                          journeys:
+                            journey_0:
+                              - 0e1c84af72f3aa971972747f4945f4e0
+                          fareRule: null
+                          rule: null
+                          platingCarrier: UO
+                          prices: null
+                          merchantFee: 0
+                          adults: 1
+                          children: 0
+                          infants: 0
+                          baggageMap:
+                            ADT:
+                              - segmentIndexList:
+                                  - 1
+                                baggageAmount: 0PC
+                                baggageWeight: null
+                                carryOnAmount: 1PC
+                                carryOnWeight: 7KG
+                                carryOnSize: null
+                          miniRuleMap:
+                            ADT:
+                              - segmentIndex:
+                                  - 1
+                                miniRules:
+                                  - penaltyType: 0
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 1
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 2
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                                  - penaltyType: 3
+                                    isPermited: 0
+                                    when: 0
+                                    noShowTime: null
+                                    noShowTimeUnit: null
+                                    amount: null
+                                    currencyCode: null
+                                    percent: null
+                                    baseType: null
+                                    originAmount: null
+                                    miniRuleAdjustAmount: null
+                                    miniRuleAdjustFlag: null
+                                    originCurrencyCode: null
+                                    guarantee: null
+                          afterSaleRule: null
+                      flights:
+                        - flightId: 8c24ef2bdf02dbdfab30b230187e9f7d
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - aaf28e13d163cc48e56f74216dac0ad3
+                        - flightId: 0e1c84af72f3aa971972747f4945f4e0
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 3cace3735ae26409515418e7a0c4ce4e
+                        - flightId: 07177e6e653830b4b2e151f215c8fd19
+                          journeyTime: 265
+                          transferCount: 1
+                          lastTktTime: null
+                          segmengtIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                            - 7292bd918a99e91c03bb3323c22d99
+                          selfTransferSegmentIds:
+                            - 5b6e4e840bb3321ca4ca21c422c99af6
+                        - flightId: 89d8176b22a019eeb88e2ebe21894dac
+                          journeyTime: 180
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - 74a975f21ad0ce3cfc49d11c32c168ab
+                        - flightId: 7c263ec8c719d1bd56e63aba6564171c
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - d6d1d1bf1837694138ea75ad1d1a11b4
+                        - flightId: 05f68a0919c54c8c09dd0c122df79201
+                          journeyTime: 185
+                          transferCount: 0
+                          lastTktTime: null
+                          segmengtIds:
+                            - c0492187a5331780b5d00c3de09713d7
+                      segments:
+                        - segmentId: c0492187a5331780b5d00c3de09713d7
+                          airline: FD
+                          flightNum: '505'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734264600000
+                          arrivalDate: 1734272100000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '20:10'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '22:15'
+                        - segmentId: d6d1d1bf1837694138ea75ad1d1a11b4
+                          airline: UO
+                          flightNum: '702'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: W
+                          availabilityCount: 9
+                          departure: HKG
+                          arrival: BKK
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1734251100000
+                          arrivalDate: 1734258600000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '16:25'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '18:30'
+                        - segmentId: 3cace3735ae26409515418e7a0c4ce4e
+                          airline: UO
+                          flightNum: '700'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: V
+                          availabilityCount: 9
+                          departure: HKG
+                          arrival: BKK
+                          departureTerminal: '1'
+                          arrivalTerminal: null
+                          departureDate: 1734240900000
+                          arrivalDate: 1734248100000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '13:35'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '15:35'
+                        - segmentId: aaf28e13d163cc48e56f74216dac0ad3
+                          airline: FD
+                          flightNum: '509'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734230700000
+                          arrivalDate: 1734238200000
+                          flightTime: 185
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '10:45'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '12:50'
+                        - segmentId: 74a975f21ad0ce3cfc49d11c32c168ab
+                          airline: FD
+                          flightNum: '501'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: Z
+                          availabilityCount: 5
+                          departure: HKG
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734244800000
+                          arrivalDate: 1734252000000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '14:40'
+                          strArrivalDate: '2024-12-15'
+                          strArrivalTime: '16:40'
+                        - segmentId: 5b6e4e840bb3321ca4ca21c422c99af6
+                          airline: VJ
+                          flightNum: '503'
+                          equipment: 32S
+                          cabinClass: ECONOMY
+                          bookingCode: K
+                          availabilityCount: 4
+                          departure: HKG
+                          arrival: SGN
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734272400000
+                          arrivalDate: 1734279600000
+                          flightTime: 180
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-15'
+                          strDepartureTime: '22:20'
+                          strArrivalDate: '2024-12-16'
+                          strArrivalTime: '00:20'
+                        - segmentId: 7292bd918a99e91c03bb3323c22d99
+                          airline: FD
+                          flightNum: '665'
+                          equipment: A320
+                          cabinClass: ECONOMY
+                          bookingCode: J
+                          availabilityCount: 6
+                          departure: SGN
+                          arrival: DMK
+                          departureTerminal: '1'
+                          arrivalTerminal: '2'
+                          departureDate: 1734287400000
+                          arrivalDate: 1734291900000
+                          flightTime: 75
+                          stayTime: null
+                          codeShare: 'N'
+                          opFltNo: null
+                          opFltAirline: null
+                          stopover: null
+                          fareBasis: YOW
+                          strDepartureDate: '2024-12-16'
+                          strDepartureTime: '02:30'
+                          strArrivalDate: '2024-12-16'
+                          strArrivalTime: '03:45'
+          headers: {}
+          x-apifox-name: Success
+        x-200:Error:
+          description: ''
+          content:
+            application/json:
+              schema:
+                title: ''
+                type: object
+                properties:
+                  errorCode:
+                    type: string
+                  errorMsg:
+                    type: string
+                  data:
+                    type: object
+                    properties: {}
+                    x-apifox-orders: []
+                    description: Always null
+                    x-apifox-ignore-properties: []
+                x-apifox-orders:
+                  - errorCode
+                  - errorMsg
+                  - data
+                required:
+                  - errorCode
+                  - errorMsg
+                x-apifox-ignore-properties: []
+              examples:
+                '2':
+                  summary: Error(200)
+                  value:
+                    errorCode: B002
+                    errorMsg: Partner does not exist.
+                    data: null
+                '4':
+                  summary: Error(B013)
+                  value: >-
+                    {
+                        "errorCode": "B013",
+                        "errorMsg": "Interface is limited, please contact the system administrator.",
+                        "data": null
+                    }
+
+
+                    Remark: This error occurs due to restricted
+                    searched/distributed routes or resources, please contact the
+                    tech team for recommendation
+                '5':
+                  summary: Error(B035)
+                  value: >-
+                    {
+                        "errorCode": "B035",
+                        "errorMsg": "Concurrency limited. Please contact PKFARE API support team for assistant.",
+                        "data": null
+                    }
+
+
+                    Remark: This error occurs due to restricted TPS allowance,
+                    please contact the tech team for recommendation
+          headers: {}
+          x-apifox-name: Error
+      security: []
+      x-apifox-folder: API Reference/APIs with all versions/Shopping
+      x-apifox-status: released
+      x-run-in-apifox: https://apifox.pkfare.com/web/project/345083/apis/api-3470509-run
+components:
+  schemas:
+    Authentication:
+      type: object
+      properties:
+        Authentication:
+          type: object
+          properties:
+            partnerId:
+              type: string
+              description: Partner Id
+            sign:
+              type: string
+              description: Signature
+          x-apifox-orders:
+            - partnerId
+            - sign
+          required:
+            - partnerId
+            - sign
+          x-apifox-ignore-properties: []
+      title: Authentication
+      x-apifox-orders:
+        - Authentication
+      required:
+        - Authentication
+      x-apifox-ignore-properties: []
+      x-apifox-folder: ''
+  securitySchemes: {}
+servers:
+  - url: https://api.pkfare.com
+    description: Sandbox Env
+security: []
+
+```
