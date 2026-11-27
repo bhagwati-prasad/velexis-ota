@@ -1,0 +1,38 @@
+{
+  "scenario": "flights.upsell: beta asks for alpha's offer, 404 NOT_FOUND",
+  "request": {
+    "caller": "beta, secret key",
+    "method": "POST",
+    "path": "/v1/flight-offers/<off-1>/upsells",
+    "stubScenario": null,
+    "body": null
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 404,
+    "body": {
+      "error": {
+        "code": "NOT_FOUND",
+        "message": "No flight offer with this id.",
+        "status": 404,
+        "requestId": "<request-1>"
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

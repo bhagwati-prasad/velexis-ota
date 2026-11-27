@@ -1,0 +1,45 @@
+{
+  "scenario": "flights.price: an empty body, 400 VALIDATION_FAILED",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/priced-offers",
+    "stubScenario": null,
+    "body": {}
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "message": "The request body, query or headers failed validation; see fieldErrors.",
+        "status": 400,
+        "requestId": "<request-1>",
+        "fieldErrors": [
+          {
+            "path": "/offerIds",
+            "code": "required",
+            "message": "The offers to price are required."
+          }
+        ]
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

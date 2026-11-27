@@ -1,0 +1,132 @@
+{
+  "scenario": "flights.price: amadeusFlightOffers in console scope, 422",
+  "request": {
+    "caller": "alpha, console:automation key, console scope",
+    "method": "POST",
+    "path": "/v1/priced-offers",
+    "stubScenario": null,
+    "body": {
+      "amadeusFlightOffers": [
+        {
+          "id": "2",
+          "type": "flight-offer",
+          "price": {
+            "base": "56.00",
+            "fees": [
+              {
+                "type": "SUPPLIER",
+                "amount": "0.00"
+              },
+              {
+                "type": "TICKETING",
+                "amount": "0.00"
+              }
+            ],
+            "total": "98.47",
+            "currency": "EUR",
+            "grandTotal": "98.47"
+          },
+          "oneWay": false,
+          "source": "GDS",
+          "itineraries": [
+            {
+              "duration": "PT2H5M",
+              "segments": [
+                {
+                  "id": "3",
+                  "number": "3436",
+                  "arrival": {
+                    "at": "2027-01-15T09:20:00",
+                    "iataCode": "ORY",
+                    "terminal": "1"
+                  },
+                  "aircraft": {
+                    "code": "32N"
+                  },
+                  "duration": "PT2H5M",
+                  "departure": {
+                    "at": "2027-01-15T07:15:00",
+                    "iataCode": "MAD",
+                    "terminal": "4"
+                  },
+                  "operating": {
+                    "carrierCode": "IB"
+                  },
+                  "carrierCode": "IB",
+                  "numberOfStops": 0,
+                  "blacklistedInEU": false
+                }
+              ]
+            }
+          ],
+          "isUpsellOffer": false,
+          "nonHomogeneous": false,
+          "pricingOptions": {
+            "fareType": ["PUBLISHED"],
+            "includedCheckedBagsOnly": false
+          },
+          "travelerPricings": [
+            {
+              "price": {
+                "base": "56.00",
+                "total": "98.47",
+                "currency": "EUR"
+              },
+              "fareOption": "STANDARD",
+              "travelerId": "1",
+              "travelerType": "ADULT",
+              "fareDetailsBySegment": [
+                {
+                  "cabin": "ECONOMY",
+                  "class": "A",
+                  "fareBasis": "ADNNALB4",
+                  "segmentId": "3",
+                  "brandedFare": "BASIC",
+                  "brandedFareLabel": "BASIC",
+                  "includedCheckedBags": {
+                    "quantity": 0
+                  }
+                }
+              ]
+            }
+          ],
+          "lastTicketingDate": "2099-12-31",
+          "numberOfBookableSeats": 9,
+          "validatingAirlineCodes": ["IB"],
+          "instantTicketingRequired": false
+        }
+      ]
+    }
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "UNPROCESSABLE",
+        "message": "Raw Amadeus offers cannot be priced yet: search and price their off_ ids.",
+        "status": 422,
+        "requestId": "<request-1>",
+        "details": {
+          "reason": "raw_offers_not_supported"
+        }
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "scenario": "flights.price: a traveller the offer does not have, 400",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/priced-offers",
+    "stubScenario": null,
+    "body": {
+      "offerIds": ["<off-1>"],
+      "travelers": [
+        {
+          "id": "7",
+          "dateOfBirth": "1990-02-15",
+          "gender": "FEMALE",
+          "name": {
+            "firstName": "TESTA",
+            "lastName": "SAMPLE"
+          },
+          "documents": [
+            {
+              "documentType": "PASSPORT",
+              "number": "X98765432",
+              "expiryDate": "2031-05-01",
+              "issuanceCountry": "ES",
+              "nationality": "ES",
+              "holder": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "message": "The request body, query or headers failed validation; see fieldErrors.",
+        "status": 400,
+        "requestId": "<request-1>",
+        "fieldErrors": [
+          {
+            "path": "/travelers/0/id",
+            "code": "unknown_traveler",
+            "message": "The id must be the travelerId of one of the offers' travellers."
+          }
+        ]
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

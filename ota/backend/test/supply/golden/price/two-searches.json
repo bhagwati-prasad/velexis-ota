@@ -1,0 +1,44 @@
+{
+  "scenario": "flights.price: offers of two searches, 422 OFFER_COMBINATION_INVALID",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/priced-offers",
+    "stubScenario": null,
+    "body": {
+      "offerIds": ["<off-1>", "<off-2>"]
+    }
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "OFFER_COMBINATION_INVALID",
+        "message": "Only offers of the same search can be priced together.",
+        "status": 422,
+        "requestId": "<request-1>",
+        "details": {
+          "offerIds": ["<off-1>", "<off-2>"],
+          "reason": "different_search"
+        }
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

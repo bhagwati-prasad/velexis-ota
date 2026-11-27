@@ -1,0 +1,38 @@
+{
+  "scenario": "flights.upsell: an expired offer, 410 OFFER_EXPIRED",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/flight-offers/<off-1>/upsells",
+    "stubScenario": null,
+    "body": null
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 410,
+    "body": {
+      "error": {
+        "code": "OFFER_EXPIRED",
+        "message": "The offer or priced offer expired; search or price again.",
+        "status": 410,
+        "requestId": "<request-1>"
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

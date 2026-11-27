@@ -1,0 +1,192 @@
+{
+  "scenario": "flights.search: the stub's server-error scenario",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/flight-searches",
+    "stubScenario": "server-error",
+    "body": {
+      "mode": "simple",
+      "originLocationCode": "MAD",
+      "destinationLocationCode": "ORY",
+      "departureDate": "2027-01-15",
+      "adults": 1
+    }
+  },
+  "amadeus": [
+    {
+      "method": "GET",
+      "path": "/v2/shopping/flight-offers",
+      "query": "originLocationCode=MAD&destinationLocationCode=ORY&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+      "body": null
+    },
+    {
+      "method": "GET",
+      "path": "/v2/shopping/flight-offers",
+      "query": "originLocationCode=MAD&destinationLocationCode=ORY&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+      "body": null
+    }
+  ],
+  "answer": {
+    "status": 502,
+    "body": {
+      "error": {
+        "code": "SUPPLIER_ERROR",
+        "message": "Amadeus returned an error that could not be mapped to a more specific code.",
+        "status": 502,
+        "requestId": "<request-1>"
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [
+        {
+          "id": "<srch-1>",
+          "environment": "test",
+          "kind": "offers",
+          "mode": "simple",
+          "channel": "storefront",
+          "customer_id": null,
+          "staff_id": null,
+          "criteria": {
+            "mode": "simple",
+            "adults": 1,
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ORY"
+          },
+          "amadeus_request": {
+            "query": {
+              "max": 150,
+              "adults": 1,
+              "currencyCode": "EUR",
+              "departureDate": "2027-01-15",
+              "originLocationCode": "MAD",
+              "destinationLocationCode": "ORY"
+            },
+            "operationId": "getFlightOffers"
+          },
+          "origin_iata": "MAD",
+          "destination_iata": "ORY",
+          "departure_date": "2027-01-15",
+          "return_date": null,
+          "adults": 1,
+          "children": 0,
+          "infants": 0,
+          "cabin": null,
+          "currency": "EUR",
+          "status": "failed",
+          "result_count": 0,
+          "dictionaries": null,
+          "warnings": null,
+          "facets": null,
+          "highlights": null,
+          "one_way_combinations": null,
+          "availability_data": null,
+          "error_code": "SUPPLIER_ERROR",
+          "duration_ms": "<duration>",
+          "expires_at": "<timestamp>",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": [
+        {
+          "id": "<sreq-1>",
+          "environment": "test",
+          "provider": "amadeus",
+          "operation": "flights.search",
+          "amadeus_api": "FlightOffersSearch",
+          "amadeus_operation_id": "getFlightOffers",
+          "http_method": "GET",
+          "path": "/v2/shopping/flight-offers?originLocationCode=MAD&destinationLocationCode=ORY&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+          "office_id": "NCE1A0001",
+          "http_status": 500,
+          "outcome": "server_error",
+          "error_codes": [141],
+          "duration_ms": "<duration>",
+          "correlation_id": null,
+          "request_id": "<request-1>",
+          "redacted": true,
+          "request_body": {
+            "max": 150,
+            "adults": 1,
+            "currencyCode": "EUR",
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ORY"
+          },
+          "response_body": {
+            "errors": [
+              {
+                "code": 141,
+                "title": "SYSTEM ERROR HAS OCCURRED",
+                "detail": "Stub scenario server-error",
+                "status": 500
+              }
+            ]
+          },
+          "truncated": false,
+          "booking_id": null,
+          "search_id": "<srch-1>",
+          "staff_id": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        },
+        {
+          "id": "<sreq-2>",
+          "environment": "test",
+          "provider": "amadeus",
+          "operation": "flights.search",
+          "amadeus_api": "FlightOffersSearch",
+          "amadeus_operation_id": "getFlightOffers",
+          "http_method": "GET",
+          "path": "/v2/shopping/flight-offers?originLocationCode=MAD&destinationLocationCode=ORY&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+          "office_id": "NCE1A0001",
+          "http_status": 500,
+          "outcome": "server_error",
+          "error_codes": [141],
+          "duration_ms": "<duration>",
+          "correlation_id": null,
+          "request_id": "<request-1>",
+          "redacted": true,
+          "request_body": {
+            "max": 150,
+            "adults": 1,
+            "currencyCode": "EUR",
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ORY"
+          },
+          "response_body": {
+            "errors": [
+              {
+                "code": 141,
+                "title": "SYSTEM ERROR HAS OCCURRED",
+                "detail": "Stub scenario server-error",
+                "status": 500
+              }
+            ]
+          },
+          "truncated": false,
+          "booking_id": null,
+          "search_id": "<srch-1>",
+          "staff_id": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ]
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

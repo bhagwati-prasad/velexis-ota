@@ -1,0 +1,50 @@
+{
+  "scenario": "flights.price: additionalServices, 422 UNPROCESSABLE",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/priced-offers",
+    "stubScenario": null,
+    "body": {
+      "offerIds": ["<off-1>"],
+      "additionalServices": [
+        {
+          "type": "CHECKED_BAGS",
+          "travelerId": "1",
+          "quantity": 1
+        }
+      ]
+    }
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 422,
+    "body": {
+      "error": {
+        "code": "UNPROCESSABLE",
+        "message": "Extras are priced by the checkout (checkout.setAncillaries), not by flights.price.",
+        "status": 422,
+        "requestId": "<request-1>",
+        "details": {
+          "reason": "additional_services_not_supported"
+        }
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

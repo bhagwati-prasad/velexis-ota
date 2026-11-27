@@ -1,0 +1,41 @@
+{
+  "scenario": "flights.upsell: brandedFareUpsell off, customer scope, 403 FEATURE_DISABLED",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/flight-offers/<off-1>/upsells",
+    "stubScenario": null,
+    "body": null
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 403,
+    "body": {
+      "error": {
+        "code": "FEATURE_DISABLED",
+        "message": "Branded fare upsell is not enabled for this storefront.",
+        "status": 403,
+        "requestId": "<request-1>",
+        "details": {
+          "feature": "brandedFareUpsell"
+        }
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

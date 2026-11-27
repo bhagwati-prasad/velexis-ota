@@ -1,0 +1,241 @@
+{
+  "scenario": "flights.search: the stub's empty answer for the destination ZZZ",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/flight-searches",
+    "stubScenario": null,
+    "body": {
+      "mode": "simple",
+      "originLocationCode": "MAD",
+      "destinationLocationCode": "ZZZ",
+      "departureDate": "2027-01-15",
+      "adults": 1
+    }
+  },
+  "amadeus": [
+    {
+      "method": "GET",
+      "path": "/v2/shopping/flight-offers",
+      "query": "originLocationCode=MAD&destinationLocationCode=ZZZ&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+      "body": null
+    }
+  ],
+  "answer": {
+    "status": 201,
+    "body": {
+      "id": "<srch-1>",
+      "status": "completed",
+      "mode": "simple",
+      "customerId": null,
+      "criteria": {
+        "mode": "simple",
+        "request": {
+          "mode": "simple",
+          "adults": 1,
+          "departureDate": "2027-01-15",
+          "originLocationCode": "MAD",
+          "destinationLocationCode": "ZZZ"
+        },
+        "amadeusOperationId": "getFlightOffers",
+        "amadeusQuery": {
+          "max": "150",
+          "adults": "1",
+          "currencyCode": "EUR",
+          "departureDate": "2027-01-15",
+          "originLocationCode": "MAD",
+          "destinationLocationCode": "ZZZ"
+        },
+        "amadeusBody": null
+      },
+      "summary": {
+        "tripType": "one_way",
+        "legs": [
+          {
+            "originDestinationId": "1",
+            "originCode": "MAD",
+            "destinationCode": "ZZZ",
+            "departureDate": "2027-01-15"
+          }
+        ],
+        "travelers": {
+          "adults": 1,
+          "children": 0,
+          "infants": 0,
+          "total": 1
+        },
+        "travelClass": null,
+        "nonStop": false
+      },
+      "currency": "EUR",
+      "resultCount": 0,
+      "highlights": {
+        "best": null,
+        "fastest": null,
+        "cheapest": null
+      },
+      "oneWayCombinations": [],
+      "facets": {
+        "price": {
+          "max": null,
+          "min": null
+        },
+        "stops": [],
+        "total": 0,
+        "cabins": [],
+        "carriers": [],
+        "durations": [],
+        "changeable": [],
+        "refundable": [],
+        "arrivalTimes": [],
+        "brandedFares": [],
+        "departureTimes": [],
+        "includedCheckedBags": []
+      },
+      "dictionaries": {
+        "locations": {},
+        "carriers": {},
+        "aircraft": {},
+        "currencies": {
+          "EUR": "Euro"
+        }
+      },
+      "warnings": [],
+      "retryAfterSeconds": null,
+      "error": null,
+      "createdAt": "<timestamp>",
+      "completedAt": "<timestamp>",
+      "expiresAt": "<timestamp>",
+      "offers": [],
+      "page": {
+        "nextCursor": null,
+        "limit": 20
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [
+        {
+          "id": "<srch-1>",
+          "environment": "test",
+          "kind": "offers",
+          "mode": "simple",
+          "channel": "storefront",
+          "customer_id": null,
+          "staff_id": null,
+          "criteria": {
+            "mode": "simple",
+            "adults": 1,
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ZZZ"
+          },
+          "amadeus_request": {
+            "query": {
+              "max": 150,
+              "adults": 1,
+              "currencyCode": "EUR",
+              "departureDate": "2027-01-15",
+              "originLocationCode": "MAD",
+              "destinationLocationCode": "ZZZ"
+            },
+            "operationId": "getFlightOffers"
+          },
+          "origin_iata": "MAD",
+          "destination_iata": "ZZZ",
+          "departure_date": "2027-01-15",
+          "return_date": null,
+          "adults": 1,
+          "children": 0,
+          "infants": 0,
+          "cabin": null,
+          "currency": "EUR",
+          "status": "completed",
+          "result_count": 0,
+          "dictionaries": {},
+          "warnings": [],
+          "facets": {
+            "price": {
+              "max": null,
+              "min": null
+            },
+            "stops": [],
+            "total": 0,
+            "cabins": [],
+            "carriers": [],
+            "durations": [],
+            "changeable": [],
+            "refundable": [],
+            "arrivalTimes": [],
+            "brandedFares": [],
+            "departureTimes": [],
+            "includedCheckedBags": []
+          },
+          "highlights": {
+            "best": null,
+            "fastest": null,
+            "cheapest": null
+          },
+          "one_way_combinations": [],
+          "availability_data": null,
+          "error_code": null,
+          "duration_ms": "<duration>",
+          "expires_at": "<timestamp>",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": [
+        {
+          "id": "<sreq-1>",
+          "environment": "test",
+          "provider": "amadeus",
+          "operation": "flights.search",
+          "amadeus_api": "FlightOffersSearch",
+          "amadeus_operation_id": "getFlightOffers",
+          "http_method": "GET",
+          "path": "/v2/shopping/flight-offers?originLocationCode=MAD&destinationLocationCode=ZZZ&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+          "office_id": "NCE1A0001",
+          "http_status": 200,
+          "outcome": "success",
+          "error_codes": [],
+          "duration_ms": "<duration>",
+          "correlation_id": null,
+          "request_id": "<request-1>",
+          "redacted": true,
+          "request_body": {
+            "max": 150,
+            "adults": 1,
+            "currencyCode": "EUR",
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ZZZ"
+          },
+          "response_body": {
+            "data": [],
+            "meta": {
+              "count": 0
+            }
+          },
+          "truncated": false,
+          "booking_id": null,
+          "search_id": "<srch-1>",
+          "staff_id": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ]
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

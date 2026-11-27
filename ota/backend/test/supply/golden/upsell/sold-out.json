@@ -1,0 +1,269 @@
+{
+  "scenario": "flights.upsell: the stub's sold-out scenario",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/flight-offers/<off-1>/upsells",
+    "stubScenario": "sold-out",
+    "body": null
+  },
+  "amadeus": [
+    {
+      "method": "POST",
+      "path": "/v1/shopping/flight-offers/upselling",
+      "query": "",
+      "body": {
+        "data": {
+          "type": "flight-offer-upsell",
+          "flightOffers": [
+            {
+              "id": "2",
+              "type": "flight-offer",
+              "price": {
+                "base": "56.00",
+                "fees": [
+                  {
+                    "type": "SUPPLIER",
+                    "amount": "0.00"
+                  },
+                  {
+                    "type": "TICKETING",
+                    "amount": "0.00"
+                  }
+                ],
+                "total": "98.47",
+                "currency": "EUR",
+                "grandTotal": "98.47"
+              },
+              "oneWay": false,
+              "source": "GDS",
+              "itineraries": [
+                {
+                  "duration": "PT2H5M",
+                  "segments": [
+                    {
+                      "id": "3",
+                      "number": "3436",
+                      "arrival": {
+                        "at": "2027-01-15T09:20:00",
+                        "iataCode": "ORY",
+                        "terminal": "1"
+                      },
+                      "aircraft": {
+                        "code": "32N"
+                      },
+                      "duration": "PT2H5M",
+                      "departure": {
+                        "at": "2027-01-15T07:15:00",
+                        "iataCode": "MAD",
+                        "terminal": "4"
+                      },
+                      "operating": {
+                        "carrierCode": "IB"
+                      },
+                      "carrierCode": "IB",
+                      "numberOfStops": 0,
+                      "blacklistedInEU": false
+                    }
+                  ]
+                }
+              ],
+              "isUpsellOffer": false,
+              "nonHomogeneous": false,
+              "pricingOptions": {
+                "fareType": ["PUBLISHED"],
+                "includedCheckedBagsOnly": false
+              },
+              "travelerPricings": [
+                {
+                  "price": {
+                    "base": "56.00",
+                    "total": "98.47",
+                    "currency": "EUR"
+                  },
+                  "fareOption": "STANDARD",
+                  "travelerId": "1",
+                  "travelerType": "ADULT",
+                  "fareDetailsBySegment": [
+                    {
+                      "cabin": "ECONOMY",
+                      "class": "A",
+                      "fareBasis": "ADNNALB4",
+                      "segmentId": "3",
+                      "brandedFare": "BASIC",
+                      "brandedFareLabel": "BASIC",
+                      "includedCheckedBags": {
+                        "quantity": 0
+                      }
+                    }
+                  ]
+                }
+              ],
+              "lastTicketingDate": "2027-01-15",
+              "numberOfBookableSeats": 9,
+              "validatingAirlineCodes": ["IB"],
+              "instantTicketingRequired": false
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "answer": {
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "SOLD_OUT",
+        "message": "The fare/seats are no longer available.",
+        "status": 409,
+        "requestId": "<request-1>"
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": [
+        {
+          "id": "<sreq-1>",
+          "environment": "test",
+          "provider": "amadeus",
+          "operation": "flights.upsell",
+          "amadeus_api": "BrandedFaresUpsell",
+          "amadeus_operation_id": "upsellAirOffers",
+          "http_method": "POST",
+          "path": "/v1/shopping/flight-offers/upselling",
+          "office_id": "NCE1A0001",
+          "http_status": 400,
+          "outcome": "client_error",
+          "error_codes": [34651],
+          "duration_ms": "<duration>",
+          "correlation_id": null,
+          "request_id": "<request-1>",
+          "redacted": true,
+          "request_body": {
+            "data": {
+              "type": "flight-offer-upsell",
+              "flightOffers": [
+                {
+                  "id": "2",
+                  "type": "flight-offer",
+                  "price": {
+                    "base": "56.00",
+                    "fees": [
+                      {
+                        "type": "SUPPLIER",
+                        "amount": "0.00"
+                      },
+                      {
+                        "type": "TICKETING",
+                        "amount": "0.00"
+                      }
+                    ],
+                    "total": "98.47",
+                    "currency": "EUR",
+                    "grandTotal": "98.47"
+                  },
+                  "oneWay": false,
+                  "source": "GDS",
+                  "itineraries": [
+                    {
+                      "duration": "PT2H5M",
+                      "segments": [
+                        {
+                          "id": "3",
+                          "number": "3436",
+                          "arrival": {
+                            "at": "2027-01-15T09:20:00",
+                            "iataCode": "ORY",
+                            "terminal": "1"
+                          },
+                          "aircraft": {
+                            "code": "32N"
+                          },
+                          "duration": "PT2H5M",
+                          "departure": {
+                            "at": "2027-01-15T07:15:00",
+                            "iataCode": "MAD",
+                            "terminal": "4"
+                          },
+                          "operating": {
+                            "carrierCode": "IB"
+                          },
+                          "carrierCode": "IB",
+                          "numberOfStops": 0,
+                          "blacklistedInEU": false
+                        }
+                      ]
+                    }
+                  ],
+                  "isUpsellOffer": false,
+                  "nonHomogeneous": false,
+                  "pricingOptions": {
+                    "fareType": ["PUBLISHED"],
+                    "includedCheckedBagsOnly": false
+                  },
+                  "travelerPricings": [
+                    {
+                      "price": {
+                        "base": "56.00",
+                        "total": "98.47",
+                        "currency": "EUR"
+                      },
+                      "fareOption": "STANDARD",
+                      "travelerId": "1",
+                      "travelerType": "ADULT",
+                      "fareDetailsBySegment": [
+                        {
+                          "cabin": "ECONOMY",
+                          "class": "A",
+                          "fareBasis": "ADNNALB4",
+                          "segmentId": "3",
+                          "brandedFare": "BASIC",
+                          "brandedFareLabel": "BASIC",
+                          "includedCheckedBags": {
+                            "quantity": 0
+                          }
+                        }
+                      ]
+                    }
+                  ],
+                  "lastTicketingDate": "2027-01-15",
+                  "numberOfBookableSeats": 9,
+                  "validatingAirlineCodes": ["IB"],
+                  "instantTicketingRequired": false
+                }
+              ]
+            }
+          },
+          "response_body": {
+            "errors": [
+              {
+                "code": 34651,
+                "title": "SEGMENT SELL FAILURE",
+                "detail": "Could not sell segment 3",
+                "status": 400
+              }
+            ]
+          },
+          "truncated": false,
+          "booking_id": null,
+          "search_id": "<srch-1>",
+          "staff_id": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ]
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

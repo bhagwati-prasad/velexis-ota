@@ -1,0 +1,102 @@
+{
+  "scenario": "flights.search: ADVANCED mode with 10 adults, 400 VALIDATION_FAILED",
+  "request": {
+    "caller": "alpha, secret key",
+    "method": "POST",
+    "path": "/v1/flight-searches",
+    "stubScenario": null,
+    "body": {
+      "mode": "advanced",
+      "query": {
+        "originDestinations": [
+          {
+            "id": "1",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "PAR",
+            "departureDateTimeRange": {
+              "date": "2027-01-15"
+            }
+          }
+        ],
+        "travelers": [
+          {
+            "id": "1",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "2",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "3",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "4",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "5",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "6",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "7",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "8",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "9",
+            "travelerType": "ADULT"
+          },
+          {
+            "id": "10",
+            "travelerType": "ADULT"
+          }
+        ],
+        "sources": ["GDS"]
+      }
+    }
+  },
+  "amadeus": [],
+  "answer": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": "VALIDATION_FAILED",
+        "message": "The request body, query or headers failed validation; see fieldErrors.",
+        "status": 400,
+        "requestId": "<request-1>",
+        "fieldErrors": [
+          {
+            "path": "/query/travelers",
+            "code": "range",
+            "message": "At most 9 travellers older than two years."
+          }
+        ]
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    }
+  }
+}

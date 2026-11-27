@@ -1,0 +1,654 @@
+{
+  "scenario": "flights.search: beta's markup overflows the selling total, 500 INTERNAL_ERROR",
+  "request": {
+    "caller": "beta, secret key",
+    "method": "POST",
+    "path": "/v1/flight-searches",
+    "stubScenario": null,
+    "body": {
+      "mode": "simple",
+      "originLocationCode": "MAD",
+      "destinationLocationCode": "ORY",
+      "departureDate": "2027-01-15",
+      "adults": 1
+    }
+  },
+  "amadeus": [
+    {
+      "method": "GET",
+      "path": "/v2/shopping/flight-offers",
+      "query": "originLocationCode=MAD&destinationLocationCode=ORY&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+      "body": null
+    }
+  ],
+  "answer": {
+    "status": 500,
+    "body": {
+      "error": {
+        "code": "INTERNAL_ERROR",
+        "message": "Unexpected error; quote the requestId to support.",
+        "status": 500,
+        "requestId": "<request-1>"
+      }
+    }
+  },
+  "rows": {
+    "tenant_alpha": {
+      "flight_searches": [],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": []
+    },
+    "tenant_beta": {
+      "flight_searches": [
+        {
+          "id": "<srch-1>",
+          "environment": "test",
+          "kind": "offers",
+          "mode": "simple",
+          "channel": "storefront",
+          "customer_id": null,
+          "staff_id": null,
+          "criteria": {
+            "mode": "simple",
+            "adults": 1,
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ORY"
+          },
+          "amadeus_request": {
+            "query": {
+              "max": 150,
+              "adults": 1,
+              "currencyCode": "EUR",
+              "departureDate": "2027-01-15",
+              "originLocationCode": "MAD",
+              "destinationLocationCode": "ORY"
+            },
+            "operationId": "getFlightOffers"
+          },
+          "origin_iata": "MAD",
+          "destination_iata": "ORY",
+          "departure_date": "2027-01-15",
+          "return_date": null,
+          "adults": 1,
+          "children": 0,
+          "infants": 0,
+          "cabin": null,
+          "currency": "EUR",
+          "status": "failed",
+          "result_count": 0,
+          "dictionaries": null,
+          "warnings": null,
+          "facets": null,
+          "highlights": null,
+          "one_way_combinations": null,
+          "availability_data": null,
+          "error_code": "INTERNAL_ERROR",
+          "duration_ms": "<duration>",
+          "expires_at": "<timestamp>",
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ],
+      "flight_offers": [],
+      "offer_upsells": [],
+      "priced_offers": [],
+      "supplier_requests": [
+        {
+          "id": "<sreq-1>",
+          "environment": "test",
+          "provider": "amadeus",
+          "operation": "flights.search",
+          "amadeus_api": "FlightOffersSearch",
+          "amadeus_operation_id": "getFlightOffers",
+          "http_method": "GET",
+          "path": "/v2/shopping/flight-offers?originLocationCode=MAD&destinationLocationCode=ORY&departureDate=2027-01-15&adults=1&currencyCode=EUR&max=150",
+          "office_id": "NCE1A0002",
+          "http_status": 200,
+          "outcome": "success",
+          "error_codes": [],
+          "duration_ms": "<duration>",
+          "correlation_id": null,
+          "request_id": "<request-1>",
+          "redacted": true,
+          "request_body": {
+            "max": 150,
+            "adults": 1,
+            "currencyCode": "EUR",
+            "departureDate": "2027-01-15",
+            "originLocationCode": "MAD",
+            "destinationLocationCode": "ORY"
+          },
+          "response_body": {
+            "data": [
+              {
+                "id": "1",
+                "type": "flight-offer",
+                "price": {
+                  "base": "41.00",
+                  "fees": [
+                    {
+                      "type": "SUPPLIER",
+                      "amount": "0.00"
+                    },
+                    {
+                      "type": "TICKETING",
+                      "amount": "0.00"
+                    }
+                  ],
+                  "total": "92.15",
+                  "currency": "EUR",
+                  "grandTotal": "92.15"
+                },
+                "oneWay": false,
+                "source": "GDS",
+                "itineraries": [
+                  {
+                    "duration": "PT5H45M",
+                    "segments": [
+                      {
+                        "id": "1",
+                        "number": "1017",
+                        "arrival": {
+                          "at": "2027-01-15T06:25:00",
+                          "iataCode": "LIS",
+                          "terminal": "1"
+                        },
+                        "aircraft": {
+                          "code": "319"
+                        },
+                        "duration": "PT1H25M",
+                        "departure": {
+                          "at": "2027-01-15T06:00:00",
+                          "iataCode": "MAD",
+                          "terminal": "2"
+                        },
+                        "operating": {
+                          "carrierCode": "TP"
+                        },
+                        "carrierCode": "TP",
+                        "numberOfStops": 0,
+                        "blacklistedInEU": false
+                      },
+                      {
+                        "id": "2",
+                        "number": "438",
+                        "arrival": {
+                          "at": "2027-01-15T11:45:00",
+                          "iataCode": "ORY",
+                          "terminal": "1"
+                        },
+                        "aircraft": {
+                          "code": "32N"
+                        },
+                        "duration": "PT2H35M",
+                        "departure": {
+                          "at": "2027-01-15T08:10:00",
+                          "iataCode": "LIS",
+                          "terminal": "1"
+                        },
+                        "operating": {
+                          "carrierCode": "TP"
+                        },
+                        "carrierCode": "TP",
+                        "numberOfStops": 0,
+                        "blacklistedInEU": false
+                      }
+                    ]
+                  }
+                ],
+                "isUpsellOffer": false,
+                "nonHomogeneous": false,
+                "pricingOptions": {
+                  "fareType": ["PUBLISHED"],
+                  "includedCheckedBagsOnly": false
+                },
+                "travelerPricings": [
+                  {
+                    "price": {
+                      "base": "41.00",
+                      "total": "92.15",
+                      "currency": "EUR"
+                    },
+                    "fareOption": "STANDARD",
+                    "travelerId": "1",
+                    "travelerType": "ADULT",
+                    "fareDetailsBySegment": [
+                      {
+                        "cabin": "ECONOMY",
+                        "class": "O",
+                        "fareBasis": "OL0DSI05",
+                        "segmentId": "1",
+                        "brandedFare": "DISCOUNT",
+                        "brandedFareLabel": "DISCOUNT",
+                        "includedCheckedBags": {
+                          "quantity": 0
+                        }
+                      },
+                      {
+                        "cabin": "ECONOMY",
+                        "class": "O",
+                        "fareBasis": "OL0DSI05",
+                        "segmentId": "2",
+                        "brandedFare": "DISCOUNT",
+                        "brandedFareLabel": "DISCOUNT",
+                        "includedCheckedBags": {
+                          "quantity": 0
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "lastTicketingDate": "2027-01-15",
+                "numberOfBookableSeats": 7,
+                "validatingAirlineCodes": ["TP"],
+                "instantTicketingRequired": false
+              },
+              {
+                "id": "2",
+                "type": "flight-offer",
+                "price": {
+                  "base": "56.00",
+                  "fees": [
+                    {
+                      "type": "SUPPLIER",
+                      "amount": "0.00"
+                    },
+                    {
+                      "type": "TICKETING",
+                      "amount": "0.00"
+                    }
+                  ],
+                  "total": "98.47",
+                  "currency": "EUR",
+                  "grandTotal": "98.47"
+                },
+                "oneWay": false,
+                "source": "GDS",
+                "itineraries": [
+                  {
+                    "duration": "PT2H5M",
+                    "segments": [
+                      {
+                        "id": "3",
+                        "number": "3436",
+                        "arrival": {
+                          "at": "2027-01-15T09:20:00",
+                          "iataCode": "ORY",
+                          "terminal": "1"
+                        },
+                        "aircraft": {
+                          "code": "32N"
+                        },
+                        "duration": "PT2H5M",
+                        "departure": {
+                          "at": "2027-01-15T07:15:00",
+                          "iataCode": "MAD",
+                          "terminal": "4"
+                        },
+                        "operating": {
+                          "carrierCode": "IB"
+                        },
+                        "carrierCode": "IB",
+                        "numberOfStops": 0,
+                        "blacklistedInEU": false
+                      }
+                    ]
+                  }
+                ],
+                "isUpsellOffer": false,
+                "nonHomogeneous": false,
+                "pricingOptions": {
+                  "fareType": ["PUBLISHED"],
+                  "includedCheckedBagsOnly": false
+                },
+                "travelerPricings": [
+                  {
+                    "price": {
+                      "base": "56.00",
+                      "total": "98.47",
+                      "currency": "EUR"
+                    },
+                    "fareOption": "STANDARD",
+                    "travelerId": "1",
+                    "travelerType": "ADULT",
+                    "fareDetailsBySegment": [
+                      {
+                        "cabin": "ECONOMY",
+                        "class": "A",
+                        "fareBasis": "ADNNALB4",
+                        "segmentId": "3",
+                        "brandedFare": "BASIC",
+                        "brandedFareLabel": "BASIC",
+                        "includedCheckedBags": {
+                          "quantity": 0
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "lastTicketingDate": "2027-01-15",
+                "numberOfBookableSeats": 9,
+                "validatingAirlineCodes": ["IB"],
+                "instantTicketingRequired": false
+              },
+              {
+                "id": "3",
+                "type": "flight-offer",
+                "price": {
+                  "base": "64.00",
+                  "fees": [
+                    {
+                      "type": "SUPPLIER",
+                      "amount": "0.00"
+                    },
+                    {
+                      "type": "TICKETING",
+                      "amount": "0.00"
+                    }
+                  ],
+                  "total": "109.32",
+                  "currency": "EUR",
+                  "grandTotal": "109.32"
+                },
+                "oneWay": false,
+                "source": "GDS",
+                "itineraries": [
+                  {
+                    "duration": "PT2H5M",
+                    "segments": [
+                      {
+                        "id": "4",
+                        "number": "1027",
+                        "arrival": {
+                          "at": "2027-01-15T14:35:00",
+                          "iataCode": "ORY",
+                          "terminal": "3"
+                        },
+                        "aircraft": {
+                          "code": "73H"
+                        },
+                        "duration": "PT2H5M",
+                        "departure": {
+                          "at": "2027-01-15T12:30:00",
+                          "iataCode": "MAD",
+                          "terminal": "2"
+                        },
+                        "operating": {
+                          "carrierCode": "UX"
+                        },
+                        "carrierCode": "UX",
+                        "numberOfStops": 0,
+                        "blacklistedInEU": false
+                      }
+                    ]
+                  }
+                ],
+                "isUpsellOffer": false,
+                "nonHomogeneous": false,
+                "pricingOptions": {
+                  "fareType": ["PUBLISHED"],
+                  "includedCheckedBagsOnly": false
+                },
+                "travelerPricings": [
+                  {
+                    "price": {
+                      "base": "64.00",
+                      "total": "109.32",
+                      "currency": "EUR"
+                    },
+                    "fareOption": "STANDARD",
+                    "travelerId": "1",
+                    "travelerType": "ADULT",
+                    "fareDetailsBySegment": [
+                      {
+                        "cabin": "ECONOMY",
+                        "class": "Q",
+                        "fareBasis": "QYYO5L",
+                        "segmentId": "4",
+                        "brandedFare": "LITE",
+                        "brandedFareLabel": "LITE",
+                        "includedCheckedBags": {
+                          "quantity": 0
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "lastTicketingDate": "2027-01-15",
+                "numberOfBookableSeats": 4,
+                "validatingAirlineCodes": ["UX"],
+                "instantTicketingRequired": false
+              },
+              {
+                "id": "4",
+                "type": "flight-offer",
+                "price": {
+                  "base": "79.00",
+                  "fees": [
+                    {
+                      "type": "SUPPLIER",
+                      "amount": "0.00"
+                    },
+                    {
+                      "type": "TICKETING",
+                      "amount": "0.00"
+                    }
+                  ],
+                  "total": "131.86",
+                  "currency": "EUR",
+                  "grandTotal": "131.86"
+                },
+                "oneWay": false,
+                "source": "GDS",
+                "itineraries": [
+                  {
+                    "duration": "PT2H10M",
+                    "segments": [
+                      {
+                        "id": "5",
+                        "number": "1001",
+                        "arrival": {
+                          "at": "2027-01-15T10:55:00",
+                          "iataCode": "CDG",
+                          "terminal": "2F"
+                        },
+                        "aircraft": {
+                          "code": "320"
+                        },
+                        "duration": "PT2H10M",
+                        "departure": {
+                          "at": "2027-01-15T08:45:00",
+                          "iataCode": "MAD",
+                          "terminal": "2"
+                        },
+                        "operating": {
+                          "carrierCode": "AF"
+                        },
+                        "carrierCode": "AF",
+                        "numberOfStops": 0,
+                        "blacklistedInEU": false
+                      }
+                    ]
+                  }
+                ],
+                "isUpsellOffer": false,
+                "nonHomogeneous": false,
+                "pricingOptions": {
+                  "fareType": ["PUBLISHED"],
+                  "includedCheckedBagsOnly": false
+                },
+                "travelerPricings": [
+                  {
+                    "price": {
+                      "base": "79.00",
+                      "total": "131.86",
+                      "currency": "EUR"
+                    },
+                    "fareOption": "STANDARD",
+                    "travelerId": "1",
+                    "travelerType": "ADULT",
+                    "fareDetailsBySegment": [
+                      {
+                        "cabin": "ECONOMY",
+                        "class": "V",
+                        "fareBasis": "VYS50ALG",
+                        "segmentId": "5",
+                        "brandedFare": "LIGHT",
+                        "brandedFareLabel": "LIGHT",
+                        "includedCheckedBags": {
+                          "quantity": 0
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "lastTicketingDate": "2027-01-15",
+                "numberOfBookableSeats": 9,
+                "validatingAirlineCodes": ["AF"],
+                "instantTicketingRequired": false
+              },
+              {
+                "id": "5",
+                "type": "flight-offer",
+                "price": {
+                  "base": "512.00",
+                  "fees": [
+                    {
+                      "type": "SUPPLIER",
+                      "amount": "0.00"
+                    },
+                    {
+                      "type": "TICKETING",
+                      "amount": "0.00"
+                    }
+                  ],
+                  "total": "558.94",
+                  "currency": "EUR",
+                  "grandTotal": "558.94"
+                },
+                "oneWay": false,
+                "source": "GDS",
+                "itineraries": [
+                  {
+                    "duration": "PT2H5M",
+                    "segments": [
+                      {
+                        "id": "6",
+                        "number": "1301",
+                        "arrival": {
+                          "at": "2027-01-15T18:55:00",
+                          "iataCode": "CDG",
+                          "terminal": "2F"
+                        },
+                        "aircraft": {
+                          "code": "320"
+                        },
+                        "duration": "PT2H5M",
+                        "departure": {
+                          "at": "2027-01-15T16:50:00",
+                          "iataCode": "MAD",
+                          "terminal": "2"
+                        },
+                        "operating": {
+                          "carrierCode": "AF"
+                        },
+                        "carrierCode": "AF",
+                        "numberOfStops": 0,
+                        "blacklistedInEU": false
+                      }
+                    ]
+                  }
+                ],
+                "isUpsellOffer": false,
+                "nonHomogeneous": false,
+                "pricingOptions": {
+                  "fareType": ["PUBLISHED"],
+                  "includedCheckedBagsOnly": false
+                },
+                "travelerPricings": [
+                  {
+                    "price": {
+                      "base": "512.00",
+                      "total": "558.94",
+                      "currency": "EUR"
+                    },
+                    "fareOption": "STANDARD",
+                    "travelerId": "1",
+                    "travelerType": "ADULT",
+                    "fareDetailsBySegment": [
+                      {
+                        "cabin": "BUSINESS",
+                        "class": "Z",
+                        "fareBasis": "ZS50BALG",
+                        "segmentId": "6",
+                        "brandedFare": "BUSINESS",
+                        "brandedFareLabel": "BUSINESS",
+                        "includedCheckedBags": {
+                          "quantity": 2
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "lastTicketingDate": "2027-01-15",
+                "numberOfBookableSeats": 2,
+                "validatingAirlineCodes": ["AF"],
+                "instantTicketingRequired": false
+              }
+            ],
+            "meta": {
+              "count": 5,
+              "links": {
+                "self": "https://test.travel.api.amadeus.com/v2/shopping/flight-offers?originLocationCode=MAD&destinationLocationCode=PAR&departureDate=2027-01-15&adults=1&max=250"
+              }
+            },
+            "dictionaries": {
+              "aircraft": {
+                "319": "AIRBUS A319",
+                "320": "AIRBUS A320",
+                "32N": "AIRBUS A320NEO",
+                "73H": "BOEING 737-800 (WINGLETS)"
+              },
+              "carriers": {
+                "AF": "AIR FRANCE",
+                "IB": "IBERIA",
+                "TP": "TAP PORTUGAL",
+                "UX": "AIR EUROPA"
+              },
+              "locations": {
+                "CDG": {
+                  "cityCode": "PAR",
+                  "countryCode": "FR"
+                },
+                "LIS": {
+                  "cityCode": "LIS",
+                  "countryCode": "PT"
+                },
+                "MAD": {
+                  "cityCode": "MAD",
+                  "countryCode": "ES"
+                },
+                "ORY": {
+                  "cityCode": "PAR",
+                  "countryCode": "FR"
+                }
+              },
+              "currencies": {
+                "EUR": "EURO"
+              }
+            }
+          },
+          "truncated": false,
+          "booking_id": null,
+          "search_id": "<srch-1>",
+          "staff_id": null,
+          "created_at": "<timestamp>",
+          "updated_at": "<timestamp>"
+        }
+      ]
+    }
+  }
+}
