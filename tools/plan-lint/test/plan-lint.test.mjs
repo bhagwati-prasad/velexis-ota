@@ -429,4 +429,224 @@ describe("plan-lint.mjs", () => {
       "ERRORS: 0",
     ]);
   });
+
+  // X-053: M7 is built before the launch, so --remaining lists its open tasks in a second block beside the lowest
+  // open milestone (ADR-0025 item 3, revision of 2026-11-25).
+  const LEGEND =
+    "ready tasks (every dependency done), critical path first; * = on the remaining critical path, chain = hours of the longest open chain the task starts:";
+  const M7_HEADING = "also open, built before the launch: M7";
+  /** The fixture with X-903 done too: every task of M0 and M1 is done. */
+  const allFixtureDone = (text) =>
+    replace(
+      replace(
+        text,
+        "### X-903 · Put the third fixture roof on",
+        "### X-903 · Put the third fixture roof on ✅",
+      ),
+      "- **Status:** todo",
+      "- **Status:** done (PR #3)",
+    );
+
+  test("[X-053 AC1] with open tasks in M0 and in M7, --remaining prints M0's block as today, then M7's ready and waiting tasks", () => {
+    const withoutM7 = variant(noMarkers);
+    const file = variant(
+      (text) =>
+        noMarkers(text) +
+        extraTask("X-904", "Draw the fourth fixture plan", "—", "S", "M7") +
+        extraTask("X-905", "Survey the fifth fixture site", "X-904", "M", "M7") +
+        extraTask("X-906", "Order the sixth fixture beams", "—", "L", "M7"),
+    );
+    const { status, lines, output } = run(["--remaining", file]);
+    assert.equal(status, 0, output);
+    assert.deepEqual(lines, [
+      "lowest open milestone: M0 (1 of 1 tasks open, 1 ready)",
+      LEGEND,
+      `* X-901  S 2h  chain 14h  Lay the first fixture stone  (${file})`,
+      "",
+      `${M7_HEADING} (3 of 3 tasks open, 2 ready)`,
+      LEGEND,
+      `  X-906  L 8h  chain 8h  Order the sixth fixture beams  (${file})`,
+      `  X-904  S 2h  chain 6h  Draw the fourth fixture plan  (${file})`,
+      "waiting for dependencies:",
+      "  X-905 waits for X-904",
+      "ERRORS: 0",
+    ]);
+    // The first block is what the same plan without its M7 tasks prints, line for line.
+    const without = run(["--remaining", withoutM7]);
+    assert.equal(without.status, 0, without.output);
+    const firstBlock = without.lines.slice(0, -1).map((l) => l.replaceAll(withoutM7, file));
+    assert.deepEqual(lines.slice(0, firstBlock.length), firstBlock);
+    assert.equal(lines[firstBlock.length], "");
+  });
+
+  test("[X-053 AC1] the second block marks the remaining critical path and the claimed tasks as the first does", () => {
+    // X-904 (M7, L, in progress) starts the longest open chain, X-904 -> X-905 (16 h), so the remaining critical path
+    // runs through M7: X-904 gets the `*` and the `[in progress]` mark, and X-903 (M1, chain 8 h) has no `*`.
+    const file = variant(
+      (text) =>
+        text +
+        replace(
+          extraTask("X-904", "Raise the fourth fixture tower", "—", "L", "M7"),
+          "- **Component:** foundation",
+          "- **Status:** in progress (PR #4)\n- **Component:** foundation",
+        ) +
+        extraTask("X-905", "Crown the fifth fixture tower", "X-904", "L", "M7"),
+    );
+    assert.ok(run([file]).lines.includes("remaining critical path: 16h over 2 tasks: X-904 -> X-905"));
+    const { status, lines, output } = run(["--remaining", file]);
+    assert.equal(status, 0, output);
+    assert.deepEqual(lines, [
+      "lowest open milestone: M1 (1 of 2 tasks open, 1 ready)",
+      LEGEND,
+      `  X-903  L 8h  chain 8h  Put the third fixture roof on  (${file})`,
+      "",
+      `${M7_HEADING} (2 of 2 tasks open, 1 ready)`,
+      LEGEND,
+      `* X-904  L 8h  chain 16h  Raise the fourth fixture tower  [in progress]  (${file})`,
+      "waiting for dependencies:",
+      "  X-905 waits for X-904",
+      "ERRORS: 0",
+    ]);
+  });
+
+  test("[X-053 AC2] when M7 is the lowest open milestone, has no open task or is not in the plan, the output is as before", () => {
+    // Not in the plan: the fixture prints one block, byte for byte.
+    const fixture = run(["--remaining", FIXTURE]);
+    assert.equal(
+      fixture.stdout,
+      [
+        "lowest open milestone: M1 (1 of 2 tasks open, 1 ready)",
+        LEGEND,
+        `* X-903  L 8h  chain 8h  Put the third fixture roof on  (${FIXTURE})`,
+        "ERRORS: 0",
+        "",
+      ].join("\n"),
+    );
+    const waiting = variant(openX902);
+    assert.equal(
+      run(["--remaining", waiting]).stdout,
+      [
+        "lowest open milestone: M1 (2 of 2 tasks open, 1 ready)",
+        LEGEND,
+        `* X-902  M 4h  chain 12h  Build the second fixture wall  [in progress]  (${waiting})`,
+        "waiting for dependencies:",
+        "  X-903 waits for X-902",
+        "ERRORS: 0",
+        "",
+      ].join("\n"),
+    );
+
+    // No open task: an M7 task that is done adds nothing.
+    const doneM7 = variant(
+      (text) =>
+        text +
+        replace(
+          extraTask("X-904", "Close the fourth fixture gate", "X-901", "S", "M7"),
+          "### X-904 · Close the fourth fixture gate",
+          "### X-904 · Close the fourth fixture gate ✅",
+        ),
+    );
+    const done = run(["--remaining", doneM7]);
+    assert.equal(done.status, 0, done.output);
+    assert.equal(done.stdout, fixture.stdout.replaceAll(FIXTURE, doneM7));
+
+    // M7 is the lowest open milestone: it is the first block, and no second block follows.
+    const lowestM7 = variant(
+      (text) =>
+        allFixtureDone(text) +
+        extraTask("X-904", "Draw the fourth fixture plan", "X-903", "S", "M7") +
+        extraTask("X-905", "Survey the fifth fixture site", "X-904", "M", "M7"),
+    );
+    assert.equal(
+      run(["--remaining", lowestM7]).stdout,
+      [
+        "lowest open milestone: M7 (2 of 2 tasks open, 1 ready)",
+        LEGEND,
+        `* X-904  S 2h  chain 6h  Draw the fourth fixture plan  (${lowestM7})`,
+        "waiting for dependencies:",
+        "  X-905 waits for X-904",
+        "ERRORS: 0",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  test("[X-053 AC3] an M7 task with an open dependency is listed as waiting, and the second block lists no M8 task", () => {
+    // X-904 depends on X-901 (M0, done): ready, whatever the milestone of its dependency. X-905 waits for X-903 (M1,
+    // open) and X-906 for X-905 (M7, open). X-907 and X-908 are M8 tasks, one ready and one after an M7 task.
+    const file = variant(
+      (text) =>
+        text +
+        extraTask("X-904", "Draw the fourth fixture plan", "X-901", "S", "M7") +
+        extraTask("X-905", "Survey the fifth fixture site", "X-903", "M", "M7") +
+        extraTask("X-906", "Order the sixth fixture beams", "X-901, X-905", "S", "M7") +
+        extraTask("X-907", "Paint the seventh fixture sign", "—", "M", "M8") +
+        extraTask("X-908", "Hang the eighth fixture sign", "X-904", "M", "M8"),
+    );
+    const { status, lines, output } = run(["--remaining", file]);
+    assert.equal(status, 0, output);
+    assert.deepEqual(lines, [
+      "lowest open milestone: M1 (1 of 2 tasks open, 1 ready)",
+      LEGEND,
+      `* X-903  L 8h  chain 14h  Put the third fixture roof on  (${file})`,
+      "",
+      `${M7_HEADING} (3 of 3 tasks open, 1 ready)`,
+      LEGEND,
+      `  X-904  S 2h  chain 6h  Draw the fourth fixture plan  (${file})`,
+      "waiting for dependencies:",
+      "  X-905 waits for X-903",
+      "  X-906 waits for X-905",
+      "ERRORS: 0",
+    ]);
+    assert.ok(!lines.some((l) => /X-907|X-908|: M8 \(/.test(l.replaceAll(file, ""))), output);
+
+    // Open M8 tasks without open M7 tasks: no second block.
+    const m8Only = variant(
+      (text) => text + extraTask("X-904", "Paint the fourth fixture sign", "—", "M", "M8"),
+    );
+    const m8 = run(["--remaining", m8Only]);
+    assert.equal(m8.status, 0, m8.output);
+    assert.equal(m8.stdout, run(["--remaining", FIXTURE]).stdout.replaceAll(FIXTURE, m8Only));
+  });
+
+  test("[X-053 AC4] on the real plans --remaining exits 0 with ERRORS: 0 and names M7 while it has open tasks", () => {
+    const { status, lines, output } = run(["--remaining"]);
+    assert.equal(status, 0, output);
+    assert.equal(lines.at(-1), "ERRORS: 0");
+    const [, doneM7, allM7] =
+      run([])
+        .lines.find((l) => l.startsWith("done by milestone"))
+        ?.match(/ M7 (\d+)\/(\d+) /) ?? assert.fail("the plans have M7 tasks");
+    const openM7 = Number(allM7) - Number(doneM7);
+    if (openM7 > 0) {
+      // M7 heads the first block when it is the lowest open milestone, else the second.
+      const counts = ` (${openM7} of ${allM7} tasks open, `;
+      const heading = lines[0].startsWith("lowest open milestone: M7 ")
+        ? `lowest open milestone: M7${counts}`
+        : `${M7_HEADING}${counts}`;
+      assert.ok(lines.some((l) => l.startsWith(heading)), output);
+    }
+    assert.ok(!lines.some((l) => /^also open\b/.test(l) && !l.startsWith(M7_HEADING)), output);
+  });
+
+  test("[X-053 AC4] a --remaining output larger than a pipe reaches a slow reader whole, down to ERRORS: 0", () => {
+    // 40 open M7 tasks with long titles print about 90 KB, more than a pipe holds (64 KiB by default on Linux). The
+    // reader starts a second late, so the script has to wait for it: process.exit() would drop what the pipe has not
+    // taken (the real plans' 12 KB lost their last line that way in about 1 run of 20 on a loaded machine).
+    const title = "Raise a long fixture tower ".repeat(80);
+    const file = variant(
+      (text) =>
+        text +
+        Array.from({ length: 40 }, (_, i) => extraTask(`X-${950 + i}`, `${title}${i}`, "—", "S", "M7")).join(""),
+    );
+    const slow = spawnSync(
+      "sh",
+      ["-c", '"$0" "$1" --remaining "$2" | { sleep 1; cat; }', process.execPath, SCRIPT, file],
+      { encoding: "utf8" },
+    );
+    assert.equal(slow.status, 0, slow.stderr);
+    assert.ok(slow.stdout.length > 65536, `${slow.stdout.length} bytes`);
+    assert.equal(slow.stdout, run(["--remaining", file]).stdout);
+    assert.ok(slow.stdout.endsWith(`  X-989  S 2h  chain 2h  ${title}39  (${file})\nERRORS: 0\n`), slow.stdout.slice(-300));
+  });
 });

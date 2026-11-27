@@ -5,7 +5,10 @@
 //         (default files: docs/mvp/plans/foundation-tasks.md, platform/docs/plans/agent-tasks.md, ota/docs/plans/agent-tasks.md)
 //   --graph      also print the dependency graph as a Mermaid flowchart
 //   --remaining  instead of the two summary blocks, print the ready tasks of the lowest open milestone (every
-//                dependency done), critical path first: the list AGENTS.md §3 asks agents to pick from
+//                dependency done), critical path first: the list AGENTS.md §3 asks agents to pick from. When M7 has
+//                open tasks and is not that milestone, a second block lists M7's ready and waiting tasks the same way:
+//                M7 is built before the launch, while the open tasks of M0 to M6 wait on the owner's steps (ADR-0025
+//                item 3, revision of 2026-11-25). The second block never lists M8.
 //
 // Task block format (one per task):
 //   ### PBE-012 · Short imperative title          (a done task ends with " ✅": "### PBE-012 · Short imperative title ✅")
@@ -48,6 +51,9 @@ const DONE_MARK = " ✅";
 const DONE_STATUS = /^done \((?:PR #\d+|branch [^\s()]+)\)$/;
 const USAGE = "usage: node tools/plan-lint/plan-lint.mjs [--graph] [--remaining] [file ...]";
 const OPTIONS = ["--graph", "--remaining", "--help"];
+// --remaining lists this milestone's open tasks beside the lowest open milestone: it is built before the launch while
+// the open tasks of M0 to M6 wait on the owner's steps (ADR-0025 item 3, revision of 2026-11-25; ADR-0030 item 19).
+const BUILT_BEFORE_LAUNCH = "M7";
 
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
@@ -182,7 +188,9 @@ if (wantGraph) {
 }
 console.log(`ERRORS: ${errors.length}`);
 for (const e of errors.slice(0, 200)) console.log(`  - ${e}`);
-process.exit(errors.length ? 1 : 0);
+// exitCode, not process.exit(): through a pipe, process.exit() drops the output the reader has not taken yet, and
+// --remaining prints about 12 KB on the real plans since its M7 block (X-053).
+process.exitCode = errors.length ? 1 : 0;
 
 function printSummary() {
   const byComp = {};
@@ -233,10 +241,6 @@ function printRemaining() {
     return;
   }
   const lowest = open.map((t) => t.milestone).sort(byMilestone)[0];
-  const inMilestone = [...tasks.values()].filter((t) => t.milestone === lowest);
-  const openInMilestone = inMilestone.filter((t) => !t.done);
-  const ready = openInMilestone.filter((t) => t.deps.every(isDone));
-  const waiting = openInMilestone.filter((t) => !t.deps.every(isDone));
 
   // chain(id): hours of the longest chain of open tasks that starts with the task and follows its dependents.
   const dependents = new Map([...tasks.keys()].map((id) => [id, []]));
@@ -255,17 +259,31 @@ function printRemaining() {
     return hours;
   };
   const onPath = new Set(remainingCritical.path);
-  ready.sort((a, b) => Number(onPath.has(b.id)) - Number(onPath.has(a.id)) || chain(b.id) - chain(a.id) || b.hours - a.hours);
 
-  console.log(`lowest open milestone: ${lowest} (${openInMilestone.length} of ${inMilestone.length} tasks open, ${ready.length} ready)`);
-  console.log("ready tasks (every dependency done), critical path first; * = on the remaining critical path, chain = hours of the longest open chain the task starts:");
-  for (const t of ready) {
-    const claimed = /^in progress\b/i.test(t.status) ? "  [in progress]" : "";
-    console.log(`${onPath.has(t.id) ? "*" : " "} ${t.id}  ${t.size} ${t.hours}h  chain ${chain(t.id)}h  ${t.title}${claimed}  (${t.file})`);
-  }
-  if (!ready.length) console.log("  none: every open task of the milestone waits for a dependency");
-  if (waiting.length) {
-    console.log("waiting for dependencies:");
-    for (const t of waiting) console.log(`  ${t.id} waits for ${t.deps.filter((d) => !isDone(d)).join(", ")}`);
+  // One block per milestone. A task is ready when every dependency is done, whatever the dependency's milestone.
+  const printBlock = (heading, milestone) => {
+    const inMilestone = [...tasks.values()].filter((t) => t.milestone === milestone);
+    const openInMilestone = inMilestone.filter((t) => !t.done);
+    const ready = openInMilestone.filter((t) => t.deps.every(isDone));
+    const waiting = openInMilestone.filter((t) => !t.deps.every(isDone));
+    ready.sort((a, b) => Number(onPath.has(b.id)) - Number(onPath.has(a.id)) || chain(b.id) - chain(a.id) || b.hours - a.hours);
+
+    console.log(`${heading}: ${milestone} (${openInMilestone.length} of ${inMilestone.length} tasks open, ${ready.length} ready)`);
+    console.log("ready tasks (every dependency done), critical path first; * = on the remaining critical path, chain = hours of the longest open chain the task starts:");
+    for (const t of ready) {
+      const claimed = /^in progress\b/i.test(t.status) ? "  [in progress]" : "";
+      console.log(`${onPath.has(t.id) ? "*" : " "} ${t.id}  ${t.size} ${t.hours}h  chain ${chain(t.id)}h  ${t.title}${claimed}  (${t.file})`);
+    }
+    if (!ready.length) console.log("  none: every open task of the milestone waits for a dependency");
+    if (waiting.length) {
+      console.log("waiting for dependencies:");
+      for (const t of waiting) console.log(`  ${t.id} waits for ${t.deps.filter((d) => !isDone(d)).join(", ")}`);
+    }
+  };
+  printBlock("lowest open milestone", lowest);
+  // The second block: M7's open tasks, when it has some and is not the lowest open milestone. Never M8 or later.
+  if (lowest !== BUILT_BEFORE_LAUNCH && open.some((t) => t.milestone === BUILT_BEFORE_LAUNCH)) {
+    console.log("");
+    printBlock("also open, built before the launch", BUILT_BEFORE_LAUNCH);
   }
 }
