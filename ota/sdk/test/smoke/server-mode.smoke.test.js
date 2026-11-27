@@ -13,11 +13,14 @@
 // own) signs a test staff member of the demo OTA in with a portal token stored as the platform stores it
 // (test/smoke/smoke-env.js), then, with that staff token (the staff member's role decides, scope.guard.ts), calls
 // console.auth.me, console.bookings.list, console.customers.list (which finds the customer this file signed up) and
-// console.bookings.create, a deferred method (501), and signs out. With the key alone (its own permissions decide) it
-// makes raw Amadeus reads: getFlightOffers and getQueue, which only custom consoles call, against the stub through the
-// demo OTA's office, and getFlightOrder, which the OTA admin's /pnr Advanced panel calls too (implementation plan §7),
-// of an order the stub does not have (404); a key-only console.bookings.list, outside the key's permissions, is refused
-// (403 FORBIDDEN, `details.requiredPermission`). The member and its account are deleted afterwards.
+// console.bookings.create, a deferred method (501), and signs out. With the key alone (its own permissions decide), a
+// key-only console.bookings.list, outside the key's permissions, is refused (403 FORBIDDEN, `details.requiredPermission`).
+// The raw Amadeus reads are tools of an OTA with its own active Amadeus connection (ADR-0030 item 21), so they are
+// made with the console key of dev:seed's second test OTA (`demoown`, its test connection its own credentials on the
+// stub; the same scopes; SDK_SMOKE_OWN_CONSOLE_KEY, X-055), alone: getFlightOffers and getQueue, which only custom
+// consoles call, against the stub through that OTA's own office, and getFlightOrder, which the OTA admin's /pnr
+// Advanced panel calls too (implementation plan §7), of an order the stub does not have (404). The member and its
+// account are deleted afterwards.
 //
 // Every call is made once in the set-up hook (each request sent once, with a short timeout); the tests read what each
 // call gave. Assertions never print a key, a token or a password.
@@ -78,6 +81,13 @@ beforeAll(async () => {
     secretKey: settings.SDK_SMOKE_CONSOLE_KEY,
     sessionKind: "staff",
   });
+  // The console key of dev:seed's second test OTA, whose test connection is its own Amadeus credentials (X-055): the
+  // raw Amadeus reads, tools of an OTA with its own active Amadeus connection, are made with it.
+  const ownAmadeus = createVelexisClient({
+    ...common,
+    secretKey: settings.SDK_SMOKE_OWN_CONSOLE_KEY,
+    sessionKind: "staff",
+  });
 
   const journey = await customerJourney(server, { label: "server" });
   outcomes = { ...journey.outcomes };
@@ -110,10 +120,11 @@ beforeAll(async () => {
       server.console.bookings.list({}, { accessToken: staffToken }),
     );
   }
-  // The console key alone: the permissions listed on the key decide (`amadeus:read` only). The raw Amadeus reads, which
-  // only custom consoles and the OTA admin's /pnr Advanced panel call (ota/docs/plans/implementation-plan.md §7).
+  // The second OTA's console key alone: the permissions listed on the key decide (`amadeus:read` only). The raw Amadeus
+  // reads, which only custom consoles and the OTA admin's /pnr Advanced panel call (ota/docs/plans/implementation-plan.md
+  // §7), on that OTA's own Amadeus connection.
   outcomes["console.amadeus.getFlightOffers"] = await settle(() =>
-    automation.console.amadeus.getFlightOffers({
+    ownAmadeus.console.amadeus.getFlightOffers({
       originLocationCode: "PAR",
       destinationLocationCode: "NYC",
       departureDate: daysAhead(30),
@@ -122,12 +133,12 @@ beforeAll(async () => {
     }),
   );
   outcomes["console.amadeus.getQueue"] = await settle(() =>
-    automation.console.amadeus.getQueue({ queueId: 50, max: 10, category: 0 }),
+    ownAmadeus.console.amadeus.getQueue({ queueId: 50, max: 10, category: 0 }),
   );
   outcomes["console.amadeus.getFlightOrder"] = await settle(() =>
-    automation.console.amadeus.getFlightOrder({ flightOrderId: UNKNOWN_FLIGHT_ORDER_ID }),
+    ownAmadeus.console.amadeus.getFlightOrder({ flightOrderId: UNKNOWN_FLIGHT_ORDER_ID }),
   );
-  // Least privilege: a key-only call outside the key's permissions.
+  // Least privilege: a key-only call of the demo OTA's console key outside the key's permissions.
   outcomes["console.bookings.list (console key alone)"] = await settle(() =>
     automation.console.bookings.list(),
   );
@@ -238,7 +249,7 @@ describe("server mode: the console with dev:seed's console automation key and a 
     expect(error.details).toMatchObject({ milestone: "deferred", operationId: "consoleCreateBooking" });
   });
 
-  it("console.amadeus.getFlightOffers and getQueue read the stub through the demo OTA's office, with the console key alone [SDK-014 AC1] [FIX-W37-OTA AC5]", () => {
+  it("console.amadeus.getFlightOffers and getQueue read the stub through the own office of dev:seed's second OTA, with its console key alone [SDK-014 AC1] [FIX-W37-OTA AC5] [X-055]", () => {
     const offers = resultOf(outcomes["console.amadeus.getFlightOffers"]);
     const queue = resultOf(outcomes["console.amadeus.getQueue"]);
     expect(offers.amadeus.data.length).toBeGreaterThan(0);
@@ -246,7 +257,7 @@ describe("server mode: the console with dev:seed's console automation key and a 
     expect(Array.isArray(queue.amadeus.data)).toBe(true);
     expect(typeof queue.queueSnapshotId).toBe("string");
     expect(queue.call).toMatchObject({ environment: "test", amadeusApi: "QueueList", httpStatus: 200 });
-    // Both reads ran with the OTA's own office, which dev:seed assigned.
+    // Both reads ran with the OTA's own office, which dev:seed gave its own connection.
     expect(queue.call.officeId).toBe(offers.call.officeId);
   });
 

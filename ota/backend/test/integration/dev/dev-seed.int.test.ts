@@ -2,12 +2,14 @@
 // `tenants:report-migrations` run through `runCli`, as `node dist/cli.js` runs them, on clones of the @velexis/testing
 // template. The file plays the platform's `dev:seed` (PBE-034) first: the Velexis test Amadeus account and its test
 // offices, inserted as velexis_migrator. Every expensive run happens once in a `beforeAll` hook with its own commented
-// budget; the tests compare what the runs printed and wrote.
+// budget; the tests compare what the runs printed and wrote. Since X-055 dev:seed also makes a second test OTA on its
+// own Amadeus test credentials (`demoown`), whose console key the SDK's smoke test makes its raw Amadeus reads with.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ConfigService } from "@nestjs/config";
 import { validateJob, type TenantEvent } from "@velexis/api-types/jobs";
-import { verifyApiKey } from "@velexis/crypto";
+import { aadFor, decryptValue, verifyApiKey } from "@velexis/crypto";
 import {
   createPlatformDb,
   createPool,
@@ -23,13 +25,26 @@ import { Redis } from "ioredis";
 import type { PinoLogger } from "nestjs-pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCli } from "../../../src/cli";
-import { DEV_SEED_KEY_LABELS } from "../../../src/dev/dev-seed.command";
+import { ConnectionResolver } from "../../../src/amadeus/connection-resolver";
+import type { ApiConfig } from "../../../src/config";
+import {
+  DEV_OWN_AMADEUS_TENANT,
+  DEV_SEED_KEY_LABELS,
+  DEV_SEED_OWN_KEY_LABEL,
+  DEV_SEED_OWN_KEY_NAME,
+} from "../../../src/dev/dev-seed.command";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { BULLMQ_PREFIX, PLATFORM_TENANT_EVENTS } from "../../../src/common/queues/queue-names";
 import { ApiKeyVerifier } from "../../../src/tenancy/api-key.verifier";
+import { PlatformCache } from "../../../src/tenancy/platform-cache";
 import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repository";
-import { TEST_STOREFRONT_BASE_DOMAIN, testApiCredentials } from "../../helpers/api-env";
+import {
+  TEST_MASTER_KEY_CURRENT,
+  TEST_STOREFRONT_BASE_DOMAIN,
+  testApiCredentials,
+  testKeyProvider,
+} from "../../helpers/api-env";
 import { unreachableRedisUrl } from "../../helpers/ports";
 
 /**
@@ -83,6 +98,9 @@ function devSeedEnv(db: TestDatabase, appEnv = "test"): Record<string, string> {
     DATABASE_MIGRATOR_URL: db.urlFor("migrator"),
     API_KEY_PEPPER_FILE: testApiCredentials().pepperFile,
     STOREFRONT_BASE_DOMAIN: TEST_STOREFRONT_BASE_DOMAIN,
+    // The KEKs that seal the second OTA's own client secret (X-055); AMADEUS_BASE_URL_TEST stays unset.
+    MASTER_KEY_DIR: testApiCredentials().masterKeyDir,
+    MASTER_KEY_CURRENT: TEST_MASTER_KEY_CURRENT,
   };
 }
 
@@ -208,10 +226,14 @@ describe("dev:seed", () => {
       { kind: "secret", environment: "test", scopes: ["storefront"], allowed_origins: [], revoked_at: null },
     ]);
 
-    // The raw keys are printed by the run that creates them, each on its own labelled line, and never again.
+    // The raw keys are printed by the run that creates them, each on its own labelled line, and never again: the demo
+    // OTA's three and the second OTA's console key (X-055).
+    const ownKeyPrefix = printedKey(first.stdout, DEV_SEED_OWN_KEY_LABEL)?.slice(0, 14);
     const printed = first.stdout.match(KEY_TEXT) ?? [];
-    expect(printed).toHaveLength(3);
-    expect(printed.map((key) => key.slice(0, 14)).sort()).toEqual(keys.map((key) => key.prefix).sort());
+    expect(printed).toHaveLength(4);
+    expect(printed.map((key) => key.slice(0, 14)).sort()).toEqual(
+      [...keys.map((key) => key.prefix), ownKeyPrefix].sort(),
+    );
     for (const [kind, label] of Object.entries(DEV_SEED_KEY_LABELS)) {
       const lines = first.stdout.split("\n").filter((line) => line.startsWith(`  ${label} (`));
       expect(lines, kind).toHaveLength(1);
@@ -368,6 +390,188 @@ describe("dev:seed", () => {
     ]);
   });
 
+  describe("the second test OTA on its own Amadeus test credentials [X-055]", () => {
+    let redis: TestRedis;
+
+    beforeAll(async () => {
+      redis = await useRedis();
+    });
+
+    afterAll(async () => {
+      await redis?.close();
+    });
+
+    async function ownTenant() {
+      return migrator
+        .selectFrom("platform.tenants")
+        .selectAll()
+        .where("key", "=", DEV_OWN_AMADEUS_TENANT.key)
+        .executeTakeFirstOrThrow();
+    }
+
+    it("is provisioned and active, twice leaving one tenant, one schema and one console key, printed once [X-055]", async () => {
+      expect(
+        await count(
+          migrator,
+          sql<{
+            n: string;
+          }>`SELECT count(*) AS n FROM platform.tenants WHERE key = ${DEV_OWN_AMADEUS_TENANT.key}`,
+        ),
+      ).toBe(1);
+      expect(
+        await count(
+          migrator,
+          sql<{
+            n: string;
+          }>`SELECT count(*) AS n FROM pg_catalog.pg_namespace WHERE nspname = ${DEV_OWN_AMADEUS_TENANT.schemaName}`,
+        ),
+      ).toBe(1);
+      const tenant = await ownTenant();
+      expect(tenant).toMatchObject({
+        name: DEV_OWN_AMADEUS_TENANT.name,
+        status: "active",
+        schema_name: DEV_OWN_AMADEUS_TENANT.schemaName,
+        schema_version: SCHEMA_VERSION,
+        storefront_environment: "test",
+      });
+      expect(first.stdout).toContain(
+        `Schema ${DEV_OWN_AMADEUS_TENANT.schemaName} at ${SCHEMA_VERSION}: provisioned; tenant activated.`,
+      );
+      expect(second.stdout).toContain(
+        `Schema ${DEV_OWN_AMADEUS_TENANT.schemaName} at ${SCHEMA_VERSION}: complete already; tenant active.`,
+      );
+
+      // One console automation key with the demo console key's scopes, on its own labelled line, printed once.
+      const keys = await migrator
+        .selectFrom("platform.api_keys")
+        .select(["name", "kind", "environment", "prefix", "scopes", "allowed_origins", "revoked_at"])
+        .where("tenant_id", "=", tenant.id)
+        .execute();
+      expect(keys.map(({ prefix: _prefix, ...rest }) => rest)).toEqual([
+        {
+          name: DEV_SEED_OWN_KEY_NAME,
+          kind: "secret",
+          environment: "test",
+          scopes: ["console:automation", "amadeus:read"],
+          allowed_origins: [],
+          revoked_at: null,
+        },
+      ]);
+      const lines = first.stdout
+        .split("\n")
+        .filter((line) => line.startsWith(`  ${DEV_SEED_OWN_KEY_LABEL} (`));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(
+        new RegExp(`^  ${DEV_SEED_OWN_KEY_LABEL} \\(key_[0-9A-Z]{26}\\): sk_test_[A-Za-z0-9]{40}$`),
+      );
+      // No other label starts the second OTA's label, and it starts none: the nightly step reads each by its own.
+      for (const label of Object.values(DEV_SEED_KEY_LABELS)) {
+        expect(label.startsWith(DEV_SEED_OWN_KEY_LABEL) || DEV_SEED_OWN_KEY_LABEL.startsWith(label)).toBe(
+          false,
+        );
+      }
+      const automation = printedKey(first.stdout, DEV_SEED_OWN_KEY_LABEL);
+      expect(automation?.slice(0, 14)).toBe(keys[0]?.prefix);
+      expect(second.stdout).toContain(`${DEV_SEED_OWN_KEY_LABEL}: exists already`);
+      const verifier = new ApiKeyVerifier(
+        new PlatformReadRepository(createPlatformDb(otaPool)),
+        testApiCredentials().pepper,
+        new Clock(),
+        { setContext: () => undefined, info: () => undefined } as unknown as PinoLogger,
+      );
+      await expect(verifier.verify(automation ?? "")).resolves.toMatchObject({
+        tenantId: tenant.id,
+        kind: "secret",
+        environment: "test",
+        scopes: ["console:automation", "amadeus:read"],
+      });
+    });
+
+    it("has its own test connection, tenant and active on the stub, which the resolver serves; no Velexis office [X-055]", async () => {
+      const tenant = await ownTenant();
+      const connections = await migrator
+        .selectFrom("platform.supplier_connections")
+        .selectAll()
+        .where("tenant_id", "=", tenant.id)
+        .execute();
+      expect(connections).toHaveLength(1);
+      const [connection] = connections;
+      // AMADEUS_BASE_URL_TEST is unset here: the host is the Velexis test account's (the stub's, as the platform seeds it).
+      const account = await migrator
+        .selectFrom("platform.amadeus_accounts")
+        .select("base_url")
+        .where("environment", "=", "test")
+        .executeTakeFirstOrThrow();
+      expect(account.base_url).toBe("http://127.0.0.1:4900");
+      expect(connection).toMatchObject({
+        environment: "test",
+        credential_source: "tenant",
+        amadeus_account_id: null,
+        base_url: account.base_url,
+        client_id: DEV_OWN_AMADEUS_TENANT.clientId,
+        office_ids: [DEV_OWN_AMADEUS_TENANT.officeId],
+        default_office_id: DEV_OWN_AMADEUS_TENANT.officeId,
+        queuing_office_id: DEV_OWN_AMADEUS_TENANT.officeId,
+        owner_office_id: DEV_OWN_AMADEUS_TENANT.officeId,
+        status: "active",
+      });
+      expect(connection?.last_verified_at).not.toBeNull();
+      // The client secret is sealed for this row with the test KEK, and the runs never printed it.
+      const secret = await decryptValue(connection?.client_secret_ciphertext ?? Buffer.alloc(0), {
+        aad: aadFor("platform", "supplier_connections", "client_secret_ciphertext", connection?.id ?? ""),
+        keys: await testKeyProvider(),
+      });
+      expect(secret.length).toBeGreaterThan(0);
+      expect(first.stdout + first.stderr + second.stdout).not.toContain(secret.toString("utf8"));
+
+      // The connection resolver serves the OTA's calls on its own credentials.
+      const platform = new PlatformReadRepository(createPlatformDb(otaPool));
+      const logger = {
+        setContext: () => undefined,
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      } as unknown as PinoLogger;
+      const resolver = new ConnectionResolver(new PlatformCache(redis.client, platform, logger), platform, {
+        get: () => undefined,
+      } as unknown as ConfigService<ApiConfig, true>);
+      expect(await resolver.resolve(tenant.id, "test")).toMatchObject({
+        connectionId: connection?.id,
+        credentialSource: "tenant",
+        credId: connection?.id,
+        baseUrl: account.base_url,
+        officeIds: [DEV_OWN_AMADEUS_TENANT.officeId],
+      });
+
+      // It holds no office of the Velexis pool, and has no storefront host and no payment connection.
+      expect(
+        await count(
+          migrator,
+          sql<{
+            n: string;
+          }>`SELECT count(*) AS n FROM platform.amadeus_offices WHERE assigned_tenant_id = ${tenant.id}`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          migrator,
+          sql<{
+            n: string;
+          }>`SELECT count(*) AS n FROM platform.tenant_domains WHERE tenant_id = ${tenant.id}`,
+        ),
+      ).toBe(0);
+      expect(
+        await count(
+          migrator,
+          sql<{
+            n: string;
+          }>`SELECT count(*) AS n FROM platform.payment_provider_connections WHERE tenant_id = ${tenant.id}`,
+        ),
+      ).toBe(0);
+    });
+  });
+
   describe("tenants:report-migrations on the seeded database", () => {
     let redis: TestRedis;
     let events: Queue;
@@ -502,6 +706,8 @@ describe("dev:seed", () => {
       expect(printedKey(third.stdout, DEV_SEED_KEY_LABELS.console)).toBe(printed[0]);
       expect(third.stdout).toContain(`${DEV_SEED_KEY_LABELS.publishable}: exists already`);
       expect(third.stdout).toContain(`${DEV_SEED_KEY_LABELS.secret}: exists already`);
+      // The second OTA's console key is another tenant's: still valid, not created again (X-055).
+      expect(third.stdout).toContain(`${DEV_SEED_OWN_KEY_LABEL}: exists already`);
       const tenant = await demoTenant();
       const valid = await migrator
         .selectFrom("platform.api_keys")
@@ -559,5 +765,51 @@ describe("dev:seed with APP_ENV=production", () => {
              (SELECT count(*) FROM platform.amadeus_offices WHERE status <> 'available') AS assigned
     `.execute(migrator);
     expect(written.rows[0]).toEqual({ tenants: "0", keys: "0", domains: "0", schemas: "0", assigned: "0" });
+  });
+});
+
+describe("dev:seed without the KEKs of MASTER_KEY_DIR [X-055]", () => {
+  let db: TestDatabase;
+  let migratorPool: ReturnType<typeof createPool>;
+  let migrator: Kysely<PlatformDatabase>;
+  let folder: string;
+  let refused: CliRun;
+
+  // A fresh clone with the platform's seed, then one run whose MASTER_KEY_DIR holds no key file (a checkout before
+  // `pnpm dev:keys`), every other variable valid: the second OTA's client secret could not be sealed.
+  beforeAll(async () => {
+    db = await createTestDatabase();
+    migratorPool = createPool(db.urlFor("migrator"), {
+      applicationName: "ota-test-migrator",
+      logger: quietPoolLogger,
+      max: 1,
+    });
+    migrator = createPlatformDb<PlatformDatabase>(migratorPool);
+    await platformDevSeed(migrator);
+    folder = await mkdtemp(join(tmpdir(), "ota-dev-seed-no-keks-"));
+    refused = await cli(["dev:seed"], { ...devSeedEnv(db), MASTER_KEY_DIR: folder });
+  }, 60_000);
+
+  afterAll(async () => {
+    await migratorPool?.end();
+    await db?.drop();
+    if (folder !== undefined) {
+      await rm(folder, { recursive: true, force: true });
+    }
+  });
+
+  it("exits 1 before writing anything and names pnpm dev:keys", async () => {
+    expect(refused.code).toBe(1);
+    expect(refused.stdout).toBe("");
+    expect(refused.stderr).toContain("the KEKs of MASTER_KEY_DIR cannot be loaded");
+    expect(refused.stderr).toContain("run pnpm dev:keys, then dev:seed again. Nothing was written.");
+    const written = await sql<{ tenants: string; keys: string; connections: string; schemas: string }>`
+      SELECT (SELECT count(*) FROM platform.tenants) AS tenants,
+             (SELECT count(*) FROM platform.api_keys) AS keys,
+             (SELECT count(*) FROM platform.supplier_connections) AS connections,
+             (SELECT count(*) FROM pg_catalog.pg_namespace
+               WHERE nspname IN ('tenant_demo', ${DEV_OWN_AMADEUS_TENANT.schemaName})) AS schemas
+    `.execute(migrator);
+    expect(written.rows[0]).toEqual({ tenants: "0", keys: "0", connections: "0", schemas: "0" });
   });
 });

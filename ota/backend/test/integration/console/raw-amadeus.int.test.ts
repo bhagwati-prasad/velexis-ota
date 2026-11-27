@@ -4,15 +4,18 @@
 // interceptor), and the four raw writes, which stay deferred.
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
-// as the platform does: two tenants on the shared Velexis test Amadeus account (the stub), each with an office of its
-// own (alpha a second one), accounts and memberships; the account's office pool holds an office `releasing` for alpha
-// (one it used before, whose orders and queue stay alpha's: lead decision (2n) of 2026-11-02, FIX-W39-OTA) and one
-// released to the pool. Staff sign in through the OTA admin's service key with portal tokens. The orders are created
-// in the stub through its own HTTP API, as a GDS terminal would create them, with synthetic travellers and flights
-// relative to now; a stub serves one set of credentials, so both tenants read every order and only the OTA backend's
-// office rule keeps them apart. Every documented answer is checked against the OTA document. The `isolation` describe
-// is the isolation test of the new tenant repository (RawAmadeusRepository, conventions §12): a booking of another
-// tenant or of the other environment is never the request's.
+// as the platform does: two tenants, each on its own Amadeus credentials (X-055: the tools are for an OTA with its own
+// active Amadeus connection, ADR-0030 item 21; test/helpers/amadeus-connection.ts), each with an office of its own
+// (alpha a second one), accounts and memberships; the Velexis test account's office pool holds an office `releasing`
+// for alpha (one it used before its own credentials, whose orders and queue stay alpha's and are still served through
+// the Velexis account: lead decision (2n) of 2026-11-02, FIX-W39-OTA) and one released to the pool. Staff sign in
+// through the OTA admin's service key with portal tokens. The orders are created in the stub through its own HTTP API,
+// as a GDS terminal would create them, with synthetic travellers and flights relative to now; a stub serves one set of
+// credentials, which both own connections and the Velexis account present (each its own credential set and token), so
+// both tenants read every order and only the OTA backend's office rule keeps them apart. Every documented answer is
+// checked against the OTA document. The `isolation` describe is the isolation test of the new tenant repository
+// (RawAmadeusRepository, conventions §12): a booking of another tenant or of the other environment is never the
+// request's.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -39,6 +42,7 @@ import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
+import { ConnectionResolver } from "../../../src/amadeus/connection-resolver";
 import {
   SupplierRequestsRepository,
   type SupplierRequestRecord,
@@ -58,6 +62,7 @@ import {
   buildOrderTraveler,
   pricedFlightOffer,
 } from "../../builders/bookings";
+import { setAmadeusConnection } from "../../helpers/amadeus-connection";
 import { testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -100,6 +105,8 @@ let alphaReleasingOffice: string;
 /** An office of the account's pool released (`available`): nobody's. */
 let releasedOffice: string;
 let stubCredentials: { readonly clientId: string; readonly clientSecret: string };
+/** Each tenant's own Amadeus connection (`sc_…`): its credential set (X-055). */
+const connectionIds = { alpha: "", beta: "" };
 /** The Flight Offers Search fixture's answer, as the stub sends it for every search. */
 let searchFixture: JsonObject;
 
@@ -127,29 +134,29 @@ async function insertAmadeusAccount(clientId: string, secret: string): Promise<s
   return id;
 }
 
-/** An active test tenant on the shared Velexis test account (the stub) with its own offices. */
-async function insertTenant(key: "alpha" | "beta", offices: readonly string[]): Promise<string> {
+/**
+ * An active test tenant on its own Amadeus credentials (the stub's credential set, as its own) with its own offices
+ * (X-055); its connection's id lands in `connectionIds`.
+ */
+async function insertTenant(key: "alpha" | "beta", offices: readonly [string, ...string[]]): Promise<string> {
   const id = newId("ten");
-  const [main] = offices;
   await migrator
     .insertInto("platform.tenants")
     .values({ id, key, name: `${key} Travel`, status: "active", plan_code: "early_access" })
     .execute();
-  await migrator
-    .insertInto("platform.supplier_connections")
-    .values({
-      id: newId("sc"),
-      tenant_id: id,
-      environment: "test",
-      credential_source: "velexis",
-      amadeus_account_id: amadeusAccountId,
-      office_ids: [...offices],
-      default_office_id: main,
-      queuing_office_id: main,
-      owner_office_id: main,
-      status: "active",
-    })
-    .execute();
+  connectionIds[key] = await setAmadeusConnection(
+    { migrator, publisher: redis.client, keys },
+    {
+      tenantId: id,
+      source: "tenant",
+      officeIds: offices,
+      own: {
+        baseUrl: stub.url,
+        clientId: stubCredentials.clientId,
+        clientSecret: stubCredentials.clientSecret,
+      },
+    },
+  );
   return id;
 }
 
@@ -538,6 +545,7 @@ beforeAll(async () => {
     office(),
     office(),
   ];
+  stub = await startAmadeusStub({ credentials: stubCredentials });
   amadeusAccountId = await insertAmadeusAccount(stubCredentials.clientId, stubCredentials.clientSecret);
   alphaId = await insertTenant("alpha", [alphaOffice, alphaSecondOffice]);
   betaId = await insertTenant("beta", [betaOffice]);
@@ -567,7 +575,6 @@ beforeAll(async () => {
       })
       .execute(),
   );
-  stub = await startAmadeusStub({ credentials: stubCredentials });
   api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
   // The first sign-in and console calls of a process open the pools' connections and warm the token, validation and
   // Amadeus code; done once here, so that no test pays for it.
@@ -585,15 +592,40 @@ afterAll(async () => {
   await db?.drop();
 });
 
-// Each test starts with full Amadeus buckets (the shared account's and each tenant's, 5 calls per second): the tests
-// make their calls back to back, faster than a staff member would, and a test never waits for a bucket to refill.
+// Each test starts with full Amadeus buckets (each credential set's, the shared account's and the tenants' own, and
+// each tenant's, 5 calls per second): the tests make their calls back to back, faster than a staff member would, and a
+// test never waits for a bucket to refill.
 beforeEach(async () => {
   stub.clearRequests();
   await redis.client.del(
     redisKeys.amadeusCredentialBucket(amadeusAccountId, "test").key,
+    redisKeys.amadeusCredentialBucket(connectionIds.alpha, "test").key,
+    redisKeys.amadeusCredentialBucket(connectionIds.beta, "test").key,
     redisKeys.amadeusTenantBucket(alphaId, "test").key,
     redisKeys.amadeusTenantBucket(betaId, "test").key,
   );
+});
+
+describe("the tenants of the file", () => {
+  it("[X-055] run on their own active Amadeus connections: the resolver answers credentialSource tenant", async () => {
+    const resolver = api.app.get(ConnectionResolver, { strict: false });
+    for (const [key, tenantId] of [
+      ["alpha", alphaId],
+      ["beta", betaId],
+    ] as const) {
+      expect(await resolver.resolve(tenantId, "test")).toMatchObject({
+        connectionId: connectionIds[key],
+        credentialSource: "tenant",
+        credId: connectionIds[key],
+      });
+    }
+    // An order of alpha's releasing Velexis office is still served through the Velexis account.
+    expect(await resolver.resolve(alphaId, "test", alphaReleasingOffice)).toMatchObject({
+      credentialSource: "velexis",
+      credId: amadeusAccountId,
+      officeIds: [alphaReleasingOffice],
+    });
+  });
 });
 
 /** The query of a Flight Offers Search GET, Madrid to Paris a month from now. */

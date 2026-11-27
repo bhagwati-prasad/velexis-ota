@@ -9,10 +9,11 @@
 // either (the console's resync throttle, an empty Amadeus bucket): a `staff_actions.rate_limited` log line only.
 //
 // The file clones the @velexis/testing template (tenant_alpha provisioned) and writes alpha's platform rows as the
-// platform does: an OTA in test on the Velexis test Amadeus account (the stub) with an office of its own, its Velexis
-// test Stripe connection (a fake of the Stripe API, test/helpers/fake-stripe.ts), accounts and memberships. Staff sign
-// in through the OTA admin's service key with portal tokens. Every booking points at an order created in the stub
-// through its own HTTP API and is written as the record step writes it (the snapshot through the redactor, the
+// platform does: an OTA in test on its own Amadeus credentials (the stub; X-055: the Amadeus tools are for an OTA with
+// its own active Amadeus connection, ADR-0030 item 21; test/helpers/amadeus-connection.ts) with an office of its own,
+// its Velexis test Stripe connection (a fake of the Stripe API, test/helpers/fake-stripe.ts), accounts and memberships.
+// Staff sign in through the OTA admin's service key with portal tokens. Every booking points at an order created in the
+// stub through its own HTTP API and is written as the record step writes it (the snapshot through the redactor, the
 // traveller's passport sealed); payments as checkout.createPayment and the webhooks leave them, their PaymentIntents in
 // the fake. The worker does not run: what the console calls queue stays queued.
 //
@@ -65,6 +66,7 @@ import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { buildOrderRequestInput, buildStoredPassport, pricedFlightOffer } from "../../builders/bookings";
 import { buildPng } from "../../builders/images";
 import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
+import { setAmadeusConnection } from "../../helpers/amadeus-connection";
 import { testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -142,28 +144,30 @@ async function insertAmadeusAccount(): Promise<string> {
   return id;
 }
 
-/** The active test tenant alpha with its Amadeus connection (the stub) and its Velexis test Stripe connection. */
-async function insertTenant(amadeusAccountId: string): Promise<void> {
+/**
+ * The active test tenant alpha with its own Amadeus connection (the stub's credential set, as its own; X-055) and its
+ * Velexis test Stripe connection. The platform's Velexis test account is there as always; alpha's connection does not
+ * use it.
+ */
+async function insertTenant(): Promise<void> {
   alphaId = newId("ten");
   await migrator
     .insertInto("platform.tenants")
     .values({ id: alphaId, key: "alpha", name: "Alpha Travel", status: "active", plan_code: "early_access" })
     .execute();
-  await migrator
-    .insertInto("platform.supplier_connections")
-    .values({
-      id: newId("sc"),
-      tenant_id: alphaId,
-      environment: "test",
-      credential_source: "velexis",
-      amadeus_account_id: amadeusAccountId,
-      office_ids: [office],
-      default_office_id: office,
-      queuing_office_id: office,
-      owner_office_id: office,
-      status: "active",
-    })
-    .execute();
+  await setAmadeusConnection(
+    { migrator, publisher: redis.client, keys },
+    {
+      tenantId: alphaId,
+      source: "tenant",
+      officeIds: [office],
+      own: {
+        baseUrl: stub.url,
+        clientId: stubCredentials.clientId,
+        clientSecret: stubCredentials.clientSecret,
+      },
+    },
+  );
   paymentConnectionId = newId("ppc");
   await migrator
     .insertInto("platform.payment_provider_connections")
@@ -845,7 +849,8 @@ beforeAll(async () => {
   };
   office = `NCE1A${randomBytes(2).toString("hex").toUpperCase()}`;
   stub = await startAmadeusStub({ credentials: stubCredentials });
-  await insertTenant(await insertAmadeusAccount());
+  await insertAmadeusAccount();
+  await insertTenant();
   await inTenant(async (trx) => {
     await seedStorefrontSettings(trx, { name: "Alpha Travel", defaultCurrency: "EUR", defaultLocale: "en" });
     await seedDefaultMarkupRule(trx);

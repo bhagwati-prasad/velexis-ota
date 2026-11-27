@@ -4,15 +4,17 @@
 // and job runner, against PostgreSQL 16, Redis 7 and the Amadeus stub.
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
-// as the platform does: alpha active in test, beta suspended, both on the Velexis test Amadeus account, whose
-// `base_url` is the stub's (the worker has no AMADEUS_BASE_URL_* override), each with an office of its own and
-// monitored queues (alpha: its booking queue 50 and queue 8; beta: its queue 50). Staff of alpha sign in through the
-// OTA admin's service key with portal tokens; a `console:automation` key lists `queues:read`. Orders are placed on
-// alpha's booking queue by creating them in the stub through its own HTTP API (Flight Create Orders with the
-// `automatedProcess` the booking orchestration sends), with synthetic travellers and flights relative to now; a local
-// booking is written for some of them, as the record step writes its main columns. Every answer is checked against the
-// OTA document. The last describe is the isolation test of the new tenant repository (conventions §12): snapshots and
-// bookings of beta, and of alpha's live mode, written directly, never reach alpha's test-mode reads.
+// as the platform does: alpha active in test on its own Amadeus credentials (X-055: the queue tools are for an OTA with
+// its own active Amadeus connection, ADR-0030 item 21; test/helpers/amadeus-connection.ts), beta suspended on the
+// Velexis test Amadeus account, both hosts the stub's `base_url` (the worker has no AMADEUS_BASE_URL_* override), each
+// with an office of its own and monitored queues (alpha: its booking queue 50 and queue 8; beta: its queue 50). Staff
+// of alpha sign in through the OTA admin's service key with portal tokens; a `console:automation` key lists
+// `queues:read`. Orders are placed on alpha's booking queue by creating them in the stub through its own HTTP API
+// (Flight Create Orders with the `automatedProcess` the booking orchestration sends), with synthetic travellers and
+// flights relative to now; a local booking is written for some of them, as the record step writes its main columns.
+// Every answer is checked against the OTA document. The last describe is the isolation test of the new tenant
+// repository (conventions §12): snapshots and bookings of beta, and of alpha's live mode, written directly, never reach
+// alpha's test-mode reads.
 //
 // The worker's schedulers are removed after start-up, so no iteration fires while the file runs; the file plays the
 // scheduler with a `fan-out` job of `queues.poll` that carries the iteration's `prevMillis` (the current minute).
@@ -61,6 +63,7 @@ import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildOrderRequestInput, buildOrderTraveler } from "../../builders/bookings";
+import { setAmadeusConnection } from "../../helpers/amadeus-connection";
 import { newApiKey, testApiCredentials, testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
 import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { MemorySink } from "../../helpers/log-sink";
@@ -124,35 +127,38 @@ async function insertAmadeusAccount(): Promise<string> {
   return id;
 }
 
-/** A tenant with its test Amadeus connection (the stub) and the queues the poller reads for it. */
+/**
+ * A tenant with its test Amadeus connection (the stub) and the queues the poller reads for it: its own credentials
+ * (the stub's credential set, as its own; X-055) for `tenant`, the Velexis test account for `velexis`.
+ */
 async function insertTenant(
   key: "alpha" | "beta",
   status: "active" | "suspended",
+  source: "tenant" | "velexis",
   office: string,
   monitoredQueues: readonly JsonObject[],
-  officeIds: readonly string[] = [office],
 ): Promise<string> {
   const id = newId("ten");
   await migrator
     .insertInto("platform.tenants")
     .values({ id, key, name: `${key} Travel`, status, plan_code: "early_access" })
     .execute();
-  await migrator
-    .insertInto("platform.supplier_connections")
-    .values({
-      id: newId("sc"),
-      tenant_id: id,
-      environment: "test",
-      credential_source: "velexis",
-      amadeus_account_id: amadeusAccountId,
-      office_ids: [...officeIds],
-      default_office_id: office,
-      queuing_office_id: office,
-      owner_office_id: office,
-      monitored_queues: JSON.stringify(monitoredQueues),
-      status: "active",
-    })
-    .execute();
+  const writer = { migrator, publisher: redis.client, keys };
+  const connection = { tenantId: id, officeIds: [office] as const, monitoredQueues };
+  await setAmadeusConnection(
+    writer,
+    source === "tenant"
+      ? {
+          ...connection,
+          source,
+          own: {
+            baseUrl: stub.url,
+            clientId: stubCredentials.clientId,
+            clientSecret: stubCredentials.clientSecret,
+          },
+        }
+      : { ...connection, source, amadeusAccountId },
+  );
   return id;
 }
 
@@ -490,11 +496,11 @@ beforeAll(async () => {
   offices.beta = officeOf("MAD1A");
   offices.other = officeOf("PAR1A");
   amadeusAccountId = await insertAmadeusAccount();
-  tenants.alpha = await insertTenant("alpha", "active", offices.alpha, [
+  tenants.alpha = await insertTenant("alpha", "active", "tenant", offices.alpha, [
     { officeId: offices.alpha, queueId: BOOKING_QUEUE, category: 0 },
     { officeId: offices.alpha, queueId: OTHER_QUEUE, category: 0 },
   ]);
-  tenants.beta = await insertTenant("beta", "suspended", offices.beta, [
+  tenants.beta = await insertTenant("beta", "suspended", "velexis", offices.beta, [
     { officeId: offices.beta, queueId: BOOKING_QUEUE, category: 0 },
   ]);
   ({ key: automationKey, id: automationKeyId } = await issueAutomationKey());

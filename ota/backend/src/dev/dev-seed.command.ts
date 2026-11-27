@@ -21,20 +21,35 @@
 //    each only when the tenant has no valid test key of its role (`keyRoleOf`: a secret key with `console:automation`
 //    is the console key, any other secret key the storefront's).
 //
-// Then it provisions `tenant_demo` with `ProvisioningService.provisionTenant`, the worker's real provisioning function
-// (velexis_provisioner, DATABASE_PROVISIONER_URL; the platform rows read back as velexis_ota_app, DATABASE_URL), and,
-// in a second transaction, sets the tenant `active` with `activated_at`, mirrors the ledger into
-// `platform.tenant_schema_migrations` and sets `schema_version`, as the platform's `record_migrations` and `activate`
-// post-steps do. The raw keys are printed once, on stdout, when they are created, each on its own labelled line
-// (DEV_SEED_KEY_LABELS: `  <label> (<key id>): <key>`, which the nightly workflow's SDK smoke step reads by label):
-// they are stored nowhere in clear and never logged, so a second run prints none of them (a lost key is revoked and
-// rolled in the portal, or the rows are deleted locally before running the seed again; a database seeded before the
-// console key existed gets that key alone on its next run).
+// 6. since X-055 (ADR-0030 item 21; the lead's ruling on OBE-106), in a transaction of its own, a second test OTA,
+//    `demoown` (DEV_OWN_AMADEUS_TENANT: `tenant_demoown`, "Demo Own Amadeus Travel", no storefront host, no payment
+//    connection), whose Amadeus `test` connection is its own credentials on the Amadeus stub (`tenant`, `active`), as
+//    the platform applies a verified own-credentials submission (PBE-053): the host AMADEUS_BASE_URL_TEST, or when it
+//    is unset the Velexis test account's `base_url` (the stub's, as the platform's dev:seed writes it), a made-up
+//    client id, a random client secret envelope-encrypted with the KEKs of MASTER_KEY_DIR for the row's own associated
+//    data (`platform.supplier_connections.client_secret_ciphertext:<id>`; the stub accepts any non-empty pair, and the
+//    secret is never printed), its own office DEV_OWN_AMADEUS_TENANT.officeId (no office of the Velexis pool), and an
+//    `sk_test_…` console automation key with the demo console key's scopes (DEV_SEED_KEY_SCOPES.console), each only
+//    when it is missing. The Amadeus tools (the 12 `console.amadeus.*` operations, two queue operations and PNR import)
+//    are for an OTA with its own active Amadeus connection, so the SDK's server-mode smoke test makes its raw Amadeus
+//    reads with this key (SDK_SMOKE_OWN_CONSOLE_KEY). FEATURE_OWN_AMADEUS stays off: dev:seed writes the applied state,
+//    as it writes the demo OTA's.
 //
-// A second run changes nothing: one tenant, one schema, three keys. Exit codes (cli.ts): 0 when the demo OTA is active
-// with its schema, connections and keys; 1 after the production refusal, an invalid configuration, a missing platform
-// seed (no test Amadeus account, no free test office), a tenant `demo` in another state, or a failed provisioning (its
-// code and message on stderr). It never prints a DSN or the pepper.
+// Then it provisions `tenant_demo` and `tenant_demoown` with `ProvisioningService.provisionTenant`, the worker's real
+// provisioning function (velexis_provisioner, DATABASE_PROVISIONER_URL; the platform rows read back as velexis_ota_app,
+// DATABASE_URL), and, in a transaction per tenant, sets the tenant `active` with `activated_at`, mirrors the ledger
+// into `platform.tenant_schema_migrations` and sets `schema_version`, as the platform's `record_migrations` and
+// `activate` post-steps do. The raw keys are printed once, on stdout, when they are created, each on its own labelled
+// line (DEV_SEED_KEY_LABELS and DEV_SEED_OWN_KEY_LABEL: `  <label> (<key id>): <key>`, which the nightly workflow's SDK
+// smoke step reads by label): they are stored nowhere in clear and never logged, so a second run prints none of them (a
+// lost key is revoked and rolled in the portal, or the rows are deleted locally before running the seed again; a
+// database seeded before a key existed gets that key alone on its next run).
+//
+// A second run changes nothing: two tenants, two schemas, three keys of the demo OTA and one of the second. Exit codes
+// (cli.ts): 0 when both OTAs are active with their schemas, connections and keys; 1 after the production refusal, an
+// invalid configuration or KEK folder, a missing platform seed (no test Amadeus account, no free test office), a tenant
+// `demo` or `demoown` in another state, or a failed provisioning (its code and message on stderr). It never prints a
+// DSN, the pepper or a client secret.
 import { randomBytes } from "node:crypto";
 import {
   ConfigError,
@@ -44,7 +59,15 @@ import {
   readKeyFile,
   type EnvSource,
 } from "@velexis/config";
-import { API_KEY_PEPPER_MIN_BYTES, hashApiKey } from "@velexis/crypto";
+import {
+  aadFor,
+  API_KEY_PEPPER_MIN_BYTES,
+  encryptValue,
+  hashApiKey,
+  KeyProviderError,
+  LocalFileKeyProvider,
+  type KeyProvider,
+} from "@velexis/crypto";
 import {
   createPlatformDb,
   createPool,
@@ -84,6 +107,23 @@ export const DEV_TENANT = Object.freeze({
   statementDescriptorSuffix: "DEMO TRAVEL",
 } as const);
 
+/**
+ * The second test OTA (step 6 of the file header, X-055): its test connection is its own Amadeus credentials on the
+ * stub, so the Amadeus tools serve it.
+ */
+export const DEV_OWN_AMADEUS_TENANT = Object.freeze({
+  key: "demoown",
+  name: "Demo Own Amadeus Travel",
+  schemaName: "tenant_demoown",
+  planCode: "early_access",
+  defaultCurrency: "EUR",
+  defaultLocale: "en",
+  /** The office of its own credentials (`^[A-Z0-9]{9}$`), outside the Velexis pool. */
+  officeId: "OWN1A0001",
+  /** The client id of its own credentials (made up: the stub accepts any non-empty pair). */
+  clientId: "velexis-dev-seed-own",
+} as const);
+
 /** The environment of everything dev:seed creates: the demo OTA stays in test. */
 const ENVIRONMENT = "test";
 
@@ -103,6 +143,15 @@ export const DEV_SEED_KEY_LABELS = Object.freeze({
   secret: "Secret test key",
   console: "Console automation test key",
 } as const);
+
+/** The name of the second OTA's console automation key (step 6), as the portal lists it. */
+export const DEV_SEED_OWN_KEY_NAME = "dev:seed own Amadeus console automation test key";
+
+/**
+ * The label of the second OTA's console automation key line (step 6), which the nightly workflow's SDK smoke step reads
+ * as SDK_SMOKE_OWN_CONSOLE_KEY: it starts no other label, and no other label starts it.
+ */
+export const DEV_SEED_OWN_KEY_LABEL = "Own Amadeus console automation test key";
 
 /**
  * `platform.api_keys.scopes` of each key (PADR-0005 item 6, `scopeProblem` of api-key.verifier.ts). The console key
@@ -125,6 +174,9 @@ export const DEV_SEED_KEY_SCOPES = Object.freeze({
   secret: Object.freeze(["storefront"]),
   console: Object.freeze(["console:automation", "amadeus:read"]),
 } as const);
+// The second OTA's console key (step 6) has the console key's scopes. Since X-055 the smoke test makes the three raw
+// Amadeus reads above with that key, against that OTA's own connection; OBE-106 rewrites the comment above when the
+// demo OTA's key is refused them.
 
 /** The variables dev:seed reads (README §3; root and app `.env.local` locally). */
 export const DEV_SEED_CONFIG_SCHEMA = {
@@ -138,6 +190,11 @@ export const DEV_SEED_CONFIG_SCHEMA = {
   DATABASE_MIGRATOR_URL: env.url({ protocols: ["postgres:", "postgresql:"] }),
   API_KEY_PEPPER_FILE: apiConfigSchema.API_KEY_PEPPER_FILE,
   STOREFRONT_BASE_DOMAIN: apiConfigSchema.STOREFRONT_BASE_DOMAIN,
+  // The KEKs that seal the second OTA's own client secret (step 6), the API's: it decrypts the secret for a token.
+  MASTER_KEY_DIR: apiConfigSchema.MASTER_KEY_DIR,
+  MASTER_KEY_CURRENT: apiConfigSchema.MASTER_KEY_CURRENT,
+  // The host of the second OTA's own credentials (step 6); when unset, the Velexis test account's (the stub's locally).
+  AMADEUS_BASE_URL_TEST: apiConfigSchema.AMADEUS_BASE_URL_TEST,
 } as const;
 
 // ---- API keys (PADR-0005) ----------------------------------------------------------------------------------------
@@ -237,21 +294,31 @@ export interface PlatformSeedOutcome {
 /** The tenant statuses dev:seed continues from: before or after its own provisioning. */
 const SEEDABLE_STATUSES: readonly string[] = ["provisioning", "active"];
 
+/** What a tenant row of dev:seed is made of (DEV_TENANT, DEV_OWN_AMADEUS_TENANT). */
+interface DevTenantSpec {
+  readonly key: string;
+  readonly name: string;
+  readonly planCode: string;
+  readonly defaultCurrency: string;
+  readonly defaultLocale: string;
+}
+
 async function seedTenantRow(
   trx: MigratorTx,
   now: Date,
+  spec: DevTenantSpec = DEV_TENANT,
 ): Promise<{ id: string; created: boolean; status: string }> {
   const id = newId("ten", now);
   const inserted = await trx
     .insertInto("platform.tenants")
     .values({
       id,
-      key: DEV_TENANT.key,
-      name: DEV_TENANT.name,
+      key: spec.key,
+      name: spec.name,
       status: "provisioning",
-      plan_code: DEV_TENANT.planCode,
-      default_currency: DEV_TENANT.defaultCurrency,
-      default_locale: DEV_TENANT.defaultLocale,
+      plan_code: spec.planCode,
+      default_currency: spec.defaultCurrency,
+      default_locale: spec.defaultLocale,
       storefront_environment: ENVIRONMENT,
       created_at: now,
       updated_at: now,
@@ -265,7 +332,7 @@ async function seedTenantRow(
   const existing = await trx
     .selectFrom("platform.tenants")
     .select(["id", "status"])
-    .where("key", "=", DEV_TENANT.key)
+    .where("key", "=", spec.key)
     .forUpdate()
     .executeTakeFirstOrThrow();
   return { id: existing.id, created: false, status: existing.status };
@@ -455,6 +522,7 @@ async function insertKey(
   kind: DevKeyKind,
   pepper: Buffer,
   now: Date,
+  name: string = DEV_SEED_KEY_NAMES[kind],
 ): Promise<{ id: string; key: string }> {
   for (let attempt = 0; attempt < API_KEY_MAX_TRIES; attempt += 1) {
     const made = newTestKey(kind, pepper);
@@ -464,7 +532,7 @@ async function insertKey(
       .values({
         id,
         tenant_id: tenantId,
-        name: DEV_SEED_KEY_NAMES[kind],
+        name,
         kind: apiKeyKindOf(kind),
         environment: ENVIRONMENT,
         prefix: made.prefix,
@@ -526,6 +594,129 @@ export async function seedPlatformRows(
       paymentConnectionCreated,
       createdKeys,
       existingKeys,
+    };
+  });
+}
+
+/** What the second OTA's step (step 6 of the file header) found or did. */
+export interface OwnAmadeusSeedOutcome {
+  readonly tenantId: string;
+  readonly tenantCreated: boolean;
+  readonly tenantStatus: string;
+  /** Its test connection's source (`tenant` as dev:seed writes it) and default office. */
+  readonly credentialSource: string;
+  readonly officeId: string | null;
+  readonly connectionCreated: boolean;
+  /** The console key created by this run, with its full text (shown once); `undefined` when a valid one existed. */
+  readonly createdKey: { readonly id: string; readonly key: string } | undefined;
+}
+
+/** The host of the Velexis test account (the stub's in development): the second OTA's own host by default (step 6). */
+async function velexisTestBaseUrl(trx: MigratorTx): Promise<string> {
+  const account = await trx
+    .selectFrom("platform.amadeus_accounts")
+    .select("base_url")
+    .where("environment", "=", ENVIRONMENT)
+    .executeTakeFirst();
+  if (account === undefined) {
+    throw new DevSeedRefusal(
+      "There is no Velexis test Amadeus account: run the platform's dev:seed first " +
+        "(pnpm --filter @velexis/platform-backend dev:seed), then this one again.",
+    );
+  }
+  return account.base_url;
+}
+
+/** The second OTA's own Amadeus test connection (step 6), only when the tenant has no test connection yet. */
+async function seedOwnAmadeusConnection(
+  trx: MigratorTx,
+  tenantId: string,
+  options: { readonly keys: KeyProvider; readonly baseUrl: string | undefined; readonly now: Date },
+): Promise<{ credentialSource: string; officeId: string | null; created: boolean }> {
+  const existing = await trx
+    .selectFrom("platform.supplier_connections")
+    .select(["credential_source", "default_office_id"])
+    .where("tenant_id", "=", tenantId)
+    .where("provider", "=", "amadeus")
+    .where("environment", "=", ENVIRONMENT)
+    .executeTakeFirst();
+  if (existing !== undefined) {
+    return {
+      credentialSource: existing.credential_source,
+      officeId: existing.default_office_id,
+      created: false,
+    };
+  }
+  const { now } = options;
+  const baseUrl = options.baseUrl ?? (await velexisTestBaseUrl(trx));
+  const id = newId("sc", now);
+  const office = DEV_OWN_AMADEUS_TENANT.officeId;
+  // A random client secret, sealed at once for this row and never printed or kept in clear.
+  const { ciphertext, kekId } = await encryptValue(randomBytes(32).toString("base64url"), {
+    aad: aadFor("platform", "supplier_connections", "client_secret_ciphertext", id),
+    keys: options.keys,
+  });
+  await trx
+    .insertInto("platform.supplier_connections")
+    .values({
+      id,
+      tenant_id: tenantId,
+      provider: "amadeus",
+      environment: ENVIRONMENT,
+      credential_source: "tenant",
+      base_url: baseUrl,
+      client_id: DEV_OWN_AMADEUS_TENANT.clientId,
+      client_secret_ciphertext: ciphertext,
+      encryption_key_id: kekId,
+      office_ids: [office],
+      default_office_id: office,
+      queuing_office_id: office,
+      owner_office_id: office,
+      // jsonb columns are written as JSON text.
+      ticketing_defaults: JSON.stringify({}),
+      monitored_queues: JSON.stringify([]),
+      status: "active",
+      last_verified_at: now,
+      created_at: now,
+      updated_at: now,
+    })
+    .execute();
+  return { credentialSource: "tenant", officeId: office, created: true };
+}
+
+/** Step 6 of the file header, in one transaction as velexis_migrator. */
+export async function seedOwnAmadeusRows(
+  migrator: MigratorDb,
+  options: {
+    readonly pepper: Buffer;
+    readonly keys: KeyProvider;
+    /** AMADEUS_BASE_URL_TEST; `undefined`: the Velexis test account's host. */
+    readonly baseUrl: string | undefined;
+    readonly now: Date;
+  },
+): Promise<OwnAmadeusSeedOutcome> {
+  const { now, pepper } = options;
+  return migrator.transaction().execute(async (trx) => {
+    const tenant = await seedTenantRow(trx, now, DEV_OWN_AMADEUS_TENANT);
+    if (!SEEDABLE_STATUSES.includes(tenant.status)) {
+      throw new DevSeedRefusal(
+        `The tenant ${DEV_OWN_AMADEUS_TENANT.key} (${tenant.id}) is ${tenant.status}; dev:seed only continues a ` +
+          "provisioning or active second test OTA and changes nothing else.",
+      );
+    }
+    const connection = await seedOwnAmadeusConnection(trx, tenant.id, options);
+    const valid = await validKeyRoles(trx, tenant.id, now);
+    const createdKey = valid.has("console")
+      ? undefined
+      : await insertKey(trx, tenant.id, "console", pepper, now, DEV_SEED_OWN_KEY_NAME);
+    return {
+      tenantId: tenant.id,
+      tenantCreated: tenant.created,
+      tenantStatus: tenant.status,
+      credentialSource: connection.credentialSource,
+      officeId: connection.officeId,
+      connectionCreated: connection.created,
+      createdKey,
     };
   });
 }
@@ -661,6 +852,26 @@ function seedLines(outcome: PlatformSeedOutcome): string[] {
   return lines;
 }
 
+function ownSeedLines(outcome: OwnAmadeusSeedOutcome): string[] {
+  const state = (created: boolean): string => (created ? "created" : "exists already");
+  const lines = [
+    `Tenant ${DEV_OWN_AMADEUS_TENANT.key} (${outcome.tenantId}), schema ${DEV_OWN_AMADEUS_TENANT.schemaName}: ` +
+      `${state(outcome.tenantCreated)}.`,
+    `Amadeus test connection on its own credentials (${outcome.credentialSource}), office ` +
+      `${outcome.officeId ?? "none"}: ${state(outcome.connectionCreated)}.`,
+  ];
+  if (outcome.createdKey === undefined) {
+    lines.push(`${DEV_SEED_OWN_KEY_LABEL}: exists already (its key was shown when dev:seed created it).`);
+  } else {
+    lines.push(
+      "Test API key created. Shown once, never again:",
+      // After its label (DEV_SEED_OWN_KEY_LABEL), which the nightly SDK smoke step reads it by.
+      `  ${DEV_SEED_OWN_KEY_LABEL} (${outcome.createdKey.id}): ${outcome.createdKey.key}`,
+    );
+  }
+  return lines;
+}
+
 /** `dev:seed` (see the file header). */
 export async function runDevSeed(args: readonly string[], io: DevSeedIo): Promise<number> {
   if (args.length > 0) {
@@ -674,6 +885,7 @@ export async function runDevSeed(args: readonly string[], io: DevSeedIo): Promis
   }
   let config: ReturnType<typeof loadDevSeedConfig>;
   let pepper: Buffer;
+  let keys: KeyProvider;
   try {
     config = loadDevSeedConfig(io.env);
     if (config.APP_ENV === "production") {
@@ -684,9 +896,17 @@ export async function runDevSeed(args: readonly string[], io: DevSeedIo): Promis
       throw new TypeError("API_KEY_PEPPER_FILE must be a base64 key file");
     }
     pepper = key;
+    keys = await LocalFileKeyProvider.fromDir(config.MASTER_KEY_DIR, config.MASTER_KEY_CURRENT);
   } catch (error) {
     if (error instanceof ConfigError) {
       io.stderr.write(`${DEV_SEED_COMMAND}: the configuration is invalid:\n${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof KeyProviderError) {
+      io.stderr.write(
+        `${DEV_SEED_COMMAND}: the KEKs of MASTER_KEY_DIR cannot be loaded (${error.message}); run pnpm dev:keys, ` +
+          "then dev:seed again. Nothing was written.\n",
+      );
       return 1;
     }
     throw error;
@@ -704,20 +924,33 @@ export async function runDevSeed(args: readonly string[], io: DevSeedIo): Promis
   try {
     const migrator = createPlatformDb<PlatformDatabase>(migratorPool);
     let outcome: PlatformSeedOutcome;
+    let own: OwnAmadeusSeedOutcome;
+    const lines: string[] = [];
     try {
       outcome = await seedPlatformRows(migrator, {
         baseDomain: config.STOREFRONT_BASE_DOMAIN,
         pepper,
         now: clock.now(),
       });
+      lines.push(...seedLines(outcome));
+      own = await seedOwnAmadeusRows(migrator, {
+        pepper,
+        keys,
+        baseUrl: config.AMADEUS_BASE_URL_TEST,
+        now: clock.now(),
+      });
+      lines.push(...ownSeedLines(own));
     } catch (error) {
       if (error instanceof DevSeedRefusal) {
+        // The demo OTA's keys, when this run created them, are printed all the same: they exist nowhere else in clear.
+        if (lines.length > 0) {
+          io.stdout.write(`${lines.join("\n")}\n`);
+        }
         io.stderr.write(`${DEV_SEED_COMMAND}: ${error.message}\n`);
         return 1;
       }
       throw error;
     }
-    const lines = seedLines(outcome);
 
     const service = new ProvisioningService(
       new PlatformReadRepository(createPlatformDb(otaPool)),
@@ -725,22 +958,27 @@ export async function runDevSeed(args: readonly string[], io: DevSeedIo): Promis
       io.provisioning ?? DEFAULT_PROVISIONING_OPTIONS,
       clock,
     );
-    const result = await service.provisionTenant(outcome.tenantId);
-    if (result.status === "failed") {
-      io.stdout.write(`${lines.join("\n")}\n`);
-      io.stderr.write(
-        `${DEV_SEED_COMMAND}: provisioning ${DEV_TENANT.schemaName} failed: ${result.payload.error.code}: ` +
-          `${result.payload.error.message}${result.payload.retryable ? " (retryable: run dev:seed again)" : ""}\n`,
+    for (const tenant of [
+      { id: outcome.tenantId, schemaName: DEV_TENANT.schemaName },
+      { id: own.tenantId, schemaName: DEV_OWN_AMADEUS_TENANT.schemaName },
+    ]) {
+      const result = await service.provisionTenant(tenant.id);
+      if (result.status === "failed") {
+        io.stdout.write(`${lines.join("\n")}\n`);
+        io.stderr.write(
+          `${DEV_SEED_COMMAND}: provisioning ${tenant.schemaName} failed: ${result.payload.error.code}: ` +
+            `${result.payload.error.message}${result.payload.retryable ? " (retryable: run dev:seed again)" : ""}\n`,
+        );
+        return 1;
+      }
+      const activated = await recordProvisioning(migrator, tenant.id, result.payload, clock.now());
+      lines.push(
+        `Schema ${result.payload.schemaName} at ${result.payload.schemaVersion}: ` +
+          `${result.payload.steps.some((step) => step.status === "succeeded") ? "provisioned" : "complete already"}; ` +
+          `tenant ${activated ? "activated" : "active"}.`,
       );
-      return 1;
     }
-    const activated = await recordProvisioning(migrator, outcome.tenantId, result.payload, clock.now());
-    lines.push(
-      `Schema ${result.payload.schemaName} at ${result.payload.schemaVersion}: ` +
-        `${result.payload.steps.some((step) => step.status === "succeeded") ? "provisioned" : "complete already"}; ` +
-        `tenant ${activated ? "activated" : "active"}.`,
-      `Try it: curl -H "X-Api-Key: <the publishable key>" http://localhost:4000/v1/storefront`,
-    );
+    lines.push(`Try it: curl -H "X-Api-Key: <the publishable key>" http://localhost:4000/v1/storefront`);
     io.stdout.write(`${lines.join("\n")}\n`);
     return 0;
   } finally {

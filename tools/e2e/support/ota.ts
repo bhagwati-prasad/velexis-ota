@@ -22,6 +22,8 @@
 //   const edge = new EdgeApi(owned.storefrontHost, ip);              // the OTA API as that OTA's storefront edge
 //   await bookAirlineCardTrip(edge, { …, completionScenario: "ticketing-failed" });  // left in manual review
 //   const order = await createStubOrder({ officeId, … });            // an Amadeus order made outside Velexis
+//   const tools = await newOwnerWithOwnTestConnection("Pia", "pnr"); // the same, on its own Amadeus test connection
+//                                                                    // (X-055: the Amadeus tools' journeys)
 //   await openConsoleFromPortal(page, owned.ota.id);                 // portal → "Open console" → /bookings
 //   await waitPastMidnight(await bookingDayTimeZones(owned));       // never book in the 3 minutes before its midnight
 //
@@ -95,6 +97,7 @@ import {
   type SessionTokens,
 } from "./fixtures";
 import {
+  applyOwnTestCredentials,
   buildAccount,
   grantPlatformAdmin,
   moveOtaToNewPlan,
@@ -1115,6 +1118,46 @@ export async function newOwnerWithActiveOta(
     }
     await waitForUnheldTestOffice();
   }
+}
+
+/** An Amadeus office id of an OTA's own test credentials no other journey uses: `E2T` and 6 random hex digits. */
+export function uniqueOwnTestOfficeId(): string {
+  return `E2T${randomBytes(3).toString("hex").toUpperCase()}`;
+}
+
+/**
+ * `newOwnerWithActiveOta`'s OTA on its own Amadeus test credentials (X-055; ADR-0030 item 21): the Amadeus tools (the
+ * 12 `console.amadeus.*` operations, two queue operations and PNR import) are for an OTA with its own active Amadeus
+ * connection, so the OTA admin's tool journeys run on one. support/seed.ts's `applyOwnTestCredentials` applies the
+ * credentials as the platform worker does (the test connection `tenant` on the stack's stub, a client secret sealed with
+ * the stack's KEK, an office of its own, `active`; the OTA's Velexis test office `releasing`), then the `connection`
+ * and `amadeus_account` invalidations are published, so the OTA API reads the row at once. `connection` is the own one:
+ * its office is the OTA's new orders' and queues' office. Throws unless the stored connection is `tenant` and `active`.
+ */
+export async function newOwnerWithOwnTestConnection(
+  fullName: string,
+  keyPrefix: string,
+  options: NewOwnerOptions = {},
+): Promise<OwnedOta> {
+  const owned = await newOwnerWithActiveOta(fullName, keyPrefix, options);
+  const keys = await stackKeyProvider();
+  const applied = await applyOwnTestCredentials({
+    tenantId: owned.ota.id,
+    officeId: uniqueOwnTestOfficeId(),
+    seal: async (connectionId) => await sealedClientSecret(connectionId, keys),
+  });
+  await publishInvalidations(
+    { v: 1, type: "connection", tenantId: owned.ota.id },
+    { v: 1, type: "amadeus_account", id: applied.accountId },
+  );
+  const row = await amadeusConnectionOf(owned.ota.id, "test");
+  if (row?.credentialSource !== "tenant" || row.status !== "active" || row.defaultOfficeId === null) {
+    throw new Error(`the OTA ${owned.ota.id} has no active own Amadeus test connection after the apply`);
+  }
+  return {
+    ...owned,
+    connection: { status: row.status, officeId: row.defaultOfficeId, officeIds: row.officeIds },
+  };
 }
 
 /** The `fetch` the API clients of this section use (the global one; a fake in the unit tests). */

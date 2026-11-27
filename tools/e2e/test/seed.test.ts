@@ -10,6 +10,7 @@ import {
   AGED_MFA_MINUTES,
   ageAdminMfa,
   applyOwnLiveCredentials,
+  applyOwnTestCredentials,
   holdVelexisLivePool,
   insertDraftSettlement,
   insertQueuedProvisioningJob,
@@ -404,6 +405,12 @@ describe("applyOwnLiveCredentials", () => {
     expect(update?.values[3]).toMatch(/^e2e-own-live-[0-9a-f]{12}$/);
     expect(update?.values.slice(4)).toEqual([sealed.ciphertext, "kek-1", "E2LABC123"]);
     expect(clients[1]?.queries[2]?.values).toEqual(["ama_live", "ten_1"]);
+    // The connection it replaces is the OTA's live one, read as the platform API's own role.
+    expect(clients[0]?.queries[0]?.values).toEqual(["ten_1", "live"]);
+    expect(clients.map((client) => new URL(client.connectionString).username)).toEqual([
+      "velexis_platform_app",
+      "velexis_platform_app",
+    ]);
   });
 
   it("refuses an office id that is no Amadeus office id, and a connection that is not on the Velexis account [PAD-015 AC1]", async () => {
@@ -444,6 +451,113 @@ describe("applyOwnLiveCredentials", () => {
         seal: async () => await Promise.resolve(sealed as never),
       }),
     ).rejects.toThrow(/changed while its credentials were applied/);
+    expect(statements().at(-1)).toBe("ROLLBACK");
+  });
+});
+
+describe("applyOwnTestCredentials", () => {
+  const sealed = { ciphertext: Buffer.from("sealed-test"), kekId: "kek-2" };
+
+  it("switches the active Velexis test connection to the OTA's own credentials on the stub and sets its offices releasing [X-055]", async () => {
+    script.answer = (text) => {
+      if (text.startsWith("SELECT")) {
+        return {
+          rows: [
+            {
+              id: "sc_t",
+              credential_source: "velexis",
+              amadeus_account_id: "ama_test",
+              status: "active",
+              version: 1,
+            },
+          ],
+        };
+      }
+      if (text.includes("UPDATE platform.supplier_connections")) {
+        return { rowCount: 1 };
+      }
+      if (text.includes("UPDATE platform.amadeus_offices")) {
+        return { rows: [{ id: "amo_t" }], rowCount: 1 };
+      }
+      return { rowCount: 0 };
+    };
+    const seal = vi.fn(async () => await Promise.resolve(sealed as never));
+
+    const applied = await applyOwnTestCredentials({ tenantId: "ten_2", officeId: "E2TABC123", seal });
+
+    expect(applied).toEqual({
+      connectionId: "sc_t",
+      accountId: "ama_test",
+      releasingOfficeRowIds: ["amo_t"],
+    });
+    // The OTA's test connection, read and written as the platform API's own role, in one transaction.
+    expect(clients[0]?.queries[0]?.values).toEqual(["ten_2", "test"]);
+    expect(clients.map((client) => new URL(client.connectionString).username)).toEqual([
+      "velexis_platform_app",
+      "velexis_platform_app",
+    ]);
+    expect(seal).toHaveBeenCalledWith("sc_t");
+    expect(statements().slice(1)).toEqual([
+      "BEGIN",
+      expect.stringMatching(
+        /^UPDATE platform\.supplier_connections SET credential_source = 'tenant', amadeus_account_id = NULL,/,
+      ),
+      expect.stringMatching(
+        /^UPDATE platform\.amadeus_offices SET status = 'releasing', release_requested_at = now\(\),/,
+      ),
+      "COMMIT",
+    ]);
+    const update = clients[1]?.queries[1];
+    expect(update?.text).toContain("status = 'active'");
+    expect(update?.text).toContain("WHERE id = $1 AND version = $2 AND credential_source = 'velexis'");
+    expect(update?.values.slice(0, 3)).toEqual(["sc_t", 1, AMADEUS_STUB_URL]);
+    expect(update?.values[3]).toMatch(/^e2e-own-test-[0-9a-f]{12}$/);
+    expect(update?.values.slice(4)).toEqual([sealed.ciphertext, "kek-2", "E2TABC123"]);
+    expect(clients[1]?.queries[2]?.values).toEqual(["ama_test", "ten_2"]);
+  });
+
+  it("refuses an office id that is no Amadeus office id, and a test connection that is not on the Velexis account [X-055]", async () => {
+    const seal = vi.fn();
+    await expect(applyOwnTestCredentials({ tenantId: "ten_2", officeId: "e2t", seal })).rejects.toThrow(
+      TypeError,
+    );
+    script.answer = () => ({
+      rows: [
+        { id: "sc_t", credential_source: "tenant", amadeus_account_id: null, status: "active", version: 2 },
+      ],
+    });
+    await expect(applyOwnTestCredentials({ tenantId: "ten_2", officeId: "E2TABC123", seal })).rejects.toThrow(
+      "the OTA ten_2 has no active test connection on the Velexis account to replace",
+    );
+    script.answer = () => ({ rows: [] });
+    await expect(applyOwnTestCredentials({ tenantId: "ten_2", officeId: "E2TABC123", seal })).rejects.toThrow(
+      "the OTA ten_2 has no active test connection on the Velexis account to replace",
+    );
+    expect(seal).not.toHaveBeenCalled();
+  });
+
+  it("rolls back when the test connection changed in between [X-055]", async () => {
+    script.answer = (text) =>
+      text.startsWith("SELECT")
+        ? {
+            rows: [
+              {
+                id: "sc_t",
+                credential_source: "velexis",
+                amadeus_account_id: "ama_test",
+                status: "active",
+                version: 1,
+              },
+            ],
+          }
+        : { rowCount: 0 };
+    await expect(
+      applyOwnTestCredentials({
+        tenantId: "ten_2",
+        officeId: "E2TABC123",
+        seal: async () => await Promise.resolve(sealed as never),
+      }),
+    ).rejects.toThrow("the test connection of the OTA ten_2 changed while its credentials were applied");
     expect(statements().at(-1)).toBe("ROLLBACK");
   });
 });

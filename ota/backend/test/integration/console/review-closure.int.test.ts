@@ -23,6 +23,12 @@
 // no API reaches: another tenant's booking in review (a row of tenant_beta), and the decoy orders of the stub (orders
 // of other bookings, created through the worker's Amadeus client as the reconciliation's tests create them).
 //
+// Alpha's test connection is on the Velexis account (the stub), as every booking of the file and every review closure
+// needs it. Only the fixture import of the refusals describe (console.bookings.import, one of the Amadeus tools for an
+// OTA with its own active Amadeus connection, ADR-0030 item 21) runs on alpha's own credentials: the file switches the
+// connection to `tenant` for that call alone and back to `velexis` (X-055, the lead's ruling S12;
+// test/helpers/amadeus-connection.ts).
+//
 // Every API answer is checked against the OTA document. The Stripe keys and the Amadeus credentials are built at run
 // time; card values are test data only (Visa's documented test PAN).
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
@@ -54,6 +60,7 @@ import type { Job, Queue } from "bullmq";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
+import { ConnectionResolver } from "../../../src/amadeus/connection-resolver";
 import { AMADEUS_LIMITS, DEFAULT_AMADEUS_LIMITS, type AmadeusLimits } from "../../../src/amadeus/limits";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { readCreatedOrder } from "../../../src/bookings/order-recorder";
@@ -82,6 +89,7 @@ import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildOrderRequestInput, buildOrderTraveler, buildStripeConfirmation } from "../../builders/bookings";
 import { buildContactInput, buildTravelerInput, dateFromToday } from "../../builders/checkouts";
+import { setAmadeusConnection, type AmadeusConnectionInput } from "../../helpers/amadeus-connection";
 import {
   edgeWriteHeaders,
   newApiKey,
@@ -106,6 +114,8 @@ const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const BOOKINGS = "/v1/console/bookings";
 const OPERATION = "consoleCloseBookingReview";
+/** How long a switch of alpha's connection waits at most for its invalidation (the subscriber applies it at once). */
+const INVALIDATION_WAIT = { timeout: 5 * SECOND, interval: 20 } as const;
 
 // Test data only: Visa's documented test PAN and a made-up security code.
 const TEST_PAN = "4111111111111111";
@@ -161,6 +171,7 @@ let migrator: Kysely<PlatformDatabase>;
 let otaPool: ReturnType<typeof createPool>;
 let tenantDb: TenantDb;
 let alphaId: string;
+let amadeusAccountId: string;
 let alphaSk: string;
 let office: string;
 let stubCredentials: { readonly clientId: string; readonly clientSecret: string };
@@ -197,28 +208,55 @@ async function insertAccount(): Promise<string> {
   return id;
 }
 
+/** Alpha's test Amadeus connection: on the Velexis account (the stub), or on its own credentials (the stub's set). */
+function alphaConnection(tenantId: string, source: "velexis" | "tenant"): AmadeusConnectionInput {
+  return source === "velexis"
+    ? { tenantId, source, amadeusAccountId, officeIds: [office] }
+    : {
+        tenantId,
+        source,
+        officeIds: [office],
+        own: {
+          baseUrl: stub.url,
+          clientId: stubCredentials.clientId,
+          clientSecret: stubCredentials.clientSecret,
+        },
+      };
+}
+
+/**
+ * Sets alpha's test connection to `source` and waits until the API's resolver serves it (the `connection` invalidation
+ * reaches the API's subscriber, which drops the shared cache entry the worker reads too).
+ */
+async function switchAlphaConnection(source: "velexis" | "tenant"): Promise<void> {
+  await setAmadeusConnection({ migrator, publisher: redis.client, keys }, alphaConnection(alphaId, source));
+  const resolver = api.app.get(ConnectionResolver, { strict: false });
+  await vi.waitFor(async () => {
+    expect((await resolver.resolve(alphaId, "test")).credentialSource).toBe(source);
+  }, INVALIDATION_WAIT);
+}
+
+/**
+ * Runs `run` on alpha's own credentials, then puts the Velexis connection back (the file header): console.bookings.import
+ * is a tool of an OTA with its own active Amadeus connection, and the review closures stay on the Velexis account.
+ */
+async function onOwnConnection<T>(run: () => Promise<T>): Promise<T> {
+  await switchAlphaConnection("tenant");
+  try {
+    return await run();
+  } finally {
+    await switchAlphaConnection("velexis");
+  }
+}
+
 /** The active tenant alpha with its test Amadeus connection (the stub) and its Velexis-mode Stripe connection. */
-async function insertTenant(accountId: string): Promise<string> {
+async function insertTenant(): Promise<string> {
   const id = newId("ten");
   await migrator
     .insertInto("platform.tenants")
     .values({ id, key: "alpha", name: "Alpha Travel", status: "active", plan_code: "early_access" })
     .execute();
-  await migrator
-    .insertInto("platform.supplier_connections")
-    .values({
-      id: newId("sc"),
-      tenant_id: id,
-      environment: "test",
-      credential_source: "velexis",
-      amadeus_account_id: accountId,
-      office_ids: [office],
-      default_office_id: office,
-      queuing_office_id: office,
-      owner_office_id: office,
-      status: "active",
-    })
-    .execute();
+  await setAmadeusConnection({ migrator, publisher: redis.client, keys }, alphaConnection(id, "velexis"));
   await migrator
     .insertInto("platform.payment_provider_connections")
     .values({
@@ -930,7 +968,8 @@ beforeAll(async () => {
       clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
     },
   });
-  alphaId = await insertTenant(await insertAccount());
+  amadeusAccountId = await insertAccount();
+  alphaId = await insertTenant();
   alphaSk = await issueKey(alphaId);
   await alphaTx(async (trx) => {
     await seedStorefrontSettings(trx, { name: "Alpha Travel", defaultCurrency: "EUR", defaultLocale: "en" });
@@ -1264,10 +1303,10 @@ describe("a Stripe booking in review whose order was never created: the refusals
     // Another booking's order in alpha's office (its own remark), and another that a booking of alpha holds already.
     const decoy = await decoyOrder("NOTBOOKED");
     const held = await decoyOrder("NOTBOOKED");
-    expect(answer(await agent.import({ reference: held, pricing: { mode: "net" } }))).toEqual([
-      201,
-      undefined,
-    ]);
+    // The import, a tool of an OTA with its own Amadeus connection, runs on alpha's own credentials (the file header).
+    expect(
+      answer(await onOwnConnection(() => agent.import({ reference: held, pricing: { mode: "net" } }))),
+    ).toEqual([201, undefined]);
     // A booking of tenant beta in its own review: a row no API of alpha reaches (fixture).
     const betaId = newId("bkg");
     await betaTx((trx) =>

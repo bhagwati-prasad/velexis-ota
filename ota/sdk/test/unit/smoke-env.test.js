@@ -31,6 +31,7 @@ const SETTINGS = Object.freeze({
   SDK_SMOKE_PUBLISHABLE_KEY: `pk_test_${"a".repeat(40)}`,
   SDK_SMOKE_SECRET_KEY: `sk_test_${"b".repeat(40)}`,
   SDK_SMOKE_CONSOLE_KEY: `sk_test_${"d".repeat(40)}`,
+  SDK_SMOKE_OWN_CONSOLE_KEY: `sk_test_${"f".repeat(40)}`,
   REDIS_URL: "redis://127.0.0.1:6379/0",
   DATABASE_MIGRATOR_URL: "postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis",
 });
@@ -204,6 +205,30 @@ describe("the settings of the smoke run", () => {
       OTA_ADMIN_SERVICE_KEY: "sk_dev_ota_admin_service_key_change_me",
     });
     expect(Object.keys(settings)).not.toContain("OTA_ADMIN_SERVICE_KEY");
+  });
+
+  it("[X-055] needs the console key of dev:seed's second test OTA, the one with its own Amadeus connection", () => {
+    /** @type {unknown} */
+    let error;
+    try {
+      readSmokeSettings({ ...SETTINGS, SDK_SMOKE_OWN_CONSOLE_KEY: undefined });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SmokeSetupError);
+    expect(String(error)).toContain("SDK_SMOKE_OWN_CONSOLE_KEY is required but missing");
+    // A live key or a publishable key is not a console key of dev:seed's test OTA; the message never quotes it.
+    for (const value of [`sk_live_${"g".repeat(40)}`, `pk_test_${"g".repeat(40)}`]) {
+      let refused = "";
+      try {
+        readSmokeSettings({ ...SETTINGS, SDK_SMOKE_OWN_CONSOLE_KEY: value });
+      } catch (caught) {
+        refused = String(caught);
+      }
+      expect(refused).toMatch(/SDK_SMOKE_OWN_CONSOLE_KEY does not match/);
+      expect(refused).not.toContain("gggg");
+    }
+    expect(readSmokeSettings(SETTINGS).SDK_SMOKE_OWN_CONSOLE_KEY).toBe(SETTINGS.SDK_SMOKE_OWN_CONSOLE_KEY);
   });
 
   it("names each missing or malformed setting, never its value [SDK-014 AC1]", () => {

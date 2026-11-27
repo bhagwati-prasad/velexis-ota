@@ -1,14 +1,16 @@
-// Office isolation across the console (OBE-075 step 3; ota/docs/scope.md OF-09 AC3, ADR-0012 office isolation, OADR-0011
-// point 7, flows/console-operations.md §3 step 4 and §6): two OTAs on the shared Velexis test Amadeus account, each with
-// an office of its own. A stub serves one set of credentials, so either OTA's calls could read every order of the
-// account: only the OTA backend's office rule keeps them apart. For each OTA, the PNR import and lookup, the queue reads
-// (console.queues.list and the raw console.amadeus.getQueue) and the raw order reads (by id and by record locator) of
-// the other OTA's office are refused `403 OFFICE_NOT_ALLOWED`, audited as denied in the caller's own `staff_actions`,
-// with nothing of the other OTA's order in the answer, the caller's supplier log or its bookings; the same calls for
-// its own office are served. The raw shopping reads take no office: they always go out with the caller's.
+// Office isolation across the console (OBE-075 step 3; ota/docs/scope.md OF-09 AC3, ADR-0012 office isolation,
+// OADR-0011 point 7, flows/console-operations.md §3 step 4 and §6): two OTAs, each on its own Amadeus credentials with
+// an office of its own (X-055: the tools are for an OTA with its own active Amadeus connection, ADR-0030 item 21;
+// test/helpers/amadeus-connection.ts). A stub serves one set of credentials, which both own connections present (each
+// its own credential set and token), so either OTA's calls could read every order of the stub: only the OTA backend's
+// office rule keeps them apart. For each OTA, the PNR import and lookup, the queue reads (console.queues.list and the
+// raw console.amadeus.getQueue) and the raw order reads (by id and by record locator) of the other OTA's office are
+// refused `403 OFFICE_NOT_ALLOWED`, audited as denied in the caller's own `staff_actions`, with nothing of the other
+// OTA's order in the answer, the caller's supplier log or its bookings; the same calls for its own office are served.
+// The raw shopping reads take no office: they always go out with the caller's.
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
-// as the platform does (both tenants in test on the one Velexis account, the stub; accounts and memberships). Staff sign
+// as the platform does (both tenants in test on their own connections to the stub; accounts and memberships). Staff sign
 // in through the OTA admin's service key with portal tokens. The orders are created in the stub through its own HTTP
 // API, as a GDS terminal would create them, with synthetic travellers and flights relative to now, each placed on a
 // queue of its queuing office. The calls run in a `beforeAll` hook with a budget of its own; the tests read what they
@@ -50,6 +52,7 @@ import {
   pricedFlightOffer,
 } from "../../builders/bookings";
 import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
+import { setAmadeusConnection } from "../../helpers/amadeus-connection";
 import { testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -121,28 +124,26 @@ async function insertAmadeusAccount(): Promise<string> {
   return id;
 }
 
-/** An active test tenant on the shared Velexis test account (the stub) with an office of its own. */
-async function insertTenant(key: TenantKey, office: string, amadeusAccountId: string): Promise<string> {
+/** An active test tenant on its own Amadeus credentials (the stub's credential set, as its own) with an office (X-055). */
+async function insertTenant(key: TenantKey, office: string): Promise<string> {
   const id = newId("ten");
   await migrator
     .insertInto("platform.tenants")
     .values({ id, key, name: `${key} Travel`, status: "active", plan_code: "early_access" })
     .execute();
-  await migrator
-    .insertInto("platform.supplier_connections")
-    .values({
-      id: newId("sc"),
-      tenant_id: id,
-      environment: "test",
-      credential_source: "velexis",
-      amadeus_account_id: amadeusAccountId,
-      office_ids: [office],
-      default_office_id: office,
-      queuing_office_id: office,
-      owner_office_id: office,
-      status: "active",
-    })
-    .execute();
+  await setAmadeusConnection(
+    { migrator, publisher: redis.client, keys },
+    {
+      tenantId: id,
+      source: "tenant",
+      officeIds: [office],
+      own: {
+        baseUrl: stub.url,
+        clientId: stubCredentials.clientId,
+        clientSecret: stubCredentials.clientSecret,
+      },
+    },
+  );
   return id;
 }
 
@@ -419,10 +420,11 @@ beforeAll(async () => {
     clientSecret: randomBytes(24).toString("base64url"),
   };
   stub = await startAmadeusStub({ credentials: stubCredentials });
-  const amadeusAccountId = await insertAmadeusAccount();
+  // The platform's Velexis test account is there as always; neither tenant's connection uses it.
+  await insertAmadeusAccount();
   for (const key of ["alpha", "beta"] as const) {
     const office = `NCE1A${randomBytes(2).toString("hex").toUpperCase()}`;
-    const id = await insertTenant(key, office, amadeusAccountId);
+    const id = await insertTenant(key, office);
     const schema = `tenant_${key}` as TenantSchema;
     await tenantTx(tenantDb, schema, async (trx) => {
       await seedStorefrontSettings(trx, {

@@ -233,6 +233,7 @@ jobs:
           SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\n' "$seed" | grep -E '^  Publishable test key ' | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \
             SDK_SMOKE_SECRET_KEY="$(printf '%s\n' "$seed" | grep -E '^  Secret test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
             SDK_SMOKE_CONSOLE_KEY="$(printf '%s\n' "$seed" | grep -E '^  Console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
+            SDK_SMOKE_OWN_CONSOLE_KEY="$(printf '%s\n' "$seed" | grep -E '^  Own Amadeus console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
             pnpm --filter @velexis/ota-sdk test:smoke
 
       # Also when the run is cancelled (a newer run of the same pull request, or the job's timeout), so the traces of a

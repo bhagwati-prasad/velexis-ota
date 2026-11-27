@@ -246,11 +246,14 @@ describe(".github/workflows/e2e.yml", () => {
     expect(lines).toContain("logs=tools/e2e/test-results/sdk-smoke");
     expect(lines).toContain("trap 'jobs -p | xargs -r kill' EXIT");
     // The keys reach the tests in their environment only: no line prints the seed's output. Each key is read from the
-    // line of its label (dev-seed.command.ts DEV_SEED_KEY_LABELS; FIX-W37-OTA: two of the three are sk_test keys).
+    // line of its label (dev-seed.command.ts DEV_SEED_KEY_LABELS; FIX-W37-OTA: two of the three are sk_test keys), and
+    // since X-055 the console key of the seed's second OTA, which has its own Amadeus connection, from the line of
+    // DEV_SEED_OWN_KEY_LABEL: the owner approved this one line with wave 71 (the lead's ruling G5).
     expect(lines.filter((line) => /\$seed/.test(line))).toEqual([
       `SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Publishable test key ' | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \\`,
       `  SDK_SMOKE_SECRET_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Secret test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
       `  SDK_SMOKE_CONSOLE_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
+      `  SDK_SMOKE_OWN_CONSOLE_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Own Amadeus console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
     ]);
     expect(lines.at(-1)).toBe("  pnpm --filter @velexis/ota-sdk test:smoke");
     expect(runs.filter((run) => /test:smoke/.test(run))).toHaveLength(1);

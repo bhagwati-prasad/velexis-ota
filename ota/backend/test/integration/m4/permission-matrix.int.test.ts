@@ -5,9 +5,12 @@
 // role matrix (common/auth/roles.ts), and each operation's permission is its `x-permission` in the document.
 //
 // The file clones the @velexis/testing template (tenant_alpha provisioned) and writes alpha's platform rows as the
-// platform does: a live OTA (so live is open to every role but the viewer), an account and a membership of each role,
-// portal tokens as the platform's createConsoleToken stores them. Each role signs in through the OTA admin's service key
-// in the test environment and, but the viewer, in the live one, each session with an end-user IP address of its own.
+// platform does: a live OTA (so live is open to every role but the viewer) with its own Amadeus connection in both
+// environments (X-055: the Amadeus tools are for an OTA with its own active Amadeus connection, ADR-0030 item 21;
+// test/helpers/amadeus-connection.ts; no call of the matrix reaches Amadeus), an account and a membership of each role,
+// portal tokens as the platform's createConsoleToken stores them. Each role signs in through the OTA admin's service
+// key in the test environment and, but the viewer, in the live one, each session with an end-user IP address of its
+// own.
 //
 // The requests of the matrix reach no use case: the permission guard runs before request validation (app.module.ts),
 // so a refused role is answered before anything looks at the request, and an allowed one goes on to the validation,
@@ -43,13 +46,15 @@ import {
 } from "@velexis/testing";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AMADEUS_OFFICIAL_BASE_URLS, ConnectionResolver } from "../../../src/amadeus/connection-resolver";
 import { loadOpenApiDocument } from "../../../src/common/http/openapi-validation.interceptor";
 import { PENDING_OPERATIONS } from "../../../src/common/http/pending-operations";
 import { newId } from "../../../src/common/ids";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
-import { testApiCredentials } from "../../helpers/api-env";
+import { setAmadeusConnection } from "../../helpers/amadeus-connection";
+import { testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
 
@@ -382,10 +387,32 @@ beforeAll(async () => {
       live_enabled_at: new Date(),
     })
     .execute();
+  // Alpha's own Amadeus credentials in each environment, on the official host of the environment (never called).
+  const keys = await testKeyProvider();
+  for (const environment of ENVIRONMENTS) {
+    await setAmadeusConnection(
+      { migrator, publisher: redis.client, keys },
+      {
+        tenantId: alphaId,
+        environment,
+        source: "tenant",
+        officeIds: [`MAD1A${randomBytes(2).toString("hex").toUpperCase()}`],
+        own: {
+          baseUrl: AMADEUS_OFFICIAL_BASE_URLS[environment],
+          clientId: `alpha-own-${environment}`,
+          clientSecret: randomBytes(24).toString("base64url"),
+        },
+      },
+    );
+  }
   await tenantTx(tenantDb, "tenant_alpha", (trx) =>
     seedStorefrontSettings(trx, { name: "Alpha Travel", defaultCurrency: "EUR", defaultLocale: "en" }),
   );
   api = await createTestApp({ database: db, redis });
+  const resolver = api.app.get(ConnectionResolver, { strict: false });
+  for (const environment of ENVIRONMENTS) {
+    expect((await resolver.resolve(alphaId, environment)).credentialSource).toBe("tenant");
+  }
   for (const role of ROLES) {
     const member = await insertMember(role);
     for (const environment of ENVIRONMENTS) {

@@ -18,6 +18,7 @@
 //   await restoreVelexisLivePool({ … });               // the live pool as the journey found it
 //   await insertDraftSettlement({ … });                // a draft statement with its lines, as the monthly run leaves it
 //   await applyOwnLiveCredentials({ tenantId, … });    // the own-credentials apply: the Velexis live office releasing
+//   await applyOwnTestCredentials({ tenantId, … });    // its twin in test (X-055): the OTA's own test connection
 //   await ageAdminMfa(admin.email);                    // the admin's last TOTP code 20 minutes old
 //
 // The arrangements that specs once wrote to the stack's database themselves are helpers here too (FIX-W45-PLATFORM,
@@ -466,8 +467,8 @@ export async function insertDraftSettlement(input: DraftSettlementInput): Promis
   });
 }
 
-/** What `applyOwnLiveCredentials` needs. */
-export interface OwnLiveCredentialsInput {
+/** What `applyOwnLiveCredentials` and `applyOwnTestCredentials` need. */
+export interface OwnCredentialsInput {
   readonly tenantId: string;
   /** The office of the OTA's own credentials: its only, default, queuing and owner office. */
   readonly officeId: string;
@@ -478,29 +479,35 @@ export interface OwnLiveCredentialsInput {
   readonly seal: (connectionId: string) => Promise<EncryptedValue>;
 }
 
+/** What `applyOwnLiveCredentials` needs. */
+export type OwnLiveCredentialsInput = OwnCredentialsInput;
+
 /** What the own-credentials apply changed. */
-export interface OwnLiveCredentialsApplied {
+export interface OwnCredentialsApplied {
   readonly connectionId: string;
-  /** The Velexis live account the connection used before. */
+  /** The Velexis account of the environment the connection used before. */
   readonly accountId: string;
   /** The Velexis offices (`amo_…`) now `releasing`. */
   readonly releasingOfficeRowIds: readonly string[];
 }
 
+/** What `applyOwnLiveCredentials` changed. */
+export type OwnLiveCredentialsApplied = OwnCredentialsApplied;
+
 /**
- * Applies verified own live Amadeus credentials to the OTA `tenantId` as the platform worker's `credentials.verify`
- * job does once Amadeus accepted them (PBE-053; flows/amadeus-connection.md §D item 3), as the platform API's own role
- * in one transaction: the OTA's active live `velexis` connection becomes `credential_source = 'tenant'` on the stack's
- * Amadeus stub (no Velexis account; a made-up client id and a random client secret sealed by `input.seal` under the
- * connection's associated data; `input.officeId` as its only, default, queuing and owner office; `active`, verified
- * now, the next version), and every Velexis office of that account assigned to the OTA becomes `releasing` with the
- * time of the request. Submitting own credentials needs FEATURE_OWN_AMADEUS, which the stack keeps off (its portal and
- * admin pages change what PAD-010's journey reads), so the apply is written here, as OFE-022's own live connection is.
- * The caller publishes the `connection` and `amadeus_account` invalidations, as the worker does after its commit.
+ * Applies verified own Amadeus credentials of `environment` to the OTA `input.tenantId` as the platform worker's
+ * `credentials.verify` job does once Amadeus accepted them (PBE-053; flows/amadeus-connection.md §D item 3), as the
+ * platform API's own role in one transaction: the OTA's active `velexis` connection of that environment becomes
+ * `credential_source = 'tenant'` on the stack's Amadeus stub (no Velexis account; a made-up client id
+ * `e2e-own-<environment>-…` and a random client secret sealed by `input.seal` under the connection's associated data;
+ * `input.officeId` as its only, default, queuing and owner office; `active`, verified now, the next version), and every
+ * Velexis office of that account assigned to the OTA becomes `releasing` with the time of the request. The caller
+ * publishes the `connection` and `amadeus_account` invalidations, as the worker does after its commit.
  */
-export async function applyOwnLiveCredentials(
-  input: OwnLiveCredentialsInput,
-): Promise<OwnLiveCredentialsApplied> {
+async function applyOwnCredentials(
+  environment: "test" | "live",
+  input: OwnCredentialsInput,
+): Promise<OwnCredentialsApplied> {
   if (!/^[A-Z0-9]{9}$/.test(input.officeId)) {
     throw new TypeError(`not an Amadeus office id: ${input.officeId}`);
   }
@@ -514,8 +521,8 @@ export async function applyOwnLiveCredentials(
     }>(
       `SELECT id, credential_source, amadeus_account_id, status, version
          FROM platform.supplier_connections
-        WHERE tenant_id = $1 AND provider = 'amadeus' AND environment = 'live'`,
-      [input.tenantId],
+        WHERE tenant_id = $1 AND provider = 'amadeus' AND environment = $2`,
+      [input.tenantId, environment],
     );
     return rows[0];
   });
@@ -526,7 +533,7 @@ export async function applyOwnLiveCredentials(
     connection.status !== "active"
   ) {
     throw new Error(
-      `the OTA ${input.tenantId} has no active live connection on the Velexis account to replace`,
+      `the OTA ${input.tenantId} has no active ${environment} connection on the Velexis account to replace`,
     );
   }
   const accountId = connection.amadeus_account_id;
@@ -545,7 +552,7 @@ export async function applyOwnLiveCredentials(
           connection.id,
           connection.version,
           AMADEUS_STUB_URL,
-          `e2e-own-live-${randomBytes(6).toString("hex")}`,
+          `e2e-own-${environment}-${randomBytes(6).toString("hex")}`,
           sealed.ciphertext,
           sealed.kekId,
           input.officeId,
@@ -553,7 +560,7 @@ export async function applyOwnLiveCredentials(
       );
       if (updated.rowCount !== 1) {
         throw new Error(
-          `the live connection of the OTA ${input.tenantId} changed while its credentials were applied`,
+          `the ${environment} connection of the OTA ${input.tenantId} changed while its credentials were applied`,
         );
       }
       const releasing = await client.query<{ id: string }>(
@@ -574,6 +581,32 @@ export async function applyOwnLiveCredentials(
       throw error;
     }
   });
+}
+
+/**
+ * Applies verified own live Amadeus credentials to the OTA `tenantId` as the platform worker does (see
+ * `applyOwnCredentials`): its active live `velexis` connection becomes its own on the stub, and every Velexis live office
+ * assigned to it becomes `releasing`. Submitting own credentials needs FEATURE_OWN_AMADEUS, which the stack keeps off
+ * (its portal and admin pages change what PAD-010's journey reads), so the apply is written here, as OFE-022's own live
+ * connection is. The caller publishes the `connection` and `amadeus_account` invalidations.
+ */
+export async function applyOwnLiveCredentials(
+  input: OwnLiveCredentialsInput,
+): Promise<OwnLiveCredentialsApplied> {
+  return await applyOwnCredentials("live", input);
+}
+
+/**
+ * The twin of `applyOwnLiveCredentials` for the test environment (X-055; ADR-0030 item 21): the OTA's active test
+ * `velexis` connection becomes its own on the stub (`e2e-own-test-…`, `input.officeId` its only office), and every
+ * Velexis test office assigned to it becomes `releasing`, as the platform worker applies verified own test credentials.
+ * The Amadeus tools (the 12 `console.amadeus.*` operations, two queue operations and PNR import) are for an OTA with its
+ * own active Amadeus connection, so the OTA admin's tool journeys run on an OTA this makes (support/ota.ts
+ * `newOwnerWithOwnTestConnection`). Submitting own credentials needs FEATURE_OWN_AMADEUS, which the stack keeps off.
+ * The caller publishes the `connection` and `amadeus_account` invalidations.
+ */
+export async function applyOwnTestCredentials(input: OwnCredentialsInput): Promise<OwnCredentialsApplied> {
+  return await applyOwnCredentials("test", input);
 }
 
 /** How far `ageAdminMfa` moves the last TOTP verification back by default: beyond the step-up's 15 minutes. */

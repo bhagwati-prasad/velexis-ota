@@ -4,13 +4,15 @@
 // (guards, validation, idempotency, the audit interceptor).
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
-// as the platform does: two tenants on the shared Velexis test Amadeus account (the stub), each with an office of its
-// own, accounts and memberships, and an office of the account's pool `releasing` for alpha (one it used before, whose
-// orders stay alpha's: lead decision (2n) of 2026-11-02, FIX-W39-OTA). Staff sign in through the OTA admin's service
-// key with portal tokens. The orders are created in the stub through its own HTTP API, as a GDS terminal would create
-// them, with synthetic travellers and flights relative to now; a stub serves one set of credentials, so both tenants
-// read every order and only the OTA backend's office check keeps them apart. Every answer is checked against the OTA
-// document.
+// as the platform does: two tenants, each on its own Amadeus credentials (X-055: PNR import is one of the tools for an
+// OTA with its own active Amadeus connection, ADR-0030 item 21; test/helpers/amadeus-connection.ts), each with an
+// office of its own, accounts and memberships, and an office of the Velexis test account's pool `releasing` for alpha
+// (one it used before its own credentials, whose orders stay alpha's: lead decision (2n) of 2026-11-02, FIX-W39-OTA).
+// Staff sign in through the OTA admin's service key with portal tokens. The orders are created in the stub through its
+// own HTTP API, as a GDS terminal would create them, with synthetic travellers and flights relative to now; a stub
+// serves one set of credentials, which both own connections and the Velexis account present (each its own credential
+// set and token), so both tenants read every order and only the OTA backend's office check keeps them apart. Every
+// answer is checked against the OTA document.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { encryptValue, sha256Hex, type KeyProvider } from "@velexis/crypto";
@@ -56,6 +58,7 @@ import {
   buildOrderTraveler,
   pricedFlightOffer,
 } from "../../builders/bookings";
+import { setAmadeusConnection } from "../../helpers/amadeus-connection";
 import { testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -89,6 +92,8 @@ let betaOffice: string;
 let alphaReleasingOffice: string;
 let consoleRuleId: string;
 let stubCredentials: { readonly clientId: string; readonly clientSecret: string };
+/** Each tenant's own Amadeus connection (`sc_…`): its credential set (X-055). */
+const connectionIds = { alpha: "", beta: "" };
 
 // ---- Platform rows -------------------------------------------------------------------------------------------------
 
@@ -114,29 +119,29 @@ async function insertAmadeusAccount(clientId: string, secret: string): Promise<s
   return id;
 }
 
-/** An active test tenant on the shared Velexis test account (the stub) with its own offices. */
-async function insertTenant(key: "alpha" | "beta", offices: readonly string[]): Promise<string> {
+/**
+ * An active test tenant on its own Amadeus credentials (the stub's credential set, as its own) with its own offices
+ * (X-055); its connection's id lands in `connectionIds`.
+ */
+async function insertTenant(key: "alpha" | "beta", offices: readonly [string, ...string[]]): Promise<string> {
   const id = newId("ten");
-  const [main] = offices;
   await migrator
     .insertInto("platform.tenants")
     .values({ id, key, name: `${key} Travel`, status: "active", plan_code: "early_access" })
     .execute();
-  await migrator
-    .insertInto("platform.supplier_connections")
-    .values({
-      id: newId("sc"),
-      tenant_id: id,
-      environment: "test",
-      credential_source: "velexis",
-      amadeus_account_id: amadeusAccountId,
-      office_ids: [...offices],
-      default_office_id: main,
-      queuing_office_id: main,
-      owner_office_id: main,
-      status: "active",
-    })
-    .execute();
+  connectionIds[key] = await setAmadeusConnection(
+    { migrator, publisher: redis.client, keys },
+    {
+      tenantId: id,
+      source: "tenant",
+      officeIds: offices,
+      own: {
+        baseUrl: stub.url,
+        clientId: stubCredentials.clientId,
+        clientSecret: stubCredentials.clientSecret,
+      },
+    },
+  );
   return id;
 }
 
@@ -413,6 +418,7 @@ beforeAll(async () => {
     office(),
     office(),
   ];
+  stub = await startAmadeusStub({ credentials: stubCredentials });
   amadeusAccountId = await insertAmadeusAccount(stubCredentials.clientId, stubCredentials.clientSecret);
   alphaId = await insertTenant("alpha", [alphaOffice, alphaSecondOffice]);
   betaId = await insertTenant("beta", [betaOffice]);
@@ -453,7 +459,6 @@ beforeAll(async () => {
       })
       .execute(),
   );
-  stub = await startAmadeusStub({ credentials: stubCredentials });
   api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
   // The first sign-in and console calls of a process open the pools' connections and warm the token, validation and
   // Amadeus code; done once here, so that no test pays for it.
@@ -474,12 +479,15 @@ afterAll(async () => {
   await db?.drop();
 });
 
-// Each test starts with full Amadeus buckets (the shared account's and each tenant's, 5 calls per second): the tests
-// make their calls back to back, faster than a staff member would, and a test never waits for a bucket to refill.
+// Each test starts with full Amadeus buckets (each credential set's, the shared account's and the tenants' own, and
+// each tenant's, 5 calls per second): the tests make their calls back to back, faster than a staff member would, and a
+// test never waits for a bucket to refill.
 beforeEach(async () => {
   stub.clearRequests();
   await redis.client.del(
     redisKeys.amadeusCredentialBucket(amadeusAccountId, "test").key,
+    redisKeys.amadeusCredentialBucket(connectionIds.alpha, "test").key,
+    redisKeys.amadeusCredentialBucket(connectionIds.beta, "test").key,
     redisKeys.amadeusTenantBucket(alphaId, "test").key,
     redisKeys.amadeusTenantBucket(betaId, "test").key,
   );

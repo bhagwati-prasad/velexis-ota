@@ -40,12 +40,14 @@
 // arrangement); nor anything shaped like a JWT, a staff refresh token, a portal token or a secret API key. A finding
 // names the address and what was found, never the value.
 //
-// Arranged in `beforeAll` through the platform API and the OTA API (PADR-0017 item 5): the owner's OTA with its Amadeus
-// test office (`newOwnerWithActiveOta`), its airline card switched on for its test storefront, a booking made through
-// the OTA API as its storefront edge (`EdgeApi`) that waits in manual review (the stub's `ticketing-failed` scenario), so
-// the booking, payment and dashboard pages show work for staff, and a storefront customer signed up through the same
-// edge, for the customer pages. A fee rule and a content page are created through the console's own forms. The steps
-// are tests in order (`mode: "serial"`) on the owner's browser context, made in `beforeAll`.
+// Arranged in `beforeAll` through the platform API and the OTA API (PADR-0017 item 5): the owner's OTA on its own
+// Amadeus test credentials with an office of its own (`newOwnerWithOwnTestConnection`, X-055: the PNR, queue and
+// shopping pages are the Amadeus tools of an OTA with its own active Amadeus connection, ADR-0030 item 21), its airline
+// card switched on for its test storefront, a booking made through the OTA API as its storefront edge (`EdgeApi`) that
+// waits in manual review (the stub's `ticketing-failed` scenario), so the booking, payment and dashboard pages show
+// work for staff, and a storefront customer signed up through the same edge, for the customer pages. A fee rule and a
+// content page are created through the console's own forms. The steps are tests in order (`mode: "serial"`) on the
+// owner's browser context, made in `beforeAll`.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -70,7 +72,7 @@ import { uniqueEmail } from "../../support/mailpit";
 import {
   bookAirlineCardTrip,
   EdgeApi,
-  newOwnerWithActiveOta,
+  newOwnerWithOwnTestConnection,
   openConsoleFromPortal,
   scriptReadableCookieNames,
   STAFF_COOKIES,
@@ -587,7 +589,7 @@ test.beforeAll(async ({ browser }) => {
   for (const [what, value] of adminSecrets()) {
     secrets.set(what, value);
   }
-  owned = await newOwnerWithActiveOta("Hedda Headers", "hdr");
+  owned = await newOwnerWithOwnTestConnection("Hedda Headers", "hdr");
   rememberSession("the owner's portal session", owned.session);
   await switchAirlineCardOn(owned.schema);
   const edge = new EdgeApi(owned.storefrontHost, uniqueTestIp());

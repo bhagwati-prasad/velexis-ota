@@ -1,20 +1,22 @@
 // The OTA admin's PNR import journey (OAD-016; ota/admin/docs/routes.md §4, ota/docs/flows/console-operations.md §2
 // "PNR lookup and import", ADR-0012 "Office isolation on the shared account", scope OF-09 AC3): an OTA that its owner
 // created through the portal API (`createTenant`) and the OTA worker set up with an office of the Velexis test pool, so
-// the journey needs `E2E_WITH_OTA=1` (the e2e workflow sets it).
+// the journey needs `E2E_WITH_OTA=1` (the e2e workflow sets it). PNR import is one of the Amadeus tools for an OTA with
+// its own active Amadeus connection (ADR-0030 item 21), so the OTA then gets its own test credentials on the stub, with
+// an office of its own (X-055: `newOwnerWithOwnTestConnection` of support/ota.ts, as the platform worker applies them).
 //
 //   the owner opens the console from the portal → /pnr → the record locator of an order an agent made in the Amadeus
-//   stub for this OTA's office (a GDS terminal booking Velexis never saw) → the order with "Import as a booking" →
+//   stub for this OTA's own office (a GDS terminal booking Velexis never saw) → the order with "Import as a booking" →
 //   imported with a reason → the new booking (channel import, manual review: nothing was issued or paid through
 //   Velexis) → the record locator of an order of another OTA's office (the demo OTA's) → refused: "This order belongs
 //   to an office outside this OTA", nothing of it shown, nothing to import
 //
-// On the shared Velexis account every OTA's offices answer to the same credentials, and the stub, like Amadeus's
-// by-reference read, answers an order whoever asks; which OTA may see it is the OTA API's office isolation. The orders
-// are made in `beforeAll` straight at the stack's stub (`createStubOrder` of support/ota.ts: a token, a search and
-// Flight Create Orders, queued and owned by the office), so no Velexis booking or `supplier_requests` row exists for
-// them. Every page the journey visits passes axe once its title is in place, and JavaScript reads no cookie on any page
-// of the OTA admin. The steps are tests in order (`mode: "serial"`) on one browser context of the owner.
+// The stack's stub answers every credential set, and like Amadeus's by-reference read it answers an order whoever asks;
+// which OTA may see it is the OTA API's office isolation. The orders are made in `beforeAll` straight at the stack's
+// stub (`createStubOrder` of support/ota.ts: a token, a search and Flight Create Orders, queued and owned by the
+// office), so no Velexis booking or `supplier_requests` row exists for them. Every page the journey visits passes axe
+// once its title is in place, and JavaScript reads no cookie on any page of the OTA admin. The steps are tests in order
+// (`mode: "serial"`) on one browser context of the owner.
 import { type BrowserContext, type Page } from "@playwright/test";
 import { expectNoSeriousA11yViolations } from "../../support/a11y";
 import { addSessionCookies, expect, newAccountContext, test } from "../../support/fixtures";
@@ -23,7 +25,7 @@ import {
   activeAmadeusConnectionOf,
   createStubOrder,
   demoTenantId,
-  newOwnerWithActiveOta,
+  newOwnerWithOwnTestConnection,
   openConsoleFromPortal,
   scriptReadableCookieNames,
   withTenantTx,
@@ -70,9 +72,9 @@ test.beforeAll(async ({ browser }) => {
     );
   }
   // Budget: a sign-up with its verification e-mail (up to 15 s), the OTA's set-up on the OTA worker (about 2 s locally;
-  // PF-11 allows a minute) and two orders in the stub (milliseconds).
+  // PF-11 allows a minute), its own credentials applied (milliseconds) and two orders in the stub (milliseconds).
   test.setTimeout(90_000);
-  owned = await newOwnerWithActiveOta("Pia Importer", "pnr");
+  owned = await newOwnerWithOwnTestConnection("Pia Importer", "pnr");
   const demoConnection = await activeAmadeusConnectionOf(await demoTenantId());
   if (demoConnection === undefined) {
     throw new Error(

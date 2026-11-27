@@ -2,9 +2,11 @@
 // vitest.smoke.config.js runs once as its global setup, the customer journey both modes call, and the test staff
 // session of the server mode.
 //
-// The smoke tests run against a running OTA API wired to the Amadeus stub, with the three test keys the OTA backend's
-// `dev:seed` printed when it created them (ota/backend/README.md §5 and §6). Nothing here starts a process: the stack
-// is the developer's (or the nightly workflow's, .github/workflows/e2e.yml), and the keys are given, never stored.
+// The smoke tests run against a running OTA API wired to the Amadeus stub, with the four test keys the OTA backend's
+// `dev:seed` printed when it created them (ota/backend/README.md §5 and §6): three of the demo OTA, and the console key
+// of its second test OTA, whose test connection is its own Amadeus credentials (X-055). Nothing here starts a process:
+// the stack is the developer's (or the nightly workflow's, .github/workflows/e2e.yml), and the keys are given, never
+// stored.
 //
 // Settings, read through @velexis/config from the environment, then the `.env.local` files of ota/sdk and of the
 // repository root (as the apps read theirs), and never printed: a refusal names the variable, not its value.
@@ -15,6 +17,10 @@
 //                               `storefront`)
 //   SDK_SMOKE_CONSOLE_KEY       the `sk_test_…` key dev:seed printed as its "Console automation test key" (server mode's
 //                               console: `console:automation` with `amadeus:read` only)
+//   SDK_SMOKE_OWN_CONSOLE_KEY   the `sk_test_…` key dev:seed printed as its "Own Amadeus console automation test key"
+//                               (X-055): the same scopes, of the second test OTA `demoown`, which has its own active
+//                               Amadeus connection, so the Amadeus tools serve it (ADR-0030 item 21); server mode's raw
+//                               Amadeus reads
 //   REDIS_URL                   the API's Redis, where the test portal token is stored as the platform's API stores it
 //   DATABASE_MIGRATOR_URL       the stack database as velexis_migrator, for the test staff member's platform rows
 //
@@ -93,6 +99,7 @@ export const SMOKE_SCHEMA = {
   SDK_SMOKE_PUBLISHABLE_KEY: env.string({ pattern: /^pk_test_[0-9A-Za-z]{40}$/ }),
   SDK_SMOKE_SECRET_KEY: env.string({ pattern: /^sk_test_[0-9A-Za-z]{40}$/ }),
   SDK_SMOKE_CONSOLE_KEY: env.string({ pattern: /^sk_test_[0-9A-Za-z]{40}$/ }),
+  SDK_SMOKE_OWN_CONSOLE_KEY: env.string({ pattern: /^sk_test_[0-9A-Za-z]{40}$/ }),
   REDIS_URL: env.url({ protocols: ["redis:", "rediss:"] }),
   DATABASE_MIGRATOR_URL: env.url({ protocols: ["postgres:", "postgresql:"] }),
 };
@@ -128,8 +135,9 @@ function readConfig(schema, source) {
   } catch (error) {
     if (error instanceof ConfigError) {
       throw new SmokeSetupError(
-        `The SDK smoke tests are not configured. ${HOW_TO_START}, then pass the three keys its dev:seed printed as ` +
-          `SDK_SMOKE_PUBLISHABLE_KEY, SDK_SMOKE_SECRET_KEY and SDK_SMOKE_CONSOLE_KEY.\n${error.message}`,
+        `The SDK smoke tests are not configured. ${HOW_TO_START}, then pass the four keys its dev:seed printed as ` +
+          "SDK_SMOKE_PUBLISHABLE_KEY, SDK_SMOKE_SECRET_KEY, SDK_SMOKE_CONSOLE_KEY and SDK_SMOKE_OWN_CONSOLE_KEY.\n" +
+          error.message,
       );
     }
     throw error;
